@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?eclipse version="3.4"?>
+<plugin>
+
+  <extension point="org.eclipse.ui.startup">
+    <startup class="tormozit.edt.compare.open_object.menu.CompareEditorMenuHook"/>
+  </extension>
+
+  <!-- Собственный контекст с родителем window.
+       Более специфичный контекст побеждает при конфликте биндингов
+       (наш F4 > JDT F4 на уровне window). Активируется программно
+       через IContextService editor-сайта в CompareEditorMenuHook. -->
+  <extension point="org.eclipse.ui.contexts">
+    <context
+        id="tormozit.edt.compare.open_object.context"
+        name="Редактор сравнения EDT"
+        parentId="org.eclipse.ui.contexts.window"/>
+  </extension>
+
+  <extension point="org.eclipse.ui.bindings">
+    <key
+        commandId="tormozit.edt.compare.open_object.openObject"
+        contextId="tormozit.edt.compare.open_object.context"
+        schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+        sequence="F2"/>
+  </extension>
+
+  <extension point="org.eclipse.ui.commands">
+    <command
+        id="tormozit.edt.compare.open_object.openObject"
+        name="Открыть объект"
+        description="Открыть выбранный объект конфигурации в редакторе EDT">
+    </command>
+  </extension>
+
+  <extension point="org.eclipse.ui.handlers">
+    <handler
+        commandId="tormozit.edt.compare.open_object.openObject"
+        class="tormozit.edt.compare.open_object.handlers.OpenObjectHandler">
+      <activeWhen>
+        <with variable="activeEditorId">
+          <equals value="com._1c.g5.v8.dt.compare.ui.editor"/>
+        </with>
+      </activeWhen>
+    </handler>
+  </extension>
+
+</plugin>

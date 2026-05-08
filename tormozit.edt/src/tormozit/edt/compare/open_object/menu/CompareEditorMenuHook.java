@@ -1,0 +1,259 @@
+package tormozit.edt.compare.open_object.menu;
+
+import java.lang.reflect.Field;
+import java.util.ArrayList;
+import java.util.List;
+
+import org.eclipse.jface.viewers.IStructuredSelection;
+import org.eclipse.swt.SWT;
+import org.eclipse.swt.events.MenuAdapter;
+import org.eclipse.swt.events.MenuEvent;
+import org.eclipse.swt.events.SelectionAdapter;
+import org.eclipse.swt.events.SelectionEvent;
+import org.eclipse.swt.widgets.Display;
+import org.eclipse.swt.widgets.Menu;
+import org.eclipse.swt.widgets.MenuItem;
+import org.eclipse.swt.widgets.Tree;
+import org.eclipse.ui.IEditorPart;
+import org.eclipse.ui.IEditorReference;
+import org.eclipse.ui.IPartListener2;
+import org.eclipse.ui.IStartup;
+import org.eclipse.ui.IWindowListener;
+import org.eclipse.ui.IWorkbench;
+import org.eclipse.ui.IWorkbenchPage;
+import org.eclipse.ui.IWorkbenchPartReference;
+import org.eclipse.ui.IWorkbenchWindow;
+import org.eclipse.ui.PlatformUI;
+import org.eclipse.ui.contexts.IContextService;
+import tormozit.edt.compare.open_object.handlers.OpenObjectHandler;
+
+import com._1c.g5.v8.dt.compare.model.MatchedObjectsComparisonNode;
+import com._1c.g5.v8.dt.compare.ui.editor.DtComparisonView;
+
+/**
+ * Добавляет пункт «Открыть объект» в контекстное меню дерева сравнения EDT.
+ *
+ * EDT строит это меню напрямую через SWT, минуя getSite().registerContextMenu(),
+ * поэтому декларативные механизмы Eclipse (popup:any, CompoundContributionItem)
+ * его не видят. Единственный рабочий способ — подключиться к SWT Menu через
+ * MenuListener.
+ *
+ * Порядок срабатывания:
+ *   1. EDT регистрирует свой SWT MenuListener при создании дерева (в createPartControl).
+ *   2. Мы регистрируем свой в partOpened — т.е. позже, значит в очереди ПОСЛЕ EDT.
+ *   3. При каждом открытии меню: сначала EDT наполняет его своими пунктами,
+ *      затем наш menuShown добавляет «Открыть объект» в конец — только для
+ *      MatchedObjectsComparisonNode (объектов конфигурации, не свойств).
+ *   4. В menuHidden мы сами удаляем добавленные пункты — EDT о них не знает.
+ */
+public class CompareEditorMenuHook implements IStartup {
+
+    private static final String COMPARE_EDITOR_ID = "com._1c.g5.v8.dt.compare.ui.editor";
+    private static final String COMMAND_ID        = "tormozit.edt.compare.open_object.openObject";
+    private static final String CONTEXT_ID  = "tormozit.edt.compare.open_object.context";
+    private static final String ITEM_TEXT   = "Открыть объект\tF2";
+
+    // ---- IStartup ----
+
+    @Override
+    public void earlyStartup() {
+        Display.getDefault().asyncExec(() -> {
+            IWorkbench wb = PlatformUI.getWorkbench();
+            for (IWorkbenchWindow w : wb.getWorkbenchWindows()) {
+                hookWindow(w);
+            }
+            wb.addWindowListener(new IWindowListener() {
+                @Override public void windowOpened(IWorkbenchWindow w) { hookWindow(w); }
+                @Override public void windowActivated(IWorkbenchWindow w)   {}
+                @Override public void windowDeactivated(IWorkbenchWindow w) {}
+                @Override public void windowClosed(IWorkbenchWindow w)      {}
+            });
+        });
+    }
+
+    // ---- Подключение к окну / редактору ----
+
+    private void hookWindow(IWorkbenchWindow window) {
+        // Редакторы, открытые до нашей загрузки (восстановление сессии)
+        IWorkbenchPage page = window.getActivePage();
+        if (page != null) {
+            for (IEditorReference ref : page.getEditorReferences()) {
+                IEditorPart ed = ref.getEditor(false);
+                if (ed != null && isCompareEditor(ed)) hookEditor(ed);
+            }
+        }
+        // Все будущие редакторы
+        window.getPartService().addPartListener(new IPartListener2() {
+            @Override
+            public void partOpened(IWorkbenchPartReference ref) {
+                if (!(ref instanceof IEditorReference)) return;
+                IEditorPart ed = ((IEditorReference) ref).getEditor(false);
+                if (ed != null && isCompareEditor(ed)) hookEditor(ed);
+            }
+            @Override public void partActivated(IWorkbenchPartReference r)    {}
+            @Override public void partBroughtToTop(IWorkbenchPartReference r) {}
+            @Override public void partClosed(IWorkbenchPartReference r)       {}
+            @Override public void partDeactivated(IWorkbenchPartReference r)  {}
+            @Override public void partHidden(IWorkbenchPartReference r)       {}
+            @Override public void partVisible(IWorkbenchPartReference r)      {}
+            @Override public void partInputChanged(IWorkbenchPartReference r) {}
+        });
+    }
+
+    private boolean isCompareEditor(IEditorPart editor) {
+        return COMPARE_EDITOR_ID.equals(editor.getSite().getId());
+    }
+
+    private void hookEditor(IEditorPart editor) {
+        // Активируем наш контекст через сайт редактора.
+        // IContextService, полученный с editor.getSite(), автоматически
+        // включает контекст когда редактор активен и выключает когда нет.
+        // Это даёт нашему F4 приоритет над window-уровневым F4 JDT.
+        IContextService cs = editor.getSite().getService(IContextService.class);
+        if (cs != null) cs.activateContext(CONTEXT_ID);
+        Tree tree = getCompareTree(editor);
+        if (tree == null) {
+            // Виджеты могут быть ещё не готовы — повторяем после текущего цикла событий
+            Display.getDefault().asyncExec(() -> {
+                Tree t = getCompareTree(editor);
+                if (t != null) attachMenuListener(editor, t);
+            });
+            return;
+        }
+        attachMenuListener(editor, tree);
+    }
+
+    // ---- SWT MenuListener ----
+
+    private void attachMenuListener(IEditorPart editor, Tree tree) {
+        Menu menu = tree.getMenu();
+        if (menu == null || menu.isDisposed()) return;
+
+        MenuAdapter listener = new MenuAdapter() {
+            /** Пункты, добавленные нами в текущем показе меню. */
+            private final List<MenuItem> addedItems = new ArrayList<>(2);
+
+            @Override
+            public void menuShown(MenuEvent e) {
+                // EDT уже заполнил меню к этому моменту (его listener в очереди раньше нашего).
+                // Добавляем разделитель и пункт только для MatchedObjectsComparisonNode.
+                if (getSelectedMatchedNode(editor) == null) return;
+
+                addedItems.add(new MenuItem(menu, SWT.SEPARATOR));
+
+                MenuItem item = new MenuItem(menu, SWT.PUSH);
+                item.setText(ITEM_TEXT);
+                item.addSelectionListener(new SelectionAdapter() {
+                    @Override
+                    public void widgetSelected(SelectionEvent e) {
+                        // Вызываем напрямую с захваченным editor и shell дерева —
+                        // без прохода через команду/хендлер, чтобы не зависеть
+                        // от activeWhen/activeContexts в момент клика.
+                        OpenObjectHandler.openObject(editor, tree.getShell());
+                    }
+                });
+                addedItems.add(item);
+            }
+
+            @Override
+            public void menuHidden(MenuEvent e) {
+                // ВАЖНО: откладываем dispose() через asyncExec.
+                // Порядок SWT-событий при клике на пункт меню:
+                //   1. menuHidden  (синхронно)
+                //   2. widgetSelected (синхронно)
+                //   3. asyncExec-очередь
+                // Если вызвать dispose() прямо здесь, MenuItem уничтожается
+                // до того, как widgetSelected доставит SelectionEvent —
+                // и клик молча проглатывается. asyncExec гарантирует обратный порядок.
+                Display display = ((Menu) e.widget).getDisplay();
+                List<MenuItem> toDispose = new ArrayList<>(addedItems);
+                addedItems.clear();
+                display.asyncExec(() -> {
+                    for (MenuItem item : toDispose) {
+                        if (!item.isDisposed()) item.dispose();
+                    }
+                });
+            }
+        };
+
+        menu.addMenuListener(listener);
+
+        // Снимаем listener при уничтожении дерева, чтобы не было утечки
+        tree.addDisposeListener(e -> {
+            if (!menu.isDisposed()) menu.removeMenuListener(listener);
+        });
+    }
+
+    // ---- Получение Tree из редактора (через рефлексию) ----
+
+    private Tree getCompareTree(IEditorPart editor) {
+        Object view = getField(editor, "comparisonView");
+        if (!(view instanceof DtComparisonView)) return null;
+
+        Object treeControl = ((DtComparisonView) view).getTreeControl();
+        if (treeControl == null) return null;
+
+        Object viewer = invokeNoArg(treeControl, "getTreeViewer");
+        if (viewer == null) return null;
+
+        Object widget = invokeNoArg(viewer, "getTree");
+        return (widget instanceof Tree) ? (Tree) widget : null;
+    }
+
+    // ---- Получение выбранного узла (аналогично OpenObjectHandler) ----
+
+    private MatchedObjectsComparisonNode getSelectedMatchedNode(IEditorPart editor) {
+        Object view = getField(editor, "comparisonView");
+        if (!(view instanceof DtComparisonView)) return null;
+
+        Object treeControl = ((DtComparisonView) view).getTreeControl();
+        if (treeControl == null) return null;
+
+        Object viewer = invokeNoArg(treeControl, "getTreeViewer");
+        if (viewer == null) return null;
+
+        Object sel = invokeNoArg(viewer, "getSelection");
+        if (!(sel instanceof IStructuredSelection)) return null;
+
+        Object element = ((IStructuredSelection) sel).getFirstElement();
+        if (element == null) return null;
+
+        try {
+            Object node = invokeNoArg(element, "retrieveComparisonNode");
+            if (node instanceof MatchedObjectsComparisonNode)
+                return (MatchedObjectsComparisonNode) node;
+        } catch (Exception ignored) {}
+
+        if (element instanceof MatchedObjectsComparisonNode)
+            return (MatchedObjectsComparisonNode) element;
+
+        return null;
+    }
+
+    // ---- Утилиты рефлексии ----
+
+    private Object getField(Object obj, String name) {
+        Class<?> cls = obj.getClass();
+        while (cls != null) {
+            try {
+                Field f = cls.getDeclaredField(name);
+                f.setAccessible(true);
+                return f.get(obj);
+            } catch (NoSuchFieldException ignored) {
+                cls = cls.getSuperclass();
+            } catch (Exception ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private Object invokeNoArg(Object o, String name) {
+        if (o == null) return null;
+        try {
+            return o.getClass().getMethod(name).invoke(o);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+}
