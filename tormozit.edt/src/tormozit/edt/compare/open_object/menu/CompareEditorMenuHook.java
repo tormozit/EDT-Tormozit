@@ -36,6 +36,7 @@ import com._1c.g5.v8.dt.compare.ui.editor.DtComparisonView;
 import tormozit.edt.compare.open_object.handlers.ExpandExceptAddedDeletedHandler;
 import tormozit.edt.compare.open_object.handlers.ExpandMode;
 import tormozit.edt.compare.open_object.handlers.OpenObjectHandler;
+import tormozit.edt.compare.open_object.search.CompareSearchDialogHook;
 
 /**
  * Добавляет пункт «Открыть объект» в контекстное меню дерева сравнения EDT.
@@ -65,6 +66,9 @@ public class CompareEditorMenuHook implements IStartup {
     @Override
     public void earlyStartup() {
         Display.getDefault().asyncExec(() -> {
+            // Патч диалога поиска CTRL+F: добавляет флажок "Только имена объектов"
+            CompareSearchDialogHook.install(Display.getDefault());
+
             IWorkbench wb = PlatformUI.getWorkbench();
             for (IWorkbenchWindow w : wb.getWorkbenchWindows()) {
                 hookWindow(w);
