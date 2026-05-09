@@ -85,7 +85,8 @@ public class OpenObjectHandler extends AbstractHandler {
         openInEditor(eObject, editor, shell);
     }
 
-    private static IComparisonSession getSession(IEditorPart editor) {
+    public static IComparisonSession getSession(IEditorPart editor)
+    {
         // Из comparisonArtifactsList
         Object list = getField(editor, "comparisonArtifactsList");
         if (list instanceof List) {
@@ -134,7 +135,7 @@ public class OpenObjectHandler extends AbstractHandler {
         return null;
     }
 
-    private static EObject getEObject(IComparisonSession session, long bmId,
+    public static EObject getEObject(IComparisonSession session, long bmId,
             MatchedObjectsComparisonNode node) {
 
         // Определяем сторону: MAIN если mainObjectId есть, иначе OTHER

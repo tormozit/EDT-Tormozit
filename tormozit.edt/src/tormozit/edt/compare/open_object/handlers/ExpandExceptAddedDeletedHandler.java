@@ -8,8 +8,8 @@ import org.eclipse.core.commands.ExecutionException;
 import org.eclipse.jface.viewers.AbstractTreeViewer;
 import org.eclipse.jface.viewers.ITreeContentProvider;
 import org.eclipse.ui.IEditorPart;
-import org.eclipse.ui.handlers.HandlerUtil;
 
+import com._1c.g5.v8.dt.compare.core.IComparisonSession;
 import com._1c.g5.v8.dt.compare.model.MatchedObjectsComparisonNode;
 import com._1c.g5.v8.dt.compare.ui.editor.DtComparisonView;
 
@@ -30,18 +30,19 @@ public class ExpandExceptAddedDeletedHandler
     @Override
     public Object execute(ExecutionEvent event) throws ExecutionException
     {
-        IEditorPart editor = HandlerUtil.getActiveEditor(event);
-        if (editor == null)
-            return null;
-
-        return expand(editor);
+//        IEditorPart editor = HandlerUtil.getActiveEditor(event);
+//        if (editor == null)
+//            return null;
+//
+//        return expand(editor);
+        return null;
     }
 
     /**
      * @param editor
      * @return
      */
-    public static Object expand(IEditorPart editor)
+    public static Object expand(IEditorPart editor, ExpandMode mode)
     {
         AbstractTreeViewer viewer = getTreeViewer(editor);
         if (viewer == null)
@@ -56,7 +57,7 @@ public class ExpandExceptAddedDeletedHandler
 
         for (Object root : cp.getElements(viewer.getInput()))
         {
-            expandSelectively(viewer, cp, root);
+            expandSelectively(viewer, cp, root, mode, OpenObjectHandler.getSession(editor));
         }
 
         return null;
@@ -65,22 +66,35 @@ public class ExpandExceptAddedDeletedHandler
     /**
      * Рекурсивно раскрывает узел, если он не является добавленным/удалённым.
      */
-    private static void expandSelectively(AbstractTreeViewer viewer, ITreeContentProvider cp, Object element)
+    private static void expandSelectively(AbstractTreeViewer viewer, ITreeContentProvider cp, Object element,
+        ExpandMode mode, IComparisonSession session)
     {
-
-        if (isAddedOrDeleted(element))
-            return;
-
         if (!cp.hasChildren(element))
             return;
-
+        if (mode == ExpandMode.toBothElement && isAddedOrDeleted(element))
+            return;
+        if (mode == ExpandMode.toObject && isObject(session, element))
+            return;
         // Раскрываем на один уровень — это загружает дочерние элементы в вьюер
         viewer.expandToLevel(element, 1);
 
         for (Object child : cp.getChildren(element))
         {
-            expandSelectively(viewer, cp, child);
+            expandSelectively(viewer, cp, child, mode, session);
         }
+    }
+
+    private static boolean isObject(IComparisonSession session, Object element)
+    {
+        Object raw = invokeNoArg(element, "retrieveComparisonNode");
+        if (!(raw instanceof MatchedObjectsComparisonNode))
+            return false;
+        MatchedObjectsComparisonNode node = (MatchedObjectsComparisonNode)raw;
+        Long mainId = node.getMainObjectId();
+        Long otherId = node.getOtherObjectId();
+        return false
+            || mainId != null && OpenObjectHandler.getEObject(session, mainId, node) != null
+            || otherId != null && OpenObjectHandler.getEObject(session, otherId, node) != null;
     }
 
     /**
@@ -101,7 +115,7 @@ public class ExpandExceptAddedDeletedHandler
 
         // Добавлен = нет главной стороны; удалён = нет другой стороны
         return false
-            || !hasMain && hasOther 
+            || !hasMain && hasOther
             || hasMain && !hasOther;
     }
 

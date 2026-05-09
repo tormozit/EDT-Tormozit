@@ -34,6 +34,7 @@ import com._1c.g5.v8.dt.compare.model.MatchedObjectsComparisonNode;
 import com._1c.g5.v8.dt.compare.ui.editor.DtComparisonView;
 
 import tormozit.edt.compare.open_object.handlers.ExpandExceptAddedDeletedHandler;
+import tormozit.edt.compare.open_object.handlers.ExpandMode;
 import tormozit.edt.compare.open_object.handlers.OpenObjectHandler;
 
 /**
@@ -148,15 +149,29 @@ public class CompareEditorMenuHook implements IStartup {
     }
 
     private void fillToolbar(IToolBarManager toolbar, IEditorPart editor) {
-        IAction action = new Action("Развернуть↓", IAction.AS_PUSH_BUTTON) {
+        IAction action1 = new Action("До измененных", IAction.AS_PUSH_BUTTON)
+        {
             @Override
-            public void run() {
-                ExpandExceptAddedDeletedHandler.expand(editor);
+            public void run()
+            {
+                ExpandExceptAddedDeletedHandler.expand(editor, ExpandMode.toBothElement);
             }
         };
-        action.setToolTipText("Развернуть все кроме добавленных/удалённых");
+        action1.setToolTipText("Развернуть до измененных (все кроме добавленных/удалённых)");
         toolbar.add(new Separator());
-        toolbar.add(action);
+        toolbar.add(action1);
+        toolbar.update(true);
+
+        IAction action2 = new Action("До объектов", IAction.AS_PUSH_BUTTON)
+        {
+            @Override
+            public void run() {
+                ExpandExceptAddedDeletedHandler.expand(editor, ExpandMode.toObject);
+            }
+        };
+        action2.setToolTipText("Развернуть до объектов");
+        toolbar.add(new Separator());
+        toolbar.add(action2);
         toolbar.update(true);
     }
 
