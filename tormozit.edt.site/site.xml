@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <site>
-   <feature url="features/tormozit.edt.feature_1.0.0.4.jar" id="tormozit.edt.feature" version="1.0.0.4">
+   <feature url="features/tormozit.edt.feature_1.0.0.5.jar" id="tormozit.edt.feature" version="0.0.0">
       <category name="TormozitEDT"/>
    </feature>
    <category-def name="TormozitEDT" label="Tormozit EDT"/>
