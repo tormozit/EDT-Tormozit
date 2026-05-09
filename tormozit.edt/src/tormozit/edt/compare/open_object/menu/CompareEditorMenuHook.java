@@ -58,7 +58,7 @@ public class CompareEditorMenuHook implements IStartup {
     private static final String COMPARE_EDITOR_ID = "com._1c.g5.v8.dt.compare.ui.editor";
     private static final String COMMAND_ID        = "tormozit.edt.compare.open_object.openObject";
     private static final String CONTEXT_ID        = "tormozit.edt.compare.open_object.context";
-    private static final String ITEM_TEXT         = "Открыть объект\tF2";
+    private static final String ITEM_TEXT = "Открыть объект \tF2";
 
     // ---- IStartup ----
 
@@ -108,6 +108,10 @@ public class CompareEditorMenuHook implements IStartup {
     }
 
     private boolean isCompareEditor(IEditorPart editor) {
+//        String message = "editor=" + editor.getClass().getSimpleName() + "-" + editor.getSite().getId();
+//        IStatus status = new Status(IStatus.INFO, "tormozit.edt", message);
+//        ILog log = Platform.getLog(FrameworkUtil.getBundle(CompareEditorMenuHook.class));
+//        log.log(status);
         return COMPARE_EDITOR_ID.equals(editor.getSite().getId());
     }
 
@@ -115,15 +119,11 @@ public class CompareEditorMenuHook implements IStartup {
         IContextService cs = editor.getSite().getService(IContextService.class);
         if (cs != null) cs.activateContext(CONTEXT_ID);
 
-        // Добавляем кнопку в тулбар EDT.
-        // DtComparisonEditor строит тулбар через свой ToolBarManager
-        // (не через IActionBars), поэтому toolbar: URI не работает.
-        // getToolBarManager() — публичный метод редактора.
-        addToolbarButton(editor);
+        // Добавляем кнопку в тулбар EDT с повторными попытками
+        addToolbarButtonWithRetry(editor, 0);
 
         Tree tree = getCompareTree(editor);
         if (tree == null) {
-            // Виджеты могут быть ещё не готовы — повторяем после текущего цикла событий
             Display.getDefault().asyncExec(() -> {
                 Tree t = getCompareTree(editor);
                 if (t != null) attachMenuListener(editor, t);
@@ -134,16 +134,32 @@ public class CompareEditorMenuHook implements IStartup {
     }
 
     /**
-     * Добавляет кнопки в ToolBarManager редактора EDT.
-     * Используем IAction (не CommandContributionItem), чтобы не зависеть
-     * от состояния activeWhen/activeContexts в момент клика.
+     * Добавляет кнопки с повторными попытками, если тулбар еще не инициализирован
      */
-    private void addToolbarButton(IEditorPart editor) {
-        // ToolBarManager может быть ещё не создан — повторяем после цикла событий
+    private void addToolbarButtonWithRetry(IEditorPart editor, int attempt)
+    {
+        if (attempt > 2)
+        {
+            System.err.println("Failed to add toolbar buttons after 2 attempts");
+            return;
+        }
+
         Display.getDefault().asyncExec(() -> {
             Object tbm2 = getField(editor, "toolBarManager");
             if (tbm2 instanceof IToolBarManager)
+            {
                 fillToolbar((IToolBarManager)tbm2, editor);
+            }
+            else
+            {
+//                ILog log = Platform.getLog(FrameworkUtil.getBundle(CompareEditorMenuHook.class));
+//                String message = "toolBarManager=" + tbm2 + ", editor=" + editor.getClass().getSimpleName();
+//                IStatus status = new Status(IStatus.INFO, "tormozit.edt.compare.open_object", message);
+//                log.log(status);
+
+                // Тулбар еще не создан - повторим через 500 мс
+                Display.getDefault().timerExec(500, () -> addToolbarButtonWithRetry(editor, attempt + 1));
+            }
         });
     }
 
