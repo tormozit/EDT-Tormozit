@@ -22,9 +22,22 @@
   </extension>
 
   <extension point="org.eclipse.ui.commands">
+    <command
+        id="tormozit.edt.compare.open_object.openObject"
+        name="Открыть объект"
+        description="Открыть выбранный объект конфигурации в редакторе EDT"/>
   </extension>
 
   <extension point="org.eclipse.ui.handlers">
+    <handler
+        commandId="tormozit.edt.compare.open_object.openObject"
+        class="tormozit.edt.compare.open_object.handlers.OpenObjectHandler">
+      <activeWhen>
+        <with variable="activeEditorId">
+          <equals value="com._1c.g5.v8.dt.compare.ui.editor"/>
+        </with>
+      </activeWhen>
+    </handler>
   </extension>
 
   <!-- Toolbar редактора сравнения.

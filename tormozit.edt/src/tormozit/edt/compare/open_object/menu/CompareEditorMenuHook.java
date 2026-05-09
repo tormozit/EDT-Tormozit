@@ -168,7 +168,7 @@ public class CompareEditorMenuHook implements IStartup {
                 ExpandExceptAddedDeletedHandler.expand(editor, ExpandMode.toObject);
             }
         };
-        action2.setToolTipText("Развернуть до объектов");
+        action2.setToolTipText("Развернуть до верхних объектов");
         toolbar.add(new Separator());
         toolbar.add(action2);
         toolbar.update(true);
