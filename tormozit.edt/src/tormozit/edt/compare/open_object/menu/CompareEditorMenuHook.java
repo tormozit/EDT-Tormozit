@@ -8,6 +8,7 @@ import org.eclipse.jface.action.Action;
 import org.eclipse.jface.action.IAction;
 import org.eclipse.jface.action.IToolBarManager;
 import org.eclipse.jface.action.Separator;
+import org.eclipse.jface.viewers.AbstractTreeViewer;
 import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.MenuAdapter;
@@ -37,6 +38,7 @@ import tormozit.edt.compare.open_object.handlers.ExpandExceptAddedDeletedHandler
 import tormozit.edt.compare.open_object.handlers.ExpandMode;
 import tormozit.edt.compare.open_object.handlers.OpenObjectHandler;
 import tormozit.edt.compare.open_object.search.CompareSearchDialogHook;
+import tormozit.edt.compare.open_object.selection.CompareEditorSelectionProvider;
 
 /**
  * Добавляет пункт «Открыть объект» в контекстное меню дерева сравнения EDT.
@@ -126,6 +128,17 @@ public class CompareEditorMenuHook implements IStartup {
         // Добавляем кнопку в тулбар EDT с повторными попытками
         addToolbarButtonWithRetry(editor);
 
+        // Глобальное оповещение об активации объекта:
+        // ВАЖНО: setSelectionProvider вызывается СИНХРОННО здесь (в partOpened),
+        // чтобы workbench успел подключить свой ISelectionChangedListener
+        // в partActivated (который идёт следом). Если вызвать через asyncExec —
+        // workbench уже подключится к старому провайдеру и listeners останется пустым.
+        CompareEditorSelectionProvider selProvider = new CompareEditorSelectionProvider(editor);
+        editor.getSite().setSelectionProvider(selProvider);
+
+        // Tree viewer ещё не создан в partOpened — подключаем асинхронно
+        wireTreeViewerToProvider(editor, selProvider);
+
         Tree tree = getCompareTree(editor);
         if (tree == null) {
             Display.getDefault().asyncExec(() -> {
@@ -135,6 +148,48 @@ public class CompareEditorMenuHook implements IStartup {
             return;
         }
         attachMenuListener(editor, tree);
+    }
+
+    /**
+     * Подключает tree viewer к уже установленному провайдеру асинхронно.
+     * К этому моменту workbench уже подключился к провайдеру через
+     * {@code addSelectionChangedListener}, поэтому события дерева
+     * будут правильно доставляться через {@code ISelectionService}.
+     */
+    private void wireTreeViewerToProvider(IEditorPart editor, CompareEditorSelectionProvider provider)
+    {
+        Display.getDefault().asyncExec(() ->
+        {
+            AbstractTreeViewer viewer = getTreeViewerFromEditor(editor);
+            if (viewer == null)
+            {
+                Display.getDefault().asyncExec(() ->
+                {
+                    AbstractTreeViewer v = getTreeViewerFromEditor(editor);
+                    if (v != null)
+                        provider.setTreeViewer(v);
+                });
+                return;
+            }
+            provider.setTreeViewer(viewer);
+        });
+    }
+
+    /**
+     * Возвращает tree viewer из comparisonView редактора (через рефлексию),
+     * либо {@code null}, если view ещё не создан.
+     */
+    private AbstractTreeViewer getTreeViewerFromEditor(IEditorPart editor)
+    {
+        Object view = getField(editor, "comparisonView"); //$NON-NLS-1$
+        if (!(view instanceof DtComparisonView))
+            return null;
+        Object treeControl = ((DtComparisonView) view).getTreeControl();
+        if (treeControl == null)
+            return null;
+        Object viewer = invokeNoArg(treeControl, "getTreeViewer"); //$NON-NLS-1$
+        return (viewer instanceof AbstractTreeViewer)
+                ? (AbstractTreeViewer) viewer : null;
     }
 
     /**

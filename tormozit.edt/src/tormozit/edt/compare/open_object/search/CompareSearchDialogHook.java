@@ -149,10 +149,7 @@ public class CompareSearchDialogHook
         AbstractTreeViewer viewer = getTreeViewerFromDialog(dialog);
         if (viewer == null)
             return;
-
         Tree tree = (Tree)viewer.getControl();
-
-        // Собираем все видимые (раскрытые) строки дерева
         List<TreeItem> items = new ArrayList<>();
         collectItems(tree.getItems(), items);
         if (items.isEmpty())
