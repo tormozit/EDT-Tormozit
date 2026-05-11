@@ -9,6 +9,7 @@ import org.eclipse.core.commands.ExecutionEvent;
 import org.eclipse.core.commands.ExecutionException;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.jface.dialogs.MessageDialog;
+import org.eclipse.jface.viewers.ISelection;
 import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.ui.IEditorPart;
@@ -21,6 +22,8 @@ import com._1c.g5.v8.dt.compare.model.ComparisonNode;
 import com._1c.g5.v8.dt.compare.model.ComparisonSide;
 import com._1c.g5.v8.dt.compare.model.MatchedObjectsComparisonNode;
 import com._1c.g5.v8.dt.compare.ui.editor.DtComparisonView;
+
+import tormozit.edt.compare.open_object.selection.CompareEditorSelectionProvider;
 
 /**
  * Открывает объект конфигурации выбранный в дереве сравнения EDT.
@@ -46,68 +49,18 @@ public class OpenObjectHandler extends AbstractHandler {
      * от фокуса / activeContexts / activeWhen.
      */
     public static void openObject(IEditorPart editor, Shell shell) {
-        if (editor == null) return;
-
-        // Шаг 1: IComparisonSession
-        IComparisonSession session = getSession(editor);
-        if (session == null) {
-            showError(shell, "Не удалось получить сессию сравнения.");
-            return;
-        }
-
-        // Шаг 2: Выбранный узел дерева
-        MatchedObjectsComparisonNode matchedNode = getSelectedMatchedNode(editor);
-        if (matchedNode == null) {
-            showError(shell, "Выберите объект в дереве сравнения.\n"
-                + "(Выбранный элемент должен быть объектом конфигурации, не свойством)");
-            return;
-        }
-
-        // Шаг 3: bmId главной стороны
-        Long bmId = matchedNode.getMainObjectId();
-        if (bmId == null || bmId == -1L) {
-            // Объект есть только в другой стороне — берём оттуда
-            bmId = matchedNode.getOtherObjectId();
-        }
-        if (bmId == null || bmId == -1L) {
-            showError(shell, "Объект не найден ни в одной из сторон сравнения.");
-            return;
-        }
-
-        // Шаг 4: EObject через IActiveComparisonDataSource
-        EObject eObject = getEObject(session, bmId, matchedNode);
-        if (eObject == null) {
-            showError(shell, "Не удалось получить объект по идентификатору: " + bmId);
-            return;
-        }
-
-        // Шаг 5: Открываем редактор
+        CompareEditorSelectionProvider selectionProvider = (CompareEditorSelectionProvider) editor.getSite().getSelectionProvider();
+        EObject eObject = selectionProvider.resolveEObject(getSelection(editor));
         openInEditor(eObject, editor, shell);
     }
-
-    public static IComparisonSession getSession(IEditorPart editor)
-    {
-        // Из comparisonArtifactsList
-        Object list = getField(editor, "comparisonArtifactsList");
-        if (list instanceof List) {
-            for (Object artifact : (List<?>) list) {
-                Object session = invokeNoArg(artifact, "getSession");
-                if (session instanceof IComparisonSession) {
-                    return (IComparisonSession) session;
-                }
-            }
-        }
-        // Fallback: из root
-        Object root = getField(editor, "root");
-        if (root != null) {
-            Object session = invokeNoArg(root, "getComparisonSession");
-            if (session instanceof IComparisonSession) return (IComparisonSession) session;
-        }
-        return null;
+    
+    public static void showInNavigator(IEditorPart editor, Shell shell) {
+        ((CompareEditorSelectionProvider) editor.getSite().getSelectionProvider()).showObjectInNavigator(getSelection(editor), true);
     }
 
-    private static MatchedObjectsComparisonNode getSelectedMatchedNode(IEditorPart editor) {
+    public static ISelection getSelection(IEditorPart editor) {
         // Через comparisonView -> treeViewer -> selection
+        ISelection sel = null;
         Object view = getField(editor, "comparisonView");
         if (view instanceof DtComparisonView) {
             Object treeControl = ((DtComparisonView) view).getTreeControl();
@@ -115,28 +68,14 @@ public class OpenObjectHandler extends AbstractHandler {
                 Object viewer = invokeNoArg(treeControl, "getTreeViewer");
                 if (viewer != null)
                 {
-                    Object sel = invokeNoArg(viewer, "getSelection");
-                    if (sel instanceof IStructuredSelection)
-                    {
-                        Object partialNode = ((IStructuredSelection)sel).getFirstElement();
-                        ComparisonNode comparisonNode = null;
-                        try
-                        {
-                            comparisonNode = (ComparisonNode)invokeNoArg(partialNode, "retrieveComparisonNode");
-                        }
-                        catch (Exception ignored)
-                        {
-                        }
-                        return (MatchedObjectsComparisonNode)comparisonNode;
-                    }
+                    sel = (ISelection) invokeNoArg(viewer, "getSelection");
                 }
             }
         }
-        return null;
+        return sel;
     }
-
-    public static EObject getEObject(IComparisonSession session, long bmId,
-            MatchedObjectsComparisonNode node) {
+    
+    public static EObject getEObject(IComparisonSession session, long bmId, MatchedObjectsComparisonNode node) {
 
         // Определяем сторону: MAIN если mainObjectId есть, иначе OTHER
         ComparisonSide side = (node.getMainObjectId() != null && node.getMainObjectId() != -1L)
@@ -198,7 +137,7 @@ public class OpenObjectHandler extends AbstractHandler {
 
     // ---- Utility ----
 
-    private static Object getField(Object obj, String name) {
+    public static Object getField(Object obj, String name) {
         Class<?> cls = obj.getClass();
         while (cls != null) {
             try {
@@ -211,7 +150,7 @@ public class OpenObjectHandler extends AbstractHandler {
         return null;
     }
 
-    private static Object invokeNoArg(Object o, String name) {
+    public static Object invokeNoArg(Object o, String name) {
         if (o == null) return null;
         try { return o.getClass().getMethod(name).invoke(o); }
         catch (Exception ignored) { return null; }

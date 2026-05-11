@@ -14,6 +14,8 @@ import com._1c.g5.v8.dt.compare.core.IComparisonSession;
 import com._1c.g5.v8.dt.compare.model.MatchedObjectsComparisonNode;
 import com._1c.g5.v8.dt.compare.ui.editor.DtComparisonView;
 
+import tormozit.edt.compare.open_object.selection.CompareEditorSelectionProvider;
+
 /**
  * Разворачивает дерево сравнения EDT, пропуская добавленные/удалённые объекты.
  *
@@ -39,10 +41,6 @@ public class ExpandExceptAddedDeletedHandler
         return null;
     }
 
-    /**
-     * @param editor
-     * @return
-     */
     public static Object expand(IEditorPart editor, ExpandMode mode)
     {
         AbstractTreeViewer viewer = getTreeViewer(editor);
@@ -61,7 +59,7 @@ public class ExpandExceptAddedDeletedHandler
 
         for (Object root : cp.getElements(viewer.getInput()))
         {
-            expandSelectively(viewer, cp, root, mode, OpenObjectHandler.getSession(editor));
+            expandSelectively(viewer, cp, root, mode, CompareEditorSelectionProvider.getSession(editor));
         }
 
         // Восстанавливаем выделение и прокручиваем к нему

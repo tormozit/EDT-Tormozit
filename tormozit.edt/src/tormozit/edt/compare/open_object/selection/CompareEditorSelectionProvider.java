@@ -21,6 +21,7 @@ import org.eclipse.ui.IViewPart;
 import org.eclipse.ui.IWorkbenchPage;
 import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.navigator.CommonNavigator;
+import org.eclipse.e4.ui.workbench.modeling.EPartService;
 import org.eclipse.e4.ui.workbench.modeling.ESelectionService;
 import org.eclipse.e4.ui.model.application.ui.basic.MPart;
 
@@ -115,7 +116,12 @@ public class CompareEditorSelectionProvider
     @Override
     public void selectionChanged(SelectionChangedEvent event)
     {
-        EObject eObject = resolveEObject(event.getSelection());
+       showObjectInNavigator(event.getSelection(), false);
+    }
+
+    public void showObjectInNavigator(ISelection selection, boolean ifForced)
+    {
+        EObject eObject = resolveEObject(selection);
         currentSelection = (eObject != null)
                 ? new StructuredSelection(eObject)
                 : StructuredSelection.EMPTY;
@@ -137,41 +143,35 @@ public class CompareEditorSelectionProvider
             IViewPart view = page.findView("com._1c.g5.v8.dt.ui2.navigator"); // ID Навигатора EDT
             if (view instanceof CommonNavigator) {
                 CommonNavigator navigator = (CommonNavigator) view;
-                if (isLinkingEnabled(navigator)) {
+                 if (ifForced || isLinkingEnabled(navigator)) {
                     Display.getDefault().asyncExec(() -> {
                         // 1. Показываем объект в дереве навигатора
                         navigator.selectReveal(currentSelection);
     
                         //navigator.setFocus(); // Так будет небольшое мигание
                         
-                        try 
-                        {
-                            // 1. Загружаем классы интерфейсов через рефлексию
-                            Class<?> classMPart = Class.forName("org.eclipse.e4.ui.model.application.ui.basic.MPart");
-                            Class<?> classEPartService = Class.forName("org.eclipse.e4.ui.workbench.modeling.EPartService");
-                            
-                            // 2. Получаем экземпляр EPartService через Site навигатора
+                            Class<?> classMPart = MPart.class;
+                            Class<?> classEPartService = EPartService.class;
                             Object partService = navigator.getSite().getService(classEPartService);
-                            
-                            // 3. Получаем MPart навигатора
                             Object mPart = navigator.getSite().getService(classMPart);
-
                             if (partService != null && mPart != null) 
                             {
-                                // 4. Ищем метод activate именно в EPartService
-                                // void activate(MPart part, boolean requiresFocus)
-                                Method activateMethod = partService.getClass().getMethod("activate", classMPart, boolean.class);
-                                
-                                // 5. Вызываем активацию с параметром false (без перехвата фокуса OS)
-                                activateMethod.invoke(partService, mPart, false);
+                                try
+                                {
+                                    // 4. Ищем метод activate именно в EPartService
+                                    // void activate(MPart part, boolean requiresFocus)
+                                    Method activateMethod = partService.getClass().getMethod("activate", classMPart, boolean.class);
+                                    
+                                    // 5. Вызываем активацию с параметром false (без перехвата фокуса OS)
+                                    activateMethod.invoke(partService, mPart, false);
+                                }
+                                catch (Exception ignored)
+                                {
+                                    // TODO Auto-generated catch block
+                                    //e.printStackTrace();
+                                }
+                                editor.setFocus();
                             }
-                        } 
-                        catch (ClassNotFoundException | NoSuchMethodException | SecurityException 
-                               | IllegalAccessException | IllegalArgumentException | InvocationTargetException e) 
-                        {
-                            // В промышленном коде лучше логировать через Platform.getLog
-                            e.printStackTrace();
-                        }
                         
                     });
                 }
@@ -206,8 +206,9 @@ public class CompareEditorSelectionProvider
      * Возвращает {@code null}, если элемент не является объектом конфигурации
      * или EObject не удалось получить через сессию сравнения.
      */
-    private EObject resolveEObject(ISelection selection)
+    public EObject resolveEObject(ISelection selection)
     {
+        //ISelection selection = editor.getSite().getSelectionProvider().getSelection();
         if (!(selection instanceof IStructuredSelection))
             return null;
 
@@ -219,7 +220,7 @@ public class CompareEditorSelectionProvider
         if (matchedNode == null)
             return null;
 
-        IComparisonSession session = OpenObjectHandler.getSession(editor);
+        IComparisonSession session = getSession(editor);
         if (session == null)
             return null;
 
@@ -232,7 +233,28 @@ public class CompareEditorSelectionProvider
         EObject eObject = OpenObjectHandler.getEObject(session, bmId, matchedNode);
         return eObject;
     }
-
+    
+    public static IComparisonSession getSession(IEditorPart editor)
+    {
+        // Из comparisonArtifactsList
+        Object list = OpenObjectHandler.getField(editor, "comparisonArtifactsList");
+        if (list instanceof List) {
+            for (Object artifact : (List<?>) list) {
+                Object session = OpenObjectHandler.invokeNoArg(artifact, "getSession");
+                if (session instanceof IComparisonSession) {
+                    return (IComparisonSession) session;
+                }
+            }
+        }
+        // Fallback: из root
+        Object root = OpenObjectHandler.getField(editor, "root");
+        if (root != null) {
+            Object session = OpenObjectHandler.invokeNoArg(root, "getComparisonSession");
+            if (session instanceof IComparisonSession) return (IComparisonSession) session;
+        }
+        return null;
+    }
+    
     /**
      * Разворачивает произвольный элемент дерева в
      * {@link MatchedObjectsComparisonNode}, поддерживая:

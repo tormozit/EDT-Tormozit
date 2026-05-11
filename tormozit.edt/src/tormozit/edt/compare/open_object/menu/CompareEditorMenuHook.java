@@ -61,9 +61,11 @@ import tormozit.edt.compare.open_object.selection.CompareEditorSelectionProvider
 public class CompareEditorMenuHook implements IStartup {
 
     private static final String COMPARE_EDITOR_ID = "com._1c.g5.v8.dt.compare.ui.editor";
-    private static final String COMMAND_ID        = "tormozit.edt.compare.open_object.openObject";
     private static final String CONTEXT_ID        = "tormozit.edt.compare.open_object.context";
-    private static final String ITEM_TEXT = "Открыть объект \tF2";
+//    private static final String COMMAND_ID_OpenObject = "tormozit.edt.compare.open_object.openObject";
+    private static final String ITEM_TEXT_OpenObject = "Открыть объект \tF2";
+//    private static final String COMMAND_ID_showInNavigator = "tormozit.edt.compare.open_object.showInNavigator";
+    private static final String ITEM_TEXT_showInNavigator = "Показать в навигаторе \tCTRL+T";
 
     // ---- IStartup ----
 
@@ -254,9 +256,9 @@ public class CompareEditorMenuHook implements IStartup {
 
                 addedItems.add(new MenuItem(menu, SWT.SEPARATOR));
 
-                MenuItem item = new MenuItem(menu, SWT.PUSH);
-                item.setText(ITEM_TEXT);
-                item.addSelectionListener(new SelectionAdapter() {
+                MenuItem item1 = new MenuItem(menu, SWT.PUSH);
+                item1.setText(ITEM_TEXT_OpenObject);
+                item1.addSelectionListener(new SelectionAdapter() {
                     @Override
                     public void widgetSelected(SelectionEvent e) {
                         // Вызываем напрямую с захваченным editor и shell дерева —
@@ -265,7 +267,20 @@ public class CompareEditorMenuHook implements IStartup {
                         OpenObjectHandler.openObject(editor, tree.getShell());
                     }
                 });
-                addedItems.add(item);
+                addedItems.add(item1);
+                
+                MenuItem item2 = new MenuItem(menu, SWT.PUSH);
+                item2.setText(ITEM_TEXT_showInNavigator);
+                item2.addSelectionListener(new SelectionAdapter() {
+                    @Override
+                    public void widgetSelected(SelectionEvent e) {
+                        // Вызываем напрямую с захваченным editor и shell дерева —
+                        // без прохода через команду/хендлер, чтобы не зависеть
+                        // от activeWhen/activeContexts в момент клика.
+                        OpenObjectHandler.showInNavigator(editor, tree.getShell());
+                    }
+                });
+                addedItems.add(item2);           
             }
 
             @Override
