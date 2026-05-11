@@ -1,6 +1,7 @@
 package tormozit.edt.compare.open_object.menu;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -9,6 +10,7 @@ import org.eclipse.jface.action.IAction;
 import org.eclipse.jface.action.IToolBarManager;
 import org.eclipse.jface.action.Separator;
 import org.eclipse.jface.viewers.AbstractTreeViewer;
+import org.eclipse.jface.viewers.ISelectionProvider;
 import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.MenuAdapter;
@@ -136,6 +138,7 @@ public class CompareEditorMenuHook implements IStartup {
         CompareEditorSelectionProvider selProvider = new CompareEditorSelectionProvider(editor);
         editor.getSite().setSelectionProvider(selProvider);
 
+        
         // Tree viewer ещё не создан в partOpened — подключаем асинхронно
         wireTreeViewerToProvider(editor, selProvider);
 

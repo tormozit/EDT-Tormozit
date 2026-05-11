@@ -1,5 +1,7 @@
 package tormozit.edt.compare.open_object.selection;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -11,10 +13,18 @@ import org.eclipse.jface.viewers.ISelectionProvider;
 import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.jface.viewers.SelectionChangedEvent;
 import org.eclipse.jface.viewers.StructuredSelection;
+import org.eclipse.swt.widgets.Display;
+import org.eclipse.swt.widgets.Shell;
 import org.eclipse.ui.IEditorPart;
+import org.eclipse.ui.IViewPart;
+import org.eclipse.ui.IWorkbenchPage;
+import org.eclipse.ui.IWorkbenchWindow;
+import org.eclipse.ui.navigator.CommonNavigator;
+import org.eclipse.e4.ui.workbench.modeling.ESelectionService;
 
 import com._1c.g5.v8.dt.compare.core.IComparisonSession;
 import com._1c.g5.v8.dt.compare.model.MatchedObjectsComparisonNode;
+import com._1c.g5.v8.dt.ui.aef.models.NavigatorTreeModel;
 
 import tormozit.edt.compare.open_object.handlers.OpenObjectHandler;
 
@@ -107,11 +117,68 @@ public class CompareEditorSelectionProvider
         currentSelection = (eObject != null)
                 ? new StructuredSelection(eObject)
                 : StructuredSelection.EMPTY;
-        fireSelectionChanged(currentSelection);
+        fireSelectionChanged(currentSelection); // Бесполезно, т.к. слушателей всегда нет - они подписались на стандартный провайдер
+        if (eObject != null && editor != null) {
+            ESelectionService selectionService = editor.getSite().getService(ESelectionService.class);
+            if (selectionService != null) {
+                selectionService.setSelection(eObject);
+            }
+            
+            // Оповещаем навигатор
+            
+//          IWorkbenchPage page = editor.getSite().getPage();
+//          IWorkbenchWindow window = page.getWorkbenchWindow();
+//          // Повторная активация текущего редактора может заставить LinkEditorAction проснуться.
+//          page.activate(editor);
+          
+            IWorkbenchPage page = editor.getSite().getPage();
+            IViewPart view = page.findView("com._1c.g5.v8.dt.ui2.navigator"); // ID Навигатора EDT
+            if (view instanceof CommonNavigator) {
+                CommonNavigator navigator = (CommonNavigator) view;
+                if (isLinkingEnabled(navigator)) {
+                    Display.getDefault().asyncExec(() -> {
+                    // 1. Показываем объект в дереве навигатора
+                    navigator.selectReveal(currentSelection);
+
+                    // 2. Переключаем фокус на навигатор и обратно, чтобы
+                    //    ISelectionService доставил выделение слушателям
+                    //    (LazyProblemView и др. принимают только навигатор как источник).
+                    //    Shell.setRedraw(false) подавляет перерисовку на время
+                    //    переключения — пользователь не видит мигания.
+                    Shell shell = editor.getSite().getShell();
+                    shell.setRedraw(false);
+                    try {
+                        navigator.setFocus();
+                    } finally {
+                        shell.setRedraw(true);
+                    }
+                });
+                }
+            }
+        }
     }
-
-    // ---- Внутренние утилиты ----
-
+    
+    /**
+     * Проверка состояния кнопки "Link with Editor"
+     */
+    private boolean isLinkingEnabled(CommonNavigator navigator) {
+        try {
+            // Способ 1: Через метод isLinkingEnabled() (если он доступен в этой версии EDT)
+            Method method = navigator.getClass().getMethod("isLinkingEnabled");
+            return (boolean) method.invoke(navigator);
+        } catch (Exception e) {
+            try {
+                // Способ 2: Через внутреннее поле, если метод скрыт
+                Field field = CommonNavigator.class.getDeclaredField("isLinkingEnabled");
+                field.setAccessible(true);
+                return field.getBoolean(navigator);
+            } catch (Exception e2) {
+                // Если не удалось определить — лучше не двигать дерево (безопасный вариант)
+                return false; 
+            }
+        }
+    }
+    
     /**
      * Транслирует выделение дерева в EObject:
      * element → MatchedObjectsComparisonNode → bmId → EObject.
@@ -141,7 +208,8 @@ public class CompareEditorSelectionProvider
         if (bmId == null || bmId == -1L)
             return null;
 
-        return OpenObjectHandler.getEObject(session, bmId, matchedNode);
+        EObject eObject = OpenObjectHandler.getEObject(session, bmId, matchedNode);
+        return eObject;
     }
 
     /**
