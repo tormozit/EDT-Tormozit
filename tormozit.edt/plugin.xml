@@ -66,4 +66,19 @@
   <extension point="org.eclipse.ui.menus">
   </extension>
 
+  <!-- Страница настроек автооткрытия подсказки BSL -->
+  <extension point="org.eclipse.ui.preferencePages">
+    <page
+        category="com._1c.g5.v8.dt.bsl.Bsl"
+        class="tormozit.edt.compare.open_object.assist.ContentAssistAutoOpenPreferencePage"
+        id="tormozit.edt.contentAssistAutoOpen.preferencePages"
+        name="Автооткрытие подсказки"/>
+  </extension>
+
+  <!-- Инициализатор значений по умолчанию для настроек автооткрытия -->
+  <extension point="org.eclipse.core.runtime.preferences">
+    <initializer
+        class="tormozit.edt.compare.open_object.assist.ContentAssistAutoOpenInitializer"/>
+  </extension>
+
 </plugin>
