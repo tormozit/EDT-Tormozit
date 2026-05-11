@@ -150,29 +150,28 @@ public class CompareEditorSelectionProvider
     
                         //navigator.setFocus(); // Так будет небольшое мигание
                         
-                            Class<?> classMPart = MPart.class;
-                            Class<?> classEPartService = EPartService.class;
-                            Object partService = navigator.getSite().getService(classEPartService);
-                            Object mPart = navigator.getSite().getService(classMPart);
-                            if (partService != null && mPart != null) 
+                        Class<?> classMPart = MPart.class;
+                        Class<?> classEPartService = EPartService.class;
+                        Object partService = navigator.getSite().getService(classEPartService);
+                        Object mPart = navigator.getSite().getService(classMPart);
+                        if (partService != null && mPart != null) 
+                        {
+                            try
                             {
-                                try
-                                {
-                                    // 4. Ищем метод activate именно в EPartService
-                                    // void activate(MPart part, boolean requiresFocus)
-                                    Method activateMethod = partService.getClass().getMethod("activate", classMPart, boolean.class);
-                                    
-                                    // 5. Вызываем активацию с параметром false (без перехвата фокуса OS)
-                                    activateMethod.invoke(partService, mPart, false);
-                                }
-                                catch (Exception ignored)
-                                {
-                                    // TODO Auto-generated catch block
-                                    //e.printStackTrace();
-                                }
-                                editor.setFocus();
+                                // 4. Ищем метод activate именно в EPartService
+                                // void activate(MPart part, boolean requiresFocus)
+                                Method activateMethod = partService.getClass().getMethod("activate", classMPart, boolean.class);
+                                
+                                // 5. Вызываем активацию с параметром false (без перехвата фокуса OS)
+                                activateMethod.invoke(partService, mPart, false);
+                                activateMethod.invoke(partService, editor.getSite().getService(classMPart), false);
                             }
-                        
+                            catch (Exception ignored)
+                            {
+                                // TODO Auto-generated catch block
+                                //e.printStackTrace();
+                            }
+                        }
                     });
                 }
             }
