@@ -1,6 +1,7 @@
 package tormozit.edt.compare.open_object.selection;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
@@ -21,6 +22,7 @@ import org.eclipse.ui.IWorkbenchPage;
 import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.navigator.CommonNavigator;
 import org.eclipse.e4.ui.workbench.modeling.ESelectionService;
+import org.eclipse.e4.ui.model.application.ui.basic.MPart;
 
 import com._1c.g5.v8.dt.compare.core.IComparisonSession;
 import com._1c.g5.v8.dt.compare.model.MatchedObjectsComparisonNode;
@@ -137,22 +139,41 @@ public class CompareEditorSelectionProvider
                 CommonNavigator navigator = (CommonNavigator) view;
                 if (isLinkingEnabled(navigator)) {
                     Display.getDefault().asyncExec(() -> {
-                    // 1. Показываем объект в дереве навигатора
-                    navigator.selectReveal(currentSelection);
+                        // 1. Показываем объект в дереве навигатора
+                        navigator.selectReveal(currentSelection);
+    
+                        //navigator.setFocus(); // Так будет небольшое мигание
+                        
+                        try 
+                        {
+                            // 1. Загружаем классы интерфейсов через рефлексию
+                            Class<?> classMPart = Class.forName("org.eclipse.e4.ui.model.application.ui.basic.MPart");
+                            Class<?> classEPartService = Class.forName("org.eclipse.e4.ui.workbench.modeling.EPartService");
+                            
+                            // 2. Получаем экземпляр EPartService через Site навигатора
+                            Object partService = navigator.getSite().getService(classEPartService);
+                            
+                            // 3. Получаем MPart навигатора
+                            Object mPart = navigator.getSite().getService(classMPart);
 
-                    // 2. Переключаем фокус на навигатор и обратно, чтобы
-                    //    ISelectionService доставил выделение слушателям
-                    //    (LazyProblemView и др. принимают только навигатор как источник).
-                    //    Shell.setRedraw(false) подавляет перерисовку на время
-                    //    переключения — пользователь не видит мигания.
-                    Shell shell = editor.getSite().getShell();
-                    shell.setRedraw(false);
-                    try {
-                        navigator.setFocus();
-                    } finally {
-                        shell.setRedraw(true);
-                    }
-                });
+                            if (partService != null && mPart != null) 
+                            {
+                                // 4. Ищем метод activate именно в EPartService
+                                // void activate(MPart part, boolean requiresFocus)
+                                Method activateMethod = partService.getClass().getMethod("activate", classMPart, boolean.class);
+                                
+                                // 5. Вызываем активацию с параметром false (без перехвата фокуса OS)
+                                activateMethod.invoke(partService, mPart, false);
+                            }
+                        } 
+                        catch (ClassNotFoundException | NoSuchMethodException | SecurityException 
+                               | IllegalAccessException | IllegalArgumentException | InvocationTargetException e) 
+                        {
+                            // В промышленном коде лучше логировать через Platform.getLog
+                            e.printStackTrace();
+                        }
+                        
+                    });
                 }
             }
         }

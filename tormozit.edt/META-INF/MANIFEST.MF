@@ -26,6 +26,7 @@ Require-Bundle: org.eclipse.ui;bundle-version="[3.201.0,4.0.0)",
  com._1c.g5.v8.dt.md;bundle-version="[0.0.0,100.0.0)",
  com._1c.g5.v8.dt.compare.model,
  org.eclipse.e4.ui.workbench,
+ org.eclipse.e4.ui.model.workbench,
  org.eclipse.ui.navigator,
  org.eclipse.swt
 Import-Package: org.osgi.framework;version="[1.8.0,2.0.0)"
