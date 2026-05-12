@@ -1,6 +1,10 @@
 package tormozit.edt.handlers;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.util.HashSet;
+import java.util.Set;
 
 import org.eclipse.core.commands.AbstractHandler;
 import org.eclipse.core.commands.ExecutionEvent;
@@ -24,58 +28,55 @@ import com._1c.g5.v8.dt.compare.ui.editor.DtComparisonView;
  *       (до первого {@link MatchedObjectsComparisonNode} с ненулевым ID),
  *       не углубляясь внутрь объектов.</li>
  * </ul>
- *
- * <h3>Оптимизации</h3>
- * <ul>
- *   <li>{@code setRedraw(false)} на время всей операции — SWT не перерисовывает
- *       дерево после каждого {@code expandToLevel}, итоговая перерисовка одна.</li>
- *   <li>{@code isObject()} не вызывает {@code getEObject()} (BM-транзакция),
- *       а проверяет только наличие ID в {@link MatchedObjectsComparisonNode}.</li>
- * </ul>
  */
 public class ExpandExceptAddedDeletedHandler extends AbstractHandler
 {
+    private static Method retrieveMethodCache = null; // мало полезный кэш рефлексии
     @Override
     public Object execute(ExecutionEvent event) throws ExecutionException
     {
         return null;
     }
 
-    public static Object expand(IEditorPart editor, ExpandMode mode)
-    {
+    public static Object expand(IEditorPart editor, ExpandMode mode) {
         AbstractTreeViewer viewer = getTreeViewer(editor);
-        if (viewer == null)
-            return null;
-        ITreeContentProvider cp =
-            (ITreeContentProvider) viewer.getContentProvider();
-        if (cp == null)
-            return null;
+        if (viewer == null) return null;
+
+        ITreeContentProvider cp = (ITreeContentProvider) viewer.getContentProvider();
+        if (cp == null) return null;
+
         ISelection selection = viewer.getSelection();
+        
+        // Набор элементов, которые будут развернуты
+        Set<Object> toExpand = new HashSet<>();
+
         viewer.collapseAll();
-        for (Object root : cp.getElements(viewer.getInput()))
-            expandSelectively(viewer, cp, root, mode);
-        if (selection != null && !selection.isEmpty())
+        for (Object root : cp.getElements(viewer.getInput())) {
+            collectElementsToExpand(cp, root, mode, toExpand);
+        }
+        viewer.setExpandedElements(toExpand.toArray());
+
+        if (selection != null && !selection.isEmpty()) {
             viewer.setSelection(selection, true);
+        }
         return null;
     }
 
     /**
-     * Рекурсивно раскрывает узел с учётом режима.
+     * Рекурсивно собирает список узлов для раскрытия.
+     * Никаких вызовов вьювера внутри!
      */
-    private static void expandSelectively(AbstractTreeViewer viewer,
-            ITreeContentProvider cp, Object element, ExpandMode mode)
-    {
+    private static void collectElementsToExpand(ITreeContentProvider cp, Object element, 
+                                              ExpandMode mode, Set<Object> toExpand) {
         if (false 
             || !cp.hasChildren(element)
             || mode == ExpandMode.toBothElement && isAddedOrDeleted(element)
             || mode == ExpandMode.toObject && isObject(element))
-       {
-            viewer.expandToLevel(element, 0); 
             return;       
-       }
-//        viewer.expandToLevel(element, 1);
-        for (Object child : cp.getChildren(element))
-            expandSelectively(viewer, cp, child, mode);
+        toExpand.add(element);
+        for (Object child : cp.getChildren(element)) {
+            collectElementsToExpand(cp, child, mode, toExpand);
+        }
     }
 
     /**
@@ -113,7 +114,25 @@ public class ExpandExceptAddedDeletedHandler extends AbstractHandler
      */
     private static MatchedObjectsComparisonNode extractMatchedNode(Object element)
     {
-        Object raw = invokeNoArg(element, "retrieveComparisonNode"); //$NON-NLS-1$
+        if (retrieveMethodCache == null) {
+            try
+            {
+                retrieveMethodCache = element.getClass().getMethod("retrieveComparisonNode"); //$NON-NLS-1$
+            }
+            catch (NoSuchMethodException e)
+            {
+                return null;
+            }
+        }
+        Object raw;
+        try
+        {
+            raw = retrieveMethodCache.invoke(element);
+        }
+        catch (Exception e)
+        {
+            return null;
+        }
         if (raw instanceof MatchedObjectsComparisonNode)
             return (MatchedObjectsComparisonNode) raw;
         if (element instanceof MatchedObjectsComparisonNode)
