@@ -17,18 +17,6 @@ import org.eclipse.ui.IEditorPart;
 import com._1c.g5.v8.dt.compare.model.MatchedObjectsComparisonNode;
 import com._1c.g5.v8.dt.compare.ui.editor.DtComparisonView;
 
-/**
- * Разворачивает дерево сравнения EDT, пропуская добавленные/удалённые объекты.
- *
- * <p>Режимы ({@link ExpandMode}):
- * <ul>
- *   <li>{@code toBothElement} — раскрывает всё, пропуская добавленные/удалённые
- *       (узлы с одной стороной сравнения).</li>
- *   <li>{@code toObject} — раскрывает до уровня объектов конфигурации
- *       (до первого {@link MatchedObjectsComparisonNode} с ненулевым ID),
- *       не углубляясь внутрь объектов.</li>
- * </ul>
- */
 public class ExpandExceptAddedDeletedHandler extends AbstractHandler
 {
     private static Method retrieveMethodCache = null; // мало полезный кэш рефлексии
