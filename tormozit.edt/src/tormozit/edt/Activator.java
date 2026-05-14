@@ -3,7 +3,7 @@ package tormozit.edt;
 import org.eclipse.ui.plugin.AbstractUIPlugin;
 import org.osgi.framework.BundleContext;
 
-import tormozit.edt.applications.ComConnectionRegistry;
+import tormozit.edt.applications.IRApplicationRegistry;
 import tormozit.edt.assist.ContentAssistAutoOpenManager;
 import tormozit.edt.assist.ContentAssistAutoOpenSettings;
 
@@ -38,10 +38,7 @@ public class Activator extends AbstractUIPlugin
     @Override
     public void stop(BundleContext context) throws Exception
     {
-        // Разрываем все активные COM-соединения перед выгрузкой плагина.
-        // Попытки освободить COM-объекты через рефлексию выполняются внутри
-        // disconnectAll(); ошибки там игнорируются.
-        ComConnectionRegistry.disconnectAll();
+        //IRApplicationRegistry.disconnectAll();
 
         ContentAssistAutoOpenManager mgr = ContentAssistAutoOpenManager.getInstance();
         if (mgr != null)
