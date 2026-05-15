@@ -49,7 +49,7 @@ public final class DesignerSessionPoolAccessor
     private static final int    SCAN_DEPTH        = 4;
 
     /** UUID-паттерн для разбора строки-ключа пула вида "uuid:version". */
-    private static final Pattern UUID_PATTERN = Pattern.compile(
+    static final Pattern UUID_PATTERN = Pattern.compile(
         "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"); //$NON-NLS-1$
 
     // -----------------------------------------------------------------------
