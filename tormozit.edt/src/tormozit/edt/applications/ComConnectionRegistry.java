@@ -19,15 +19,18 @@ import org.osgi.framework.FrameworkUtil;
  *
  * <p>Порт функций {@code ПодключениеИР()} и {@code ЗакрытьПриложениеИР()} из RDT.os.
  *
- * <h3>Тост-уведомление</h3>
- * Тост создаётся внутри {@link #doConnect} (а не в {@link #connect}) через {@link EclipseToastNotification#show},
- * который использует {@code syncExec} — гарантированно возвращает {@link Shell}.
- * В блоке {@code finally} всегда вызывается {@link EclipseToastNotification#close} —
- * тост закрывается при любом исходе (успех, ошибка, исключение).
+ * <h3>Жизненный цикл тоста</h3>
+ * Тост создаётся через {@link EclipseToastNotification#show} с {@code syncExec} внутри
+ * {@link #doConnect} — гарантированно возвращает {@link Shell}.
+ * Блок {@code finally} закрывает его при любом исходе.
+ *
+ * <h3>WMI</h3>
+ * Подключение к WMI создаётся один раз в {@link #doConnectInternal} и используется
+ * для поиска PID нового процесса ({@link WmiProcessHelper#findProcess}) и для
+ * завершения процесса при отключении ({@link WmiProcessHelper#terminate}).
  */
 public final class ComConnectionRegistry
 {
-    // ---- Синглтон ----
     private static final ComConnectionRegistry INSTANCE = new ComConnectionRegistry();
     public static ComConnectionRegistry getInstance() { return INSTANCE; }
     private ComConnectionRegistry() {}
@@ -43,22 +46,24 @@ public final class ComConnectionRegistry
         public final State         state;
         public final LocalDateTime startTime;
         public final long          pid;
-        final Object               dispatch;
+        final Object               dispatch;    // Jacob Dispatch (1C COM automation)
+        final Object               processObj;  // Win32_Process COM-объект (для Terminate)
         final String               appTitle;
 
         ComSession(State state, LocalDateTime startTime, long pid,
-                   Object dispatch, String appTitle)
+                   Object dispatch, Object processObj, String appTitle)
         {
-            this.state     = state;
-            this.startTime = startTime;
-            this.pid       = pid;
-            this.dispatch  = dispatch;
-            this.appTitle  = appTitle;
+            this.state      = state;
+            this.startTime  = startTime;
+            this.pid        = pid;
+            this.dispatch   = dispatch;
+            this.processObj = processObj;
+            this.appTitle   = appTitle;
         }
 
         static ComSession connecting()
         {
-            return new ComSession(State.CONNECTING, LocalDateTime.now(), 0, null, ""); //$NON-NLS-1$
+            return new ComSession(State.CONNECTING, LocalDateTime.now(), 0, null, null, ""); //$NON-NLS-1$
         }
     }
 
@@ -100,10 +105,6 @@ public final class ComConnectionRegistry
     // Подключение
     // -----------------------------------------------------------------------
 
-    /**
-     * Запускает асинхронное подключение.
-     * Возвращает управление немедленно; колонка сразу покажет «подключение».
-     */
     public void connect(Object key, String connectionString,
                         String platformVersion, String appLabel)
     {
@@ -112,30 +113,23 @@ public final class ComConnectionRegistry
             State st = sessions.get(key).state;
             if (st == State.CONNECTING || st == State.CONNECTED) return;
         }
-
         sessions.put(key, ComSession.connecting());
         notifyListeners();
-
-        // Асинхронно — тост создаётся внутри doConnect с гарантированным close()
         CompletableFuture.runAsync(
             () -> doConnect(key, connectionString, platformVersion, appLabel));
     }
 
     /**
-     * Весь процесс подключения выполняется здесь, в фоновом потоке.
-     *
-     * <p>Тост показывается в самом начале через {@code syncExec} — возвращает Shell.
-     * {@code finally} гарантирует закрытие тоста при любом исходе.
+     * Фоновый метод подключения.
+     * Тост создаётся здесь (syncExec → всегда Shell), закрывается в finally.
      */
     private void doConnect(Object key, String connectionString,
                            String platformVersion, String appLabel)
     {
-        // Тост «Подключается» — создаём через syncExec, всегда получаем Shell
         Shell connectingToast = EclipseToastNotification.show(
             "Подключение",
             "Подключается приложение ИР. Закрыть его можно командой «Отключить приложение ИР».",
             60_000);
-
         try
         {
             doConnectInternal(key, connectionString, platformVersion, appLabel);
@@ -150,17 +144,21 @@ public final class ComConnectionRegistry
     private void doConnectInternal(Object key, String connectionString,
                                    String platformVersion, String appLabel)
     {
-        String className                = ComConnectionRegistry.buildComClassName(platformVersion);
-        String connectionStringNoPass   = removePassword(connectionString);
+        String className              = buildComClassName(platformVersion);
+        String connectionStringNoPass = removePassword(connectionString);
         log("COM-класс: " + className + ", БД: " + connectionStringNoPass); //$NON-NLS-1$
 
-        Object comDispatch      = null;
-        boolean success         = false;
-        String descriptionOnError = ""; //$NON-NLS-1$
-        long momentStart        = System.currentTimeMillis();
-        long pid                = 0;
+        // WMI создаём заранее — нужен для поиска PID нового процесса
+        Object wmi = WmiProcessHelper.connectWmi();
 
-        // До 2 попыток — аналог цикла «Для НомерПопытки = 1 По 2»
+        Object  comDispatch        = null;
+        Object  processObj         = null;
+        long    pid                = 0;
+        boolean success            = false;
+        String  descriptionOnError = ""; //$NON-NLS-1$
+        long    momentStart        = System.currentTimeMillis();
+
+        // До 2 попыток — аналог «Для НомерПопытки = 1 По 2» в ПодключениеИР()
         for (int attempt = 1; attempt <= 2; attempt++)
         {
             try
@@ -168,75 +166,60 @@ public final class ComConnectionRegistry
                 long startMs = System.currentTimeMillis();
                 comDispatch = ComJacobBridge.createComObject(className);
 
-                // Ищем PID нового процесса 1cv8.exe -Embedding
-                pid = WmiProcessHelper.findNewEmbeddingPid(startMs);
+                // МоментСтартаПроцесса → ПолучитьПроцессОСЛкс(Неопределено, startMs, 2, "-Embedding")
+                processObj = WmiProcessHelper.findProcess(wmi, startMs, 2);
+                pid        = WmiProcessHelper.getPid(processObj);
 
                 boolean connected = ComJacobBridge.connect(comDispatch, connectionString);
-                if (connected)
-                {
-                    success = true;
-                    break;
-                }
+                if (connected) { success = true; break; }
+
                 descriptionOnError = "Connect() вернул false"; //$NON-NLS-1$
-                comDispatch = null;
+                comDispatch = null; processObj = null; pid = 0;
             }
             catch (Exception e)
             {
                 descriptionOnError = e.getMessage() != null ? e.getMessage() : e.toString();
-                comDispatch = null;
+                comDispatch = null; processObj = null; pid = 0;
 
                 String errLow = descriptionOnError.toLowerCase();
                 if (errLow.contains("пароль") || errLow.contains("password") //$NON-NLS-1$ //$NON-NLS-2$
                         || errLow.contains("не идентифицирован")) //$NON-NLS-1$
                 {
                     showError("Неверное имя или пароль.\n" + descriptionOnError); //$NON-NLS-1$
-                    sessions.remove(key);
-                    notifyListeners();
-                    return;
+                    sessions.remove(key); notifyListeners(); return;
                 }
                 if (errLow.contains("0x800706be")) //$NON-NLS-1$
                 {
                     showError("Ошибка инициации приложения. Подробности в Error Log."); //$NON-NLS-1$
-                    sessions.remove(key);
-                    notifyListeners();
-                    return;
+                    sessions.remove(key); notifyListeners(); return;
                 }
-
                 if (attempt == 2)
                 {
                     String msg = "Ошибка подключения ИР " + connectionStringNoPass //$NON-NLS-1$
                         + " через " + className + ":\n" + descriptionOnError; //$NON-NLS-1$ //$NON-NLS-2$
-                    showError(msg);
-                    log(msg);
+                    showError(msg); log(msg);
                     if (!descriptionOnError.contains("Ошибка разделенного доступа")) //$NON-NLS-1$
                         EclipseToastNotification.show("Ошибка COM", //$NON-NLS-1$
-                            "Если ошибка связана с COM, зарегистрируйте класс " //$NON-NLS-1$
-                            + className + " (/RegServer -CurrentUser).", 8_000); //$NON-NLS-1$
-                    sessions.remove(key);
-                    notifyListeners();
-                    return;
+                            "Зарегистрируйте " + className + " (/RegServer -CurrentUser).", 8_000); //$NON-NLS-1$ //$NON-NLS-2$
+                    sessions.remove(key); notifyListeners(); return;
                 }
-                log("Попытка " + attempt + " неудача: " + descriptionOnError + ". Повтор..."); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                log("Попытка " + attempt + " неудача. Повтор..."); //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
 
-        if (!success || comDispatch == null)
-        {
-            sessions.remove(key);
-            notifyListeners();
-            return;
-        }
+        if (!success || comDispatch == null) { sessions.remove(key); notifyListeners(); return; }
 
-        long duration = (System.currentTimeMillis() - momentStart) / 1000;
-        String title = "ИР - " + connectionStringNoPass.split(";")[0]; //$NON-NLS-1$ //$NON-NLS-2$
+        long   duration = (System.currentTimeMillis() - momentStart) / 1000;
+        String title    = "ИР - " + connectionStringNoPass.split(";")[0]; //$NON-NLS-1$ //$NON-NLS-2$
 
-        // Устанавливаем заголовок окна
+        // УстановитьЗаголовок (8.3.10+) / УстановитьЗаголовокСистемы (8.3.9-)
         try
         {
             try
             {
-                Object clientApp = ComJacobBridge.getProperty(comDispatch, "КлиентскоеПриложение"); //$NON-NLS-1$
-                ComJacobBridge.invoke(clientApp, "УстановитьЗаголовок", title); //$NON-NLS-1$
+                ComJacobBridge.invoke(
+                    ComJacobBridge.getProperty(comDispatch, "КлиентскоеПриложение"), //$NON-NLS-1$
+                    "УстановитьЗаголовок", title); //$NON-NLS-1$
             }
             catch (Exception e)
             {
@@ -245,25 +228,23 @@ public final class ComConnectionRegistry
         }
         catch (Exception ignored) {}
 
-        // Visible = false — работаем в фоне
         try { ComJacobBridge.setProperty(comDispatch, "Visible", false); } //$NON-NLS-1$
         catch (Exception ignored) {}
 
-        final long   finalPid      = pid;
-        final Object finalDispatch = comDispatch;
+        final long   finalPid        = pid;
+        final Object finalDispatch   = comDispatch;
+        final Object finalProcessObj = processObj;
         sessions.put(key, new ComSession(
-            State.CONNECTED, LocalDateTime.now(), finalPid, finalDispatch, title));
+            State.CONNECTED, LocalDateTime.now(), finalPid, finalDispatch, finalProcessObj, title));
         notifyListeners();
 
-        EclipseToastNotification.show(
-            "ИР подключено", //$NON-NLS-1$
-            title + " подключено за " + duration + " сек", //$NON-NLS-1$ //$NON-NLS-2$
-            3_000);
+        EclipseToastNotification.show("ИР подключено", //$NON-NLS-1$
+            title + " подключено за " + duration + " сек", 3_000); //$NON-NLS-1$ //$NON-NLS-2$
         log("Подключено: " + title + " за " + duration + " с, PID=" + finalPid); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
     // -----------------------------------------------------------------------
-    // Отключение
+    // Отключение (аналог ЗакрытьПриложениеИР)
     // -----------------------------------------------------------------------
 
     public void disconnect(Object key)
@@ -275,40 +256,45 @@ public final class ComConnectionRegistry
 
     private void doDisconnect(Object key, ComSession session)
     {
-        boolean killProcess = false;
+        boolean killed = false;
 
         if (session.dispatch != null)
         {
             try
             {
+                // ЗавершитьРаботуСистемы(false) — штатное завершение без вопроса о сохранении
                 ComJacobBridge.invoke(session.dispatch, "ЗавершитьРаботуСистемы", false); //$NON-NLS-1$
                 log("ЗавершитьРаботуСистемы(false) — OK"); //$NON-NLS-1$
             }
             catch (Exception e)
             {
-                log("ЗавершитьРаботуСистемы ошибка → убиваем процесс: " + e.getMessage()); //$NON-NLS-1$
-                killProcess = true;
+                log("ЗавершитьРаботуСистемы ошибка → УбитьПроцесс: " + e.getMessage()); //$NON-NLS-1$
+                // УбитьПроцесс(ПроцессОС) — через Win32_Process.Terminate()
+                Object wmi  = WmiProcessHelper.connectWmi();
+                Object proc = session.processObj != null
+                    ? session.processObj
+                    : WmiProcessHelper.findProcessByPid(wmi, session.pid);
+                WmiProcessHelper.terminate(proc, session.pid);
+                killed = true;
             }
         }
-        else
+        else if (session.pid > 0)
         {
-            killProcess = true;
+            Object wmi  = WmiProcessHelper.connectWmi();
+            Object proc = WmiProcessHelper.findProcessByPid(wmi, session.pid);
+            WmiProcessHelper.terminate(proc, session.pid);
+            killed = true;
         }
 
-        if (killProcess && session.pid > 0)
-        {
-            WmiProcessHelper.killByPid(session.pid);
-            EclipseToastNotification.show("ИР отключено", //$NON-NLS-1$
-                "Процесс приложения ИР завершён принудительно.", 2_000); //$NON-NLS-1$
-        }
-        else
-        {
-            EclipseToastNotification.show("ИР отключено", //$NON-NLS-1$
-                "Приложение ИР завершено. Отключение от базы займёт несколько секунд.", 3_000); //$NON-NLS-1$
-        }
+        EclipseToastNotification.show("ИР отключено", //$NON-NLS-1$
+            killed
+                ? "Процесс приложения ИР завершён принудительно." //$NON-NLS-1$
+                : "Приложение ИР завершено. Отключение займёт несколько секунд.", //$NON-NLS-1$
+            3_000);
 
         sessions.remove(key);
         notifyListeners();
+        log("Сессия ИР удалена, key=" + key); //$NON-NLS-1$
     }
 
     // -----------------------------------------------------------------------
@@ -323,7 +309,7 @@ public final class ComConnectionRegistry
         return parts.length >= 2 ? "V8" + parts[1] + ".Application" : "V83.Application"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
-    /** Убирает Pwd="..." из строки соединения (для лога). */
+    /** Удаляет Pwd="..." из строки соединения (для лога). */
     public static String removePassword(String cs)
     {
         if (cs == null) return ""; //$NON-NLS-1$
@@ -341,14 +327,9 @@ public final class ComConnectionRegistry
         changeListeners.forEach(r -> { try { r.run(); } catch (Exception ignored) {} });
     }
 
-    static void log(String msg)
+    static void log(String message)
     {
-        try
-        {
-            Bundle b = FrameworkUtil.getBundle(ComConnectionRegistry.class);
-            Platform.getLog(b).log(new Status(IStatus.INFO, b.getSymbolicName(),
-                "[TormozitIR] " + msg)); //$NON-NLS-1$
-        }
-        catch (Exception e) { System.err.println("[TormozitIR] " + msg); } //$NON-NLS-1$
+        String timestamp = java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
+        System.out.println("[IR-Bridge " + timestamp + "] " + message);
     }
 }

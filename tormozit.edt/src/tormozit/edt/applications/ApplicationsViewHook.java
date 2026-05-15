@@ -11,6 +11,7 @@ import org.eclipse.jface.action.IToolBarManager;
 import org.eclipse.jface.action.Separator;
 import org.eclipse.jface.viewers.CellLabelProvider;
 import org.eclipse.jface.viewers.ColumnViewer;
+import org.eclipse.jface.viewers.EditingSupport;
 import org.eclipse.jface.viewers.IBaseLabelProvider;
 import org.eclipse.jface.viewers.ILabelProvider;
 import org.eclipse.jface.viewers.IStructuredSelection;
@@ -164,6 +165,7 @@ public class ApplicationsViewHook implements IStartup
         addToolbarButtons(view, viewer);
         addContextMenu(viewer, control);
         registerRedrawOnPoolChange(viewer);
+        subscribeToUpdates(viewer);
     }
 
     // =======================================================================
@@ -223,7 +225,40 @@ public class ApplicationsViewHook implements IStartup
                     : "Конфигуратор не подключён";
             }
         });
+        
+        // ---- Колонка 3: «Подключать ИР» ----
+        TreeViewerColumn col3 = new TreeViewerColumn((TreeViewer) viewer, SWT.CENTER);
+        col3.getColumn().setText("Авто");
+        col3.getColumn().setToolTipText("Автоматически подключать приложение ИР");
+        col3.getColumn().setWidth(45);
+        col3.getColumn().setResizable(false);
+        
+        col3.setLabelProvider(new CellLabelProvider() {
+            @Override
+            public void update(ViewerCell cell) {
+                boolean isAuto = IRApplicationRegistry.getInstance().isAutoConnect(cell.getElement());
+                cell.setText(isAuto ? "\u2611" : "\u2610"); // Символы ☑ или ☐
+            }
+        });
 
+        col3.setEditingSupport(new EditingSupport(viewer) {
+            @Override
+            protected boolean canEdit(Object element) { return true; }
+            @Override
+            protected org.eclipse.jface.viewers.CellEditor getCellEditor(Object element) {
+                return new org.eclipse.jface.viewers.CheckboxCellEditor(((TreeViewer) viewer).getTree());
+            }
+            @Override
+            protected Object getValue(Object element) {
+                return IRApplicationRegistry.getInstance().isAutoConnect(element);
+            }
+            @Override
+            protected void setValue(Object element, Object value) {
+                IRApplicationRegistry.getInstance().setAutoConnect(element, (Boolean) value);
+                viewer.update(element, null);
+            }
+        });
+        
         // ---- Колонка 2: «Приложение ИР» ----
         TreeViewerColumn col2 = new TreeViewerColumn((TreeViewer) viewer, SWT.NONE);
         col2.getColumn().setText("Приложение ИР");
@@ -390,11 +425,12 @@ public class ApplicationsViewHook implements IStartup
             {
                 IStructuredSelection sel = (IStructuredSelection) viewer.getSelection();
                 sel.toList().forEach(el -> IRApplicationRegistry.getInstance().connect(el));
-                if (!viewer.getControl().isDisposed()) viewer.refresh();
+                if (!viewer.getControl().isDisposed()) 
+                    viewer.refresh();
             }
         });
 
-        // «Отключить приложение ИР» (заглушка)
+        // «Отключить приложение ИР» 
         MenuItem disconnectIr = new MenuItem(menu, SWT.PUSH);
         disconnectIr.setText("Отключить приложение ИР");
         disconnectIr.addSelectionListener(new SelectionAdapter()
@@ -404,7 +440,8 @@ public class ApplicationsViewHook implements IStartup
             {
                 IStructuredSelection sel = (IStructuredSelection) viewer.getSelection();
                 sel.toList().forEach(el -> IRApplicationRegistry.getInstance().disconnect(el));
-                if (!viewer.getControl().isDisposed()) viewer.refresh();
+                if (!viewer.getControl().isDisposed())
+                    viewer.refresh(); // viewer.update(sel, null);
             }
         });
 
@@ -419,6 +456,7 @@ public class ApplicationsViewHook implements IStartup
             public void widgetSelected(SelectionEvent e)
             {
                 disconnectSsh(((IStructuredSelection) viewer.getSelection()).toList(), viewer);
+                // viewer.update(sel, null);
             }
         });
 
@@ -437,7 +475,25 @@ public class ApplicationsViewHook implements IStartup
             }
         });
     }
+    
+    private void subscribeToUpdates(ColumnViewer viewer) {
+        IRApplicationRegistry registry = IRApplicationRegistry.getInstance();
+        
+        Runnable updateTask = () -> {
+            Display.getDefault().asyncExec(() -> {
+                if (viewer.getControl() != null && !viewer.getControl().isDisposed()) {
+                    // refresh() заставит переотработать LabelProvider для всех видимых строк
+                    viewer.refresh(true); 
+                }
+            });
+        };
 
+        registry.addChangeListener(updateTask);
+
+        // Удаляем слушателя при закрытии вьюхи, чтобы не было утечек памяти
+        viewer.getControl().addDisposeListener(e -> registry.removeChangeListener(updateTask));
+    }
+    
     // =======================================================================
     // 4. Контекстное меню: CASCADE «Подключение»
     // =======================================================================
@@ -567,7 +623,8 @@ public class ApplicationsViewHook implements IStartup
         if (any)
             Display.getDefault().asyncExec(() ->
             {
-                if (!viewer.getControl().isDisposed()) viewer.refresh();
+                if (!viewer.getControl().isDisposed()) 
+                    viewer.refresh(); // viewer.update(el, null);
             });
     }
 

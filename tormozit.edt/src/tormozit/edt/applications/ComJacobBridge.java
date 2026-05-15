@@ -3,8 +3,10 @@ package tormozit.edt.applications;
 import java.io.File;
 import java.lang.reflect.Method;
 import java.net.URL;
+import java.util.Iterator;
 
 import org.eclipse.core.runtime.FileLocator;
+import org.eclipse.xtext.ui.editor.contentassist.ContentAssistContext.Factory.Null;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.FrameworkUtil;
 
@@ -12,14 +14,16 @@ import org.osgi.framework.FrameworkUtil;
  * Рефлексивная обёртка над Jacob (Java COM Bridge).
  *
  * <h3>Classloader в OSGi</h3>
- * {@code Thread.currentThread().getContextClassLoader()} — системный classloader,
- * не видит {@code Bundle-ClassPath}. Правильно: {@code ComJacobBridge.class.getClassLoader()}
- * — это Equinox BundleClassLoader, который знает про {@code lib/jacob.jar}.
+ * {@code ComJacobBridge.class.getClassLoader()} — Equinox BundleClassLoader,
+ * видит {@code Bundle-ClassPath: lib/jacob.jar}.
  *
  * <h3>DLL-загрузка</h3>
- * Получаем корень бандла через {@code bundle.getEntry("/")} + {@link FileLocator#toFileURL},
- * затем ищем DLL в {@code lib/}. {@code System.load(absolutePath)} вызывается
- * до первой загрузки класса Jacob, чтобы JVM не искала DLL повторно.
+ * {@code System.load(absolutePath)} через {@code FileLocator} вызывается до
+ * первой загрузки класса Jacob — JVM не будет искать DLL повторно в static initializer.
+ *
+ * <h3>WMI-поддержка</h3>
+ * {@link #iterateComCollection} использует Jacob {@code EnumVariant} для итерации
+ * COM-коллекций (результаты WMI ExecQuery, списки окон 1С и т.п.).
  */
 public final class ComJacobBridge
 {
@@ -33,13 +37,21 @@ public final class ComJacobBridge
     private static Class<?> classDispatch;
     private static Class<?> classVariant;
     private static Class<?> classComThread;
-    private static Method   methodDispatchCall;
-    private static Method   methodDispatchPut;
-    private static Method   methodDispatchGet;
-    private static Method   methodVariantToBoolean;
-    private static Method   methodComThreadInitSTA;
-    private static Method   methodComThreadRelease;
+    private static Class<?> classEnumVariant;
 
+    private static Method methodDispatchCall;      // Dispatch.call(Dispatch, String, Object[])
+    private static Method methodDispatchPut;       // Dispatch.put(Dispatch, String, Object)
+    private static Method methodDispatchGet;       // Dispatch.get(Dispatch, String)
+    private static Method methodVariantToBoolean;
+    private static Method methodVariantToLong;
+    private static Method methodComThreadInitSTA;
+    private static Method methodComThreadRelease;
+    private static Method methodEnumVariantHasMore; // EnumVariant.hasMoreElements()
+    private static Method methodEnumVariantNext;    // EnumVariant.nextElement()
+    private static Method methodVariantToJavaObject;
+    private static Method methodVariantGetVt;
+    private static Method methodVariantToString;
+    
     // -----------------------------------------------------------------------
     // Инициализация
     // -----------------------------------------------------------------------
@@ -53,24 +65,28 @@ public final class ComJacobBridge
             initialized = true;
             try
             {
-                // Шаг 1: явно загружаем DLL до статического инициализатора Jacob
-//                preloadNativeDll();
-
-                // Шаг 2: загружаем классы через bundle classloader (видит Bundle-ClassPath)
                 ClassLoader cl = ComJacobBridge.class.getClassLoader();
 
                 classActiveXComponent = cl.loadClass("com.jacob.activeX.ActiveXComponent"); //$NON-NLS-1$
                 classDispatch         = cl.loadClass("com.jacob.com.Dispatch");              //$NON-NLS-1$
                 classVariant          = cl.loadClass("com.jacob.com.Variant");               //$NON-NLS-1$
                 classComThread        = cl.loadClass("com.jacob.com.ComThread");             //$NON-NLS-1$
+                classEnumVariant      = cl.loadClass("com.jacob.com.EnumVariant");           //$NON-NLS-1$
 
-                methodDispatchCall     = classDispatch.getMethod("call",     classDispatch, String.class, Object[].class); //$NON-NLS-1$
-                methodDispatchPut      = classDispatch.getMethod("put",      classDispatch, String.class, Object.class);   //$NON-NLS-1$
-                methodDispatchGet      = classDispatch.getMethod("get",      classDispatch, String.class);                 //$NON-NLS-1$
-                methodVariantToBoolean = classVariant.getMethod("toBoolean");  //$NON-NLS-1$
+                methodDispatchCall     = classDispatch.getMethod("call", classDispatch, String.class, Object[].class); //$NON-NLS-1$
+                methodDispatchPut      = classDispatch.getMethod("put",  classDispatch, String.class, Object.class);   //$NON-NLS-1$
+                methodDispatchGet      = classDispatch.getMethod("get",  classDispatch, String.class);                 //$NON-NLS-1$
+                methodVariantToBoolean = classVariant.getMethod("toBoolean"); //$NON-NLS-1$
+                methodVariantToLong    = classVariant.getMethod("toInt");    //$NON-NLS-1$
                 methodComThreadInitSTA = classComThread.getMethod("InitSTA"); //$NON-NLS-1$
                 methodComThreadRelease = classComThread.getMethod("Release"); //$NON-NLS-1$
-
+                methodEnumVariantHasMore = classEnumVariant.getMethod("hasMoreElements"); //$NON-NLS-1$
+                methodEnumVariantNext    = classEnumVariant.getMethod("nextElement");     //$NON-NLS-1$
+                methodVariantToJavaObject  = classVariant.getMethod("toJavaObject");
+                methodVariantToString      = classVariant.getMethod("toString");
+                methodVariantToJavaObject = classVariant.getMethod("toJavaObject");
+                methodVariantGetVt         = classVariant.getMethod("getvt");
+                
                 available = true;
                 ComConnectionRegistry.log("Jacob инициализирован успешно"); //$NON-NLS-1$
             }
@@ -80,81 +96,6 @@ public final class ComJacobBridge
                 unavailableReason = e.toString();
                 ComConnectionRegistry.log("Jacob НЕУДАЧА: " + e); //$NON-NLS-1$
             }
-        }
-    }
-
-    /**
-     * Находит и явно загружает jacob-*.dll из директории lib/ плагина.
-     *
-     * <p>Алгоритм:
-     * <ol>
-     *   <li>Получаем корень бандла: {@code bundle.getEntry("/")} + {@link FileLocator#toFileURL}.</li>
-     *   <li>Перебираем имена DLL в {@code lib/}.</li>
-     *   <li>Логируем содержимое {@code lib/} для диагностики.</li>
-     *   <li>Fallback: {@code System.loadLibrary()} из PATH.</li>
-     * </ol>
-     */
-    private static void preloadNativeDll() throws Exception
-    {
-        Bundle bundle = FrameworkUtil.getBundle(ComJacobBridge.class);
-        if (bundle == null)
-            throw new IllegalStateException("Bundle не найден"); //$NON-NLS-1$
-
-        // Получаем корневую директорию бандла
-        File bundleRoot = resolveBundleRoot(bundle);
-        ComConnectionRegistry.log("Bundle root: " + (bundleRoot != null ? bundleRoot.getAbsolutePath() : "null")); //$NON-NLS-1$ //$NON-NLS-2$
-
-        String[] dllNames = {
-            "jacob-1.21-x64.dll", "jacob-1.21-x86.dll", //$NON-NLS-1$ //$NON-NLS-2$
-            "jacob-1.20-x64.dll", "jacob-1.20-x86.dll", //$NON-NLS-1$ //$NON-NLS-2$
-            "jacob.dll" //$NON-NLS-1$
-        };
-
-        if (bundleRoot != null)
-        {
-            File libDir = new File(bundleRoot, "lib"); //$NON-NLS-1$
-            ComConnectionRegistry.log("lib/ dir: " + libDir.getAbsolutePath() //$NON-NLS-1$
-                + " exists=" + libDir.exists()); //$NON-NLS-1$
-
-            // Логируем содержимое lib/ для диагностики
-            if (libDir.isDirectory())
-            {
-                File[] files = libDir.listFiles();
-                if (files != null)
-                    for (File f : files)
-                        ComConnectionRegistry.log("  lib/" + f.getName()); //$NON-NLS-1$
-            }
-
-            for (String name : dllNames)
-            {
-                File dll = new File(libDir, name);
-                if (dll.exists())
-                {
-                    System.load(dll.getAbsolutePath());
-                    ComConnectionRegistry.log("DLL загружена: " + dll.getAbsolutePath()); //$NON-NLS-1$
-                    return;
-                }
-            }
-            ComConnectionRegistry.log("DLL не найдена в lib/"); //$NON-NLS-1$
-        }
-    }
-
-    private static File resolveBundleRoot(Bundle bundle)
-    {
-        try
-        {
-            URL rootEntry = bundle.getEntry("/"); //$NON-NLS-1$
-            if (rootEntry == null) return null;
-            URL fileUrl = FileLocator.toFileURL(rootEntry);
-            // toFileURL возвращает URL вида "file:/C:/path/to/bundle/"
-            String path = fileUrl.getPath().replaceAll("%20", " "); //$NON-NLS-1$ //$NON-NLS-2$
-            if (path.endsWith("/")) path = path.substring(0, path.length() - 1); //$NON-NLS-1$
-            return new File(path);
-        }
-        catch (Exception e)
-        {
-            ComConnectionRegistry.log("resolveBundleRoot ошибка: " + e); //$NON-NLS-1$
-            return null;
         }
     }
 
@@ -173,7 +114,7 @@ public final class ComJacobBridge
     {
         requireJacob();
         try { methodComThreadInitSTA.invoke(null); }
-        catch (Exception e) { throw new RuntimeException("ComThread.InitSTA() ошибка: " + e.getMessage(), e); } //$NON-NLS-1$
+        catch (Exception e) { throw new RuntimeException("ComThread.InitSTA(): " + e.getMessage(), e); } //$NON-NLS-1$
     }
 
     public static void releaseComThread()
@@ -187,62 +128,185 @@ public final class ComJacobBridge
     // Создание COM-объекта
     // -----------------------------------------------------------------------
 
+    /**
+     * Аналог {@code Новый COMОбъект(className)}.
+     * Инициализирует COM STA для текущего потока.
+     */
     public static Object createComObject(String className)
     {
         requireJacob();
         try
         {
-            initComThread(); // STA обязателен
+            initComThread();
             return classActiveXComponent.getConstructor(String.class).newInstance(className);
         }
         catch (Exception e)
         {
             Throwable c = unwrap(e);
-            throw new RuntimeException("Ошибка создания COM '" + className + "': " + c.getMessage(), c); //$NON-NLS-1$ //$NON-NLS-2$
+            throw new RuntimeException("Ошибка COM '" + className + "': " + c.getMessage(), c); //$NON-NLS-1$ //$NON-NLS-2$
         }
     }
 
     // -----------------------------------------------------------------------
-    // COM-методы и свойства
+    // Методы и свойства
     // -----------------------------------------------------------------------
 
     public static boolean connect(Object dispatch, String connectionString)
     {
         return toBoolean(invoke(dispatch, "Connect", connectionString)); //$NON-NLS-1$
     }
-
-    public static Object invoke(Object dispatch, String method, Object... args)
+    
+    /** * Достает чистый Dispatch из Variant'а, если это необходимо.
+     * Именно это спасает от "argument type mismatch".
+     */
+    private static Object getRealDispatch(Object obj) throws Exception {
+        if (obj == null) return null;
+        if (classDispatch.isInstance(obj)) return obj;
+        if (classVariant.isInstance(obj)) {
+            // Если Jacob вернул нам Variant, извлекаем из него Dispatch
+            return classVariant.getMethod("toDispatch").invoke(obj);
+        }
+        return obj;
+    }
+    
+    static Object invoke(Object dispatch, String method, Object... args)
     {
         requireJacob();
-        try { return methodDispatchCall.invoke(null, dispatch, method, args); }
-        catch (Exception e) { Throwable c = unwrap(e); throw new RuntimeException("COM." + method + "(): " + c.getMessage(), c); } //$NON-NLS-1$ //$NON-NLS-2$
+        try { 
+            // 1. Достаем настоящий Dispatch
+            Object realDispatch = getRealDispatch(dispatch);
+            // 2. Передаем (Object) args, чтобы массив не "размазался"
+            return methodDispatchCall.invoke(null, realDispatch, method, (Object) args); 
+        }
+        catch (Exception e) 
+        { 
+            Throwable c = unwrap(e); 
+            throw new RuntimeException("COM." + method + "(): " + c.getMessage(), c); 
+        }
     }
 
     public static Object getProperty(Object dispatch, String property)
     {
         requireJacob();
-        try { return methodDispatchGet.invoke(null, dispatch, property); }
-        catch (Exception e) { Throwable c = unwrap(e); throw new RuntimeException("COM.get(" + property + "): " + c.getMessage(), c); } //$NON-NLS-1$ //$NON-NLS-2$
+        try { 
+            return methodDispatchGet.invoke(null, getRealDispatch(dispatch), property); 
+        }
+        catch (Exception e) {}
+        return null;
     }
 
     public static void setProperty(Object dispatch, String property, Object value)
     {
         requireJacob();
-        try { methodDispatchPut.invoke(null, dispatch, property, value); }
-        catch (Exception e) { Throwable c = unwrap(e); throw new RuntimeException("COM.put(" + property + "): " + c.getMessage(), c); } //$NON-NLS-1$ //$NON-NLS-2$
+        try { 
+            methodDispatchPut.invoke(null, getRealDispatch(dispatch), property, value); 
+        }
+        catch (Exception e) {}
+    }
+    
+    // -----------------------------------------------------------------------
+    // Итерация COM-коллекции (EnumVariant)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Возвращает {@link Iterable} над COM-коллекцией (SWbemObjectSet, списки и т.п.).
+     *
+     * <p>Аналог конструкции {@code Для Каждого Элемент Из Коллекция Цикл}.
+     * Использует Jacob {@code EnumVariant(Dispatch)} — внутренний итератор COM.
+     *
+     * <p>Каждый элемент — объект Dispatch, с которым можно работать через
+     * {@link #invoke}, {@link #getProperty} и т.д.
+     */
+    public static Iterable<Object> iterateComCollection(Object dispatch)
+    {
+        requireJacob();
+        try
+        {
+         // 1. Извлекаем реальный Dispatch, если пришел Variant
+            Object realDispatch = dispatch;
+            if (classVariant.isInstance(dispatch)) {
+                realDispatch = classVariant.getMethod("toDispatch").invoke(dispatch);
+            }
+
+            // 2. Теперь передаем realDispatch, тип которого совпадает с classDispatch
+            final Object enumVariant = classEnumVariant
+                .getConstructor(classDispatch)
+                .newInstance(realDispatch);
+
+            return () -> new Iterator<Object>()
+            {
+                private Boolean hasMore = null;
+
+                @Override
+                public boolean hasNext()
+                {
+                    if (hasMore == null)
+                        try { hasMore = (Boolean) methodEnumVariantHasMore.invoke(enumVariant); }
+                        catch (Exception e) { hasMore = Boolean.FALSE; }
+                    return hasMore;
+                }
+
+                @Override
+                public Object next()
+                {
+                    hasMore = null;
+                    try { return methodEnumVariantNext.invoke(enumVariant); }
+                    catch (Exception e) { throw new RuntimeException("EnumVariant.next(): " + e.getMessage(), e); } //$NON-NLS-1$
+                }
+            };
+        }
+        catch (Exception e)
+        {
+            Throwable c = unwrap(e);
+            throw new RuntimeException("iterateComCollection: " + c.getMessage(), c); //$NON-NLS-1$
+        }
     }
 
     // -----------------------------------------------------------------------
-    // Утилиты
+    // Конвертация Variant
     // -----------------------------------------------------------------------
 
-    private static boolean toBoolean(Object variant)
+    public static boolean toBoolean(Object variant)
     {
         if (variant == null) return false;
         if (variant instanceof Boolean) return (Boolean) variant;
         try { return (Boolean) methodVariantToBoolean.invoke(variant); }
         catch (Exception e) { return false; }
     }
+
+    public static long toLong(Object variant)
+    {
+        if (variant == null) return 0L;
+        if (variant instanceof Number) return ((Number) variant).longValue();
+        
+        try {
+            // 1. Получаем тип варианта (vt) через рефлексию, чтобы понять, что внутри
+            // methodVariantGetVt должен быть инициализирован как Variant.getVariantType()
+            short vt = (short) methodVariantGetVt.invoke(variant); 
+            
+            // 2. Если это строка (WMI иногда отдает uint64 как String), парсим её
+            if (vt == 8) { // VT_BSTR
+                String val = (String) methodVariantToString.invoke(variant);
+                return val == null || val.isEmpty() ? 0L : Long.parseLong(val);
+            }
+
+            // 3. Самый надежный путь: вызываем Variant.toJavaObject()
+            // Jacob сам конвертирует VT_I4/VT_I2/VT_R8 в подходящий Number
+            Object javaObj = methodVariantToJavaObject.invoke(variant);
+            if (javaObj instanceof Number) {
+                return ((Number) javaObj).longValue();
+            }
+        }
+        catch (Exception e) {
+            // Для отладки: выведите e.getCause().getMessage() в консоль или лог
+            return 0L; 
+        }
+        return 0L;
+    }
+
+    // -----------------------------------------------------------------------
+    // Утилиты
+    // -----------------------------------------------------------------------
 
     private static Throwable unwrap(Exception e)
     {

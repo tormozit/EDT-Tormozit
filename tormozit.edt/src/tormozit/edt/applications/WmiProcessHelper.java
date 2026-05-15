@@ -1,197 +1,232 @@
 package tormozit.edt.applications;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+
+import org.eclipse.swt.ole.win32.Variant;
 
 /**
- * Вспомогательный класс для работы с WMI-процессами через {@code wmic.exe}.
+ * Работа с WMI через COM (Jacob).
  *
- * <p>Аналог функции {@code ПолучитьПроцессОСЛкс()} из RDT.os:
+ * <p>Точный порт функций из RDT.os:
+ * <ul>
+ *   <li>{@link #connectWmi()} ← {@code ПолучитьCOMОбъектWMIЛкс()}</li>
+ *   <li>{@link #findProcess} ← {@code ПолучитьПроцессОСЛкс()}</li>
+ *   <li>{@link #terminate}   ← {@code УбитьПроцесс()}</li>
+ * </ul>
+ *
+ * <h3>Оригинал ПолучитьCOMОбъектWMIЛкс()</h3>
  * <pre>
- *   SELECT * FROM Win32_Process
- *   WHERE Name = '1cv8.exe'
- *   AND CommandLine LIKE '%-Embedding%'
- *   AND CreationDate >= &lt;startMs - 2 sec&gt;
+ *   Locator = Новый COMОбъект("WbemScripting.SWbemLocator");
+ *   Значение = Locator.ConnectServer(".", "root\cimv2");
  * </pre>
  *
- * <p>Использует только стандартные Java-инструменты (ProcessBuilder + wmic.exe).
- * Никаких дополнительных библиотек не требуется.
+ * <h3>Оригинал ПолучитьПроцессОСЛкс()</h3>
+ * <pre>
+ *   ТекстЗапросаWQL = "Select * from Win32_Process Where ..."
+ *   ВыборкаПроцессовОС = WMIЛокатор.ExecQuery(ТекстЗапросаWQL);
+ *   Для Каждого ПроцессОС Из ВыборкаПроцессовОС Цикл
+ *       Значение = ПроцессОС; Прервать;
+ *   КонецЦикла;
+ * </pre>
+ *
+ * <h3>Формат дат в WQL</h3>
+ * Оригинал: {@code УниверсальноеВремя()} + {@code "yyyyMMdd HH:mm:ss"}.
+ * Здесь: {@code Instant → UTC → DateTimeFormatter("yyyyMMdd HH:mm:ss")}.
  */
 public final class WmiProcessHelper
 {
-    private static final Pattern PID_PATTERN =
-        Pattern.compile("ProcessId\\s*=\\s*(\\d+)", Pattern.CASE_INSENSITIVE); //$NON-NLS-1$
+    // Формат даты для WQL — точно как в оригинале ПолучитьЛитералДатыДляWQLЛкс()
+    private static final DateTimeFormatter WQL_DATE_FMT =
+        DateTimeFormatter.ofPattern("yyyyMMdd HH:mm:ss").withZone(ZoneOffset.UTC); //$NON-NLS-1$
 
     private WmiProcessHelper() {}
 
     // -----------------------------------------------------------------------
-    // Поиск PID
+    // ПолучитьCOMОбъектWMIЛкс()
     // -----------------------------------------------------------------------
 
     /**
-     * Находит PID нового процесса {@code 1cv8.exe -Embedding}, запущенного
-     * не ранее чем {@code startedAfterMs} миллисекунд назад (точность ±3 сек).
+     * Создаёт подключение к WMI.
      *
-     * <p>Аналог вызова:
-     * <pre>ПолучитьПроцессОСЛкс(, МоментСтартаПроцесса,, "-Embedding")</pre>
+     * <pre>
+     *   Locator = Новый COMОбъект("WbemScripting.SWbemLocator");
+     *   Возврат Locator.ConnectServer(".", "root\cimv2");
+     * </pre>
      *
-     * @param startedAfterMs System.currentTimeMillis() в момент до вызова createComObject()
-     * @return PID или 0 если не найден
+     * @return SWbemServices (COM-объект), или null при ошибке
      */
-    public static long findNewEmbeddingPid(long startedAfterMs)
+    public static Object connectWmi()
     {
-        // Даём процессу 1 сек, чтобы появиться в списке WMI
-        try { Thread.sleep(1000); } catch (InterruptedException ignored) {}
-
-        // wmic process where (name='1cv8.exe' and CommandLine like '%-Embedding%')
-        //   get ProcessId,CreationDate /format:list
         try
         {
-            Process proc = new ProcessBuilder(
-                "wmic", "process", //$NON-NLS-1$ //$NON-NLS-2$
-                "where", "(Name='1cv8.exe' AND CommandLine LIKE '%-Embedding%')", //$NON-NLS-1$ //$NON-NLS-2$
-                "get", "ProcessId,CreationDate", //$NON-NLS-1$ //$NON-NLS-2$
-                "/format:list") //$NON-NLS-1$
-                .redirectErrorStream(true)
-                .start();
-
-            String output;
-            try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(proc.getInputStream(), "CP866"))) //$NON-NLS-1$
-            {
-                StringBuilder sb = new StringBuilder();
-                String line;
-                while ((line = reader.readLine()) != null)
-                    sb.append(line).append('\n');
-                output = sb.toString();
-            }
-            proc.waitFor();
-            ComConnectionRegistry.log("WMI output:\n" + output); //$NON-NLS-1$
-
-            // Разбиваем по блокам (каждый процесс — отдельный блок)
-            String[] blocks = output.split("\n\n"); //$NON-NLS-1$
-            long bestPid = 0;
-            long bestCreation = 0;
-
-            for (String block : blocks)
-            {
-                block = block.trim();
-                if (block.isEmpty()) continue;
-
-                long pid = extractLongField(block, "ProcessId"); //$NON-NLS-1$
-                if (pid <= 0) continue;
-
-                // CreationDate в WMI: "20260514203045.123456+180"
-                long creationMs = parseWmiDate(extractStringField(block, "CreationDate")); //$NON-NLS-1$
-
-                // Берём процесс, стартовавший после нашего момента (±3 сек допуск)
-                if (creationMs >= startedAfterMs - 3000 && creationMs > bestCreation)
-                {
-                    bestCreation = creationMs;
-                    bestPid = pid;
-                }
-            }
-
-            if (bestPid > 0)
-                ComConnectionRegistry.log("Найден PID процесса 1cv8.exe -Embedding: " + bestPid); //$NON-NLS-1$
-            else
-                ComConnectionRegistry.log("Не удалось найти PID процесса 1cv8.exe -Embedding"); //$NON-NLS-1$
-
-            return bestPid;
+            Object locator = ComJacobBridge.createComObject("WbemScripting.SWbemLocator"); //$NON-NLS-1$
+            Object wmi     = ComJacobBridge.invoke(locator, "ConnectServer", ".", "root\\cimv2"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            ComConnectionRegistry.log("WMI подключён: root\\cimv2"); //$NON-NLS-1$
+            return wmi;
         }
         catch (Exception e)
         {
-            ComConnectionRegistry.log("WMI findNewEmbeddingPid ошибка: " + e.getMessage()); //$NON-NLS-1$
-            return 0;
+            ComConnectionRegistry.log("WMI connectWmi() ошибка: " + e.getMessage()); //$NON-NLS-1$
+            return null;
         }
     }
 
     // -----------------------------------------------------------------------
-    // Завершение процесса
+    // ПолучитьПроцессОСЛкс()
     // -----------------------------------------------------------------------
 
     /**
-     * Убивает процесс по PID через {@code taskkill /F /PID}.
-     * Аналог {@code УбитьПроцесс(ПроцессОС)}.
+     * Ищет новый процесс {@code 1cv8.exe -Embedding}, запущенный около момента
+     * {@code startedAfterMs}.
+     *
+     * <p>Порт вызова из {@code ПодключениеИР()}:
+     * <pre>
+     *   ПолучитьПроцессОСЛкс(Неопределено, МоментСтартаПроцесса, 2, "-Embedding")
+     * </pre>
+     *
+     * @param wmi           SWbemServices из {@link #connectWmi()}
+     * @param startedAfterMs System.currentTimeMillis() в момент ДО создания COM-объекта
+     * @param toleranceSec  допустимое отклонение в секундах (2 как в оригинале)
+     * @return Win32_Process COM-объект или null
      */
-    public static void killByPid(long pid)
+    public static Object findProcess(Object wmi, long startedAfterMs, int toleranceSec)
+    {
+        if (wmi == null) return null;
+
+        // Аналог ПолучитьЛитералДатыДляWQLЛкс() — UTC, формат "yyyyMMdd HH:mm:ss"
+        String dateFrom = wqlDate(startedAfterMs - toleranceSec * 1000L);
+        String dateTo   = wqlDate(startedAfterMs + (toleranceSec + 1) * 1000L);
+
+        // Строим WQL — точно как ПолучитьПроцессОСЛкс() с параметрами
+        // ИмяИсполняемогоФайла="1cv8.exe", МаркерВКоманднойСтроке="-Embedding",
+        // НачалоПроцесса=МоментСтартаПроцесса, ДопустимоеОтклонениеВремени=2
+        String wql = "Select * from Win32_Process" //$NON-NLS-1$
+            + " Where CommandLine LIKE '%-Embedding%'" //$NON-NLS-1$
+            + " AND Name = '1cv8.exe'" //$NON-NLS-1$
+            + " AND CreationDate >= '" + dateFrom + "'" //$NON-NLS-1$ //$NON-NLS-2$
+            + " AND CreationDate <= '" + dateTo   + "'"; //$NON-NLS-1$ //$NON-NLS-2$
+
+        ComConnectionRegistry.log("WQL: " + wql); //$NON-NLS-1$
+
+        try
+        {
+            Object resultSet = ComJacobBridge.invoke(wmi, "ExecQuery", wql); //$NON-NLS-1$
+
+            // Для Каждого ПроцессОС Из ВыборкаПроцессовОС Цикл
+            //     Значение = ПроцессОС; Прервать;
+            // КонецЦикла;
+            for (Object process : ComJacobBridge.iterateComCollection(resultSet))
+            {
+                long pid = ComJacobBridge.toLong(ComJacobBridge.getProperty(process, "ProcessId")); //$NON-NLS-1$
+                ComConnectionRegistry.log("Процесс ОС найден, PID=" + pid); //$NON-NLS-1$
+                return process; // берём первый — как в оригинале
+            }
+
+            ComConnectionRegistry.log("Процесс ОС не найден (WQL вернул 0 результатов)"); //$NON-NLS-1$
+            return null;
+        }
+        catch (Exception e)
+        {
+            ComConnectionRegistry.log("WMI ExecQuery ошибка: " + e.getMessage()); //$NON-NLS-1$
+            return null;
+        }
+    }
+
+    /**
+     * Ищет процесс по PID через WMI.
+     * Используется при отключении, если нужно получить свежий объект процесса.
+     */
+    public static Object findProcessByPid(Object wmi, long pid)
+    {
+        if (wmi == null || pid <= 0) return null;
+        String wql = "Select * from Win32_Process Where ProcessID = " + pid; //$NON-NLS-1$
+        try
+        {
+            Object resultSet = ComJacobBridge.invoke(wmi, "ExecQuery", wql); //$NON-NLS-1$
+            for (Object process : ComJacobBridge.iterateComCollection(resultSet))
+                return process;
+            return null;
+        }
+        catch (Exception e)
+        {
+            ComConnectionRegistry.log("findProcessByPid(" + pid + ") ошибка: " + e.getMessage()); //$NON-NLS-1$ //$NON-NLS-2$
+            return null;
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // УбитьПроцесс()
+    // -----------------------------------------------------------------------
+
+    /**
+     * Завершает процесс.
+     *
+     * <pre>
+     *   // Оригинал:
+     *   ПроцессОС.Terminate();
+     * </pre>
+     *
+     * <p>Если {@code processObj} не null — вызывает {@code Terminate()} через COM.
+     * Иначе — убиваем через {@code taskkill /F /PID} как запасной вариант.
+     */
+    public static void terminate(Object processObj, long pid)
+    {
+        if (processObj != null)
+        {
+            try
+            {
+                ComJacobBridge.invoke(processObj, "Terminate"); //$NON-NLS-1$
+                ComConnectionRegistry.log("Win32_Process.Terminate() — OK, PID=" + pid); //$NON-NLS-1$
+                return;
+            }
+            catch (Exception e)
+            {
+                ComConnectionRegistry.log("Win32_Process.Terminate() ошибка → taskkill: " + e.getMessage()); //$NON-NLS-1$
+            }
+        }
+        // Fallback
+        killByPid(pid);
+    }
+
+    /** Извлекает PID из Win32_Process COM-объекта. */
+    public static long getPid(Object processObj)
+    {
+        if (processObj == null) return 0L;
+        try
+        {
+            return ComJacobBridge.toLong(ComJacobBridge.getProperty(processObj, "ProcessId")); //$NON-NLS-1$
+        }
+        catch (Exception e) { return 0L; }
+    }
+
+    // -----------------------------------------------------------------------
+    // Вспомогательное
+    // -----------------------------------------------------------------------
+
+    /**
+     * Формат даты для WQL — аналог {@code ПолучитьЛитералДатыДляWQLЛкс()}.
+     * UTC, формат {@code "yyyyMMdd HH:mm:ss"}.
+     */
+    private static String wqlDate(long epochMs)
+    {
+        return WQL_DATE_FMT.format(Instant.ofEpochMilli(epochMs));
+    }
+
+    /** Принудительное завершение через taskkill (крайний fallback). */
+    static void killByPid(long pid)
     {
         if (pid <= 0) return;
         try
         {
-            Process proc = new ProcessBuilder(
-                "taskkill", "/F", "/PID", String.valueOf(pid)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                .redirectErrorStream(true)
-                .start();
-            proc.waitFor();
-            ComConnectionRegistry.log("taskkill /F /PID " + pid + " выполнен"); //$NON-NLS-1$ //$NON-NLS-2$
+            new ProcessBuilder("taskkill", "/F", "/PID", String.valueOf(pid)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                .redirectErrorStream(true).start().waitFor();
+            ComConnectionRegistry.log("taskkill /F /PID " + pid + " — выполнен"); //$NON-NLS-1$ //$NON-NLS-2$
         }
         catch (Exception e)
         {
-            ComConnectionRegistry.log("Ошибка taskkill PID=" + pid + ": " + e.getMessage()); //$NON-NLS-1$ //$NON-NLS-2$
+            ComConnectionRegistry.log("taskkill ошибка: " + e.getMessage()); //$NON-NLS-1$
         }
-    }
-
-    // -----------------------------------------------------------------------
-    // Разбор WMI-вывода
-    // -----------------------------------------------------------------------
-
-    private static long extractLongField(String block, String fieldName)
-    {
-        String val = extractStringField(block, fieldName);
-        if (val.isEmpty()) return 0;
-        try { return Long.parseLong(val.trim()); }
-        catch (NumberFormatException e) { return 0; }
-    }
-
-    private static String extractStringField(String block, String fieldName)
-    {
-        Pattern p = Pattern.compile(fieldName + "\\s*=\\s*(.+)", Pattern.CASE_INSENSITIVE); //$NON-NLS-1$
-        Matcher m = p.matcher(block);
-        return m.find() ? m.group(1).trim() : ""; //$NON-NLS-1$
-    }
-
-    /**
-     * Парсит дату WMI формата "20260514203045.123456+180" в Unix-миллисекунды.
-     */
-    private static long parseWmiDate(String wmiDate)
-    {
-        if (wmiDate == null || wmiDate.length() < 14) return 0;
-        try
-        {
-            // "yyyyMMddHHmmss"
-            int year   = Integer.parseInt(wmiDate.substring(0, 4));
-            int month  = Integer.parseInt(wmiDate.substring(4, 6));
-            int day    = Integer.parseInt(wmiDate.substring(6, 8));
-            int hour   = Integer.parseInt(wmiDate.substring(8, 10));
-            int minute = Integer.parseInt(wmiDate.substring(10, 12));
-            int second = Integer.parseInt(wmiDate.substring(12, 14));
-
-            java.util.Calendar cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")); //$NON-NLS-1$
-            cal.set(year, month - 1, day, hour, minute, second);
-            cal.set(java.util.Calendar.MILLISECOND, 0);
-
-            // Учитываем смещение часового пояса "+180" (минуты от UTC)
-            int tzOffset = 0;
-            int dotIdx = wmiDate.indexOf('.');
-            if (dotIdx > 0)
-            {
-                String tzPart = wmiDate.substring(dotIdx + 1);
-                int plusIdx = tzPart.indexOf('+');
-                int minusIdx = tzPart.indexOf('-');
-                try
-                {
-                    if (plusIdx >= 0)
-                        tzOffset = Integer.parseInt(tzPart.substring(plusIdx + 1)) * 60_000;
-                    else if (minusIdx >= 0)
-                        tzOffset = -Integer.parseInt(tzPart.substring(minusIdx + 1)) * 60_000;
-                }
-                catch (NumberFormatException ignored) {}
-            }
-            return cal.getTimeInMillis() - tzOffset;
-        }
-        catch (Exception e) { return 0; }
     }
 }

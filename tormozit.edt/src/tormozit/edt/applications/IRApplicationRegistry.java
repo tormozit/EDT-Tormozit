@@ -28,7 +28,9 @@ public final class IRApplicationRegistry
 
     private static final IRApplicationRegistry INSTANCE = new IRApplicationRegistry();
     public static IRApplicationRegistry getInstance() { return INSTANCE; }
-    private IRApplicationRegistry() {}
+    private IRApplicationRegistry() {
+        ComConnectionRegistry.getInstance().addChangeListener(this::notifyListeners);
+    }
 
     private final List<Runnable> changeListeners = new CopyOnWriteArrayList<>();
 
@@ -308,4 +310,15 @@ public final class IRApplicationRegistry
     {
         changeListeners.forEach(r -> { try { r.run(); } catch (Exception ignored) {} });
     }
+
+    private final java.util.Map<String, Boolean> autoConnectMap = new java.util.concurrent.ConcurrentHashMap<>();
+
+    public boolean isAutoConnect(Object element) {
+        return autoConnectMap.getOrDefault(sessionKey(element), false);
+    }
+
+    public void setAutoConnect(Object element, boolean auto) {
+        autoConnectMap.put(sessionKey(element), auto);
+    }
+    
 }
