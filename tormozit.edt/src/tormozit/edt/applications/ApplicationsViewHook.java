@@ -54,8 +54,8 @@ import org.eclipse.ui.PlatformUI;
  * <p>Добавляет:
  * <ul>
  *   <li>Колонку «Конфигуратор SSH» — дата SSH-сеанса, клик для отключения.</li>
- *   <li>Колонку «Приложение ИР»    — дата сеанса ИР, клик для отключения.</li>
- *   <li>Dropdown-кнопку «Подключение» в тулбар с подменю из трёх пунктов.</li>
+ *   <li>Колонку «Приложение ИР»    — версия платформы + дата сеанса, клик для отключения.</li>
+ *   <li>Dropdown-кнопку «Подключение» в тулбар — недоступна при пустом выделении.</li>
  *   <li>CASCADE-подменю «Подключение» в контекстное меню.</li>
  * </ul>
  */
@@ -64,14 +64,15 @@ public class ApplicationsViewHook implements IStartup
     private static final String APPLICATIONS_VIEW_CLASS =
         "com.e1c.g5.dt.internal.applications.ui.view.ApplicationsView"; //$NON-NLS-1$
 
-    // Индексы колонок
-    private static final int COL_DB     = 0;
-    private static final int COL_SSH    = 1;
-    private static final int COL_IR     = 2;
+    private static final int COL_DB  = 0;
+    private static final int COL_SSH = 1;
+    private static final int COL_IR  = 2;
+    private static final int COL_AUTO = 3;
 
-    private static final int    COL_DB_WIDTH  = 200;
-    private static final int    COL_SSH_WIDTH = 165;
-    private static final int    COL_IR_WIDTH  = 165;
+    private static final int COL_DB_WIDTH   = 200;
+    private static final int COL_SSH_WIDTH  = 165;
+    private static final int COL_IR_WIDTH   = 165;
+    private static final int COL_AUTO_WIDTH = 45;
 
     private static final DateTimeFormatter DATE_FMT =
         DateTimeFormatter.ofPattern("dd.MM HH:mm:ss"); //$NON-NLS-1$
@@ -136,8 +137,7 @@ public class ApplicationsViewHook implements IStartup
 
     private static boolean isApplicationsView(Object part)
     {
-        return part != null &&
-               APPLICATIONS_VIEW_CLASS.equals(part.getClass().getName());
+        return part != null && APPLICATIONS_VIEW_CLASS.equals(part.getClass().getName());
     }
 
     // =======================================================================
@@ -165,70 +165,11 @@ public class ApplicationsViewHook implements IStartup
         addToolbarButtons(view, viewer);
         addContextMenu(viewer, control);
         registerRedrawOnPoolChange(viewer);
-        subscribeToUpdates(viewer);
-        
-        org.eclipse.swt.widgets.Menu contextMenu = viewer.getControl().getMenu();
-        if (contextMenu != null) {
-            contextMenu.addMenuListener(new org.eclipse.swt.events.MenuAdapter() {
-                @Override
-                public void menuShown(org.eclipse.swt.events.MenuEvent e) { // Исправлено здесь
-                    boolean hasSelection = !viewer.getSelection().isEmpty();
-                    
-                    for (org.eclipse.swt.widgets.MenuItem item : contextMenu.getItems()) {
-                        String text = item.getText();
-                        if (text != null && text.contains("Подключение")) { //$NON-NLS-1$
-                            item.setEnabled(hasSelection);
-                        }
-                    }
-                }
-            });
-        }
-      
-     // Добавляем слушатель изменения выделения в дереве
-        viewer.addSelectionChangedListener(event -> {
-            boolean hasSelection = !event.getSelection().isEmpty();
-            
-            // Получаем менеджер тулбара через Eclipse Workbench API
-            if (part instanceof org.eclipse.ui.IViewPart) {
-                org.eclipse.ui.IViewSite site = ((org.eclipse.ui.IViewPart) part).getViewSite();
-                if (site != null && site.getActionBars() != null) {
-                    org.eclipse.jface.action.IToolBarManager toolBarManager = site.getActionBars().getToolBarManager();
-                    
-                    if (toolBarManager != null) {
-                        // Ищем наш элемент в тулбаре. 
-                        // Вариант А: Если вы задавали ID при добавлении элемента (например, "tormozit.connectMenu")
-                        org.eclipse.jface.action.IContributionItem item = toolBarManager.find("tormozit.connectMenu"); //$NON-NLS-1$
-                        
-                        // Вариант Б (Запасной): Если ID нет, ищем по типу ActionContributionItem и тексту внутри
-                        if (item == null) {
-                            for (org.eclipse.jface.action.IContributionItem actionItem : toolBarManager.getItems()) {
-                                if (actionItem instanceof org.eclipse.jface.action.ActionContributionItem) {
-                                    org.eclipse.jface.action.IAction action = ((org.eclipse.jface.action.ActionContributionItem) actionItem).getAction();
-                                    if (action != null && action.getText() != null && action.getText().contains("Подключение")) { //$NON-NLS-1$
-                                        action.setEnabled(hasSelection);
-                                    }
-                                }
-                            }
-                        } else {
-                            // Если нашли элемент по ID, управляем его доступностью
-                            if (item instanceof org.eclipse.jface.action.MenuManager) {
-                                ((org.eclipse.jface.action.MenuManager) item).getMenu().setEnabled(hasSelection);
-                            } else if (item instanceof org.eclipse.jface.action.ActionContributionItem) {
-                                ((org.eclipse.jface.action.ActionContributionItem) item).getAction().setEnabled(hasSelection);
-                            }
-                        }
-                        
-                        // Принудительно заставляем Eclipse перерисовать тулбар панели
-                        toolBarManager.update(true);
-                        site.getActionBars().updateActionBars();
-                    }
-                }
-            }
-        });
+        registerRedrawOnIrChange(viewer);
     }
 
     // =======================================================================
-    // 1. Колонки дерева
+    // 1. Колонки
     // =======================================================================
 
     private void setupMultiColumnTree(ColumnViewer viewer, Tree tree)
@@ -272,9 +213,8 @@ public class ApplicationsViewHook implements IStartup
             {
                 Object el = cell.getElement();
                 DesignerSessionPoolAccessor acc = DesignerSessionPoolAccessor.getInstance();
-                Object poolKey = acc.findPoolKey(el);
-                LocalDateTime start = acc.getSessionStart(poolKey);
-                String version = IRApplicationRegistry.getInstance().extractEDTPlatformVersion(el);
+                LocalDateTime start   = acc.getSessionStart(acc.findPoolKey(el));
+                String        version = IRApplicationRegistry.extractEDTPlatformVersion(el);
                 renderSessionCell(cell, start, version);
             }
 
@@ -286,45 +226,12 @@ public class ApplicationsViewHook implements IStartup
                     : "Конфигуратор не подключён";
             }
         });
-        
-        // ---- Колонка 3: «Подключать ИР» ----
-        TreeViewerColumn col3 = new TreeViewerColumn((TreeViewer) viewer, SWT.CENTER);
-        col3.getColumn().setText("Авто");
-        col3.getColumn().setToolTipText("Автоматически подключать приложение ИР");
-        col3.getColumn().setWidth(45);
-        col3.getColumn().setResizable(false);
-        
-        col3.setLabelProvider(new CellLabelProvider() {
-            @Override
-            public void update(ViewerCell cell) {
-                boolean isAuto = IRApplicationRegistry.getInstance().isAutoConnect(cell.getElement());
-                cell.setText(isAuto ? "\u2611" : "\u2610"); // Символы ☑ или ☐
-            }
-        });
 
-        col3.setEditingSupport(new EditingSupport(viewer) {
-            @Override
-            protected boolean canEdit(Object element) { return true; }
-            @Override
-            protected org.eclipse.jface.viewers.CellEditor getCellEditor(Object element) {
-                return new org.eclipse.jface.viewers.CheckboxCellEditor(((TreeViewer) viewer).getTree());
-            }
-            @Override
-            protected Object getValue(Object element) {
-                return IRApplicationRegistry.getInstance().isAutoConnect(element);
-            }
-            @Override
-            protected void setValue(Object element, Object value) {
-                IRApplicationRegistry.getInstance().setAutoConnect(element, (Boolean) value);
-                viewer.update(element, null);
-            }
-        });
-        
         // ---- Колонка 2: «Приложение ИР» ----
         TreeViewerColumn col2 = new TreeViewerColumn((TreeViewer) viewer, SWT.NONE);
         col2.getColumn().setText("Приложение ИР");
         col2.getColumn().setToolTipText(
-            "Дата начала сеанса приложения ИР. Нажмите ячейку для отключения.");
+            "Версия платформы и дата начала сеанса ИР. Нажмите ячейку для отключения.");
         col2.getColumn().setWidth(COL_IR_WIDTH);
         col2.getColumn().setResizable(true);
         col2.setLabelProvider(new CellLabelProvider()
@@ -332,9 +239,10 @@ public class ApplicationsViewHook implements IStartup
             @Override
             public void update(ViewerCell cell)
             {
-                Object el = cell.getElement();
-                LocalDateTime start = IRApplicationRegistry.getInstance().getSessionStart(el);
-                String version = IRApplicationRegistry.getInstance().getSessionPlatformVersion(el);
+                Object el      = cell.getElement();
+                IRApplicationRegistry ir = IRApplicationRegistry.getInstance();
+                LocalDateTime start   = ir.getSessionStart(el);
+                String        version = ir.getSessionPlatformVersion(el);
                 renderSessionCell(cell, start, version);
             }
 
@@ -347,50 +255,85 @@ public class ApplicationsViewHook implements IStartup
             }
         });
 
+        // ---- Колонка 3: «Авто» (чекбокс авто-подключения ИР) ----
+        TreeViewerColumn col3 = new TreeViewerColumn((TreeViewer) viewer, SWT.CENTER);
+        col3.getColumn().setText("Авто");
+        col3.getColumn().setToolTipText("Автоматически подключать приложение ИР");
+        col3.getColumn().setWidth(COL_AUTO_WIDTH);
+        col3.getColumn().setResizable(false);
+        col3.setLabelProvider(new CellLabelProvider()
+        {
+            @Override
+            public void update(ViewerCell cell)
+            {
+                boolean auto = IRApplicationRegistry.getInstance().isAutoConnect(cell.getElement());
+                cell.setText(auto ? "\u2611" : "\u2610"); // ☑ / ☐ //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        });
+        col3.setEditingSupport(new EditingSupport(viewer)
+        {
+            @Override protected boolean canEdit(Object element) { return true; }
+            @Override protected org.eclipse.jface.viewers.CellEditor getCellEditor(Object element)
+            {
+                return new org.eclipse.jface.viewers.CheckboxCellEditor(
+                    ((TreeViewer) viewer).getTree());
+            }
+            @Override protected Object getValue(Object element)
+            {
+                return IRApplicationRegistry.getInstance().isAutoConnect(element);
+            }
+            @Override protected void setValue(Object element, Object value)
+            {
+                IRApplicationRegistry.getInstance().setAutoConnect(element, (Boolean) value);
+                viewer.update(element, null);
+            }
+        });
+
         tree.setHeaderVisible(true);
         tree.setLinesVisible(true);
     }
 
     /**
-     * Отрисовка ячейки статуса: «● дата» зелёным или «—» серым.
-     * Используется обеими колонками подключений.
+     * Отрисовка ячейки: «версия, дата» зелёным или «—» серым.
      */
     private static void renderSessionCell(ViewerCell cell, LocalDateTime start, String version)
     {
         if (start != null)
         {
-            cell.setText(version + ", " + DATE_FMT.format(start)); // ● //$NON-NLS-1$
-            cell.setForeground(
-                cell.getControl().getDisplay().getSystemColor(SWT.COLOR_DARK_GREEN));
+            String text = (version != null && !version.isEmpty())
+                ? version + ", " + DATE_FMT.format(start) //$NON-NLS-1$
+                : DATE_FMT.format(start);
+            cell.setText(text);
+            cell.setForeground(cell.getControl().getDisplay()
+                .getSystemColor(SWT.COLOR_DARK_GREEN));
         }
         else
         {
             cell.setText("\u2014"); // — //$NON-NLS-1$
-            cell.setForeground(
-                cell.getControl().getDisplay().getSystemColor(SWT.COLOR_DARK_GRAY));
+            cell.setForeground(cell.getControl().getDisplay()
+                .getSystemColor(SWT.COLOR_DARK_GRAY));
         }
         cell.setBackground(null);
     }
 
     // =======================================================================
-    // 2. Клик и курсор для колонок подключений
+    // 2. Клик и курсор
     // =======================================================================
 
     private void addClickableColumns(ColumnViewer viewer, Tree tree)
     {
-        // Смена курсора при наведении
         tree.addMouseMoveListener(new MouseMoveListener()
         {
             @Override
             public void mouseMove(MouseEvent e)
             {
-                int col = columnAt(tree, e.x, e.y);
-                TreeItem item = itemAt(tree, e.x, e.y);
-                Object element = item != null ? item.getData() : null;
+                int      col     = columnAt(tree, e.x, e.y);
+                TreeItem item    = itemAt(tree, e.x, e.y);
+                Object   element = item != null ? item.getData() : null;
 
-                boolean hand = false
-                    || (col == COL_SSH && DesignerSessionPoolAccessor.getInstance().isConnected(element))
-                    || (col == COL_IR  && IRApplicationRegistry.getInstance().isConnected(element));
+                boolean hand =
+                    (col == COL_SSH && DesignerSessionPoolAccessor.getInstance().isConnected(element))
+                 || (col == COL_IR  && IRApplicationRegistry.getInstance().isConnected(element));
 
                 tree.setCursor(hand
                     ? tree.getDisplay().getSystemCursor(SWT.CURSOR_HAND)
@@ -398,14 +341,12 @@ public class ApplicationsViewHook implements IStartup
             }
         });
 
-        // Клик ЛКМ
         tree.addMouseListener(new MouseAdapter()
         {
             @Override
             public void mouseDown(MouseEvent e)
             {
                 if (e.button != 1) return;
-
                 int col = columnAt(tree, e.x, e.y);
                 if (col != COL_SSH && col != COL_IR) return;
 
@@ -420,7 +361,7 @@ public class ApplicationsViewHook implements IStartup
                     if (poolKey == null) return;
                     acc.release(poolKey);
                 }
-                else // COL_IR
+                else
                 {
                     if (!IRApplicationRegistry.getInstance().isConnected(element)) return;
                     IRApplicationRegistry.getInstance().disconnect(element);
@@ -437,13 +378,19 @@ public class ApplicationsViewHook implements IStartup
     // =======================================================================
 
     /**
-     * Добавляет в тулбар кнопку-dropdown «Подключение».
-     * При любом клике (и по тексту, и по стрелке) открывается подменю.
+     * Кнопка «Подключение» (SWT.DROP_DOWN).
+     * <ul>
+     *   <li>При любом клике открывает подменю.</li>
+     *   <li>Недоступна когда ничего не выделено.</li>
+     * </ul>
      */
     private void addToolbarButtons(IViewPart view, ColumnViewer viewer)
     {
         IActionBars bars = view.getViewSite().getActionBars();
         IToolBarManager tb = bars.getToolBarManager();
+
+        // Массив для захвата ссылки из fill() в лямбду selection listener-а
+        ToolItem[] toolItemRef = { null };
 
         tb.add(new Separator());
         tb.add(new ContributionItem()
@@ -456,6 +403,7 @@ public class ApplicationsViewHook implements IStartup
                     : new ToolItem(bar, SWT.DROP_DOWN);
                 item.setText("Подключение");
                 item.setToolTipText("Управление подключениями инфобаз");
+                item.setEnabled(false); // недоступна при пустом выделении
 
                 item.addSelectionListener(new SelectionAdapter()
                 {
@@ -465,19 +413,24 @@ public class ApplicationsViewHook implements IStartup
                         showConnectionMenu(item, bar, viewer);
                     }
                 });
+                toolItemRef[0] = item;
             }
         });
         bars.updateActionBars();
+
+        // Включаем/выключаем кнопку при изменении выделения
+        viewer.addSelectionChangedListener(event ->
+        {
+            ToolItem ti = toolItemRef[0];
+            if (ti != null && !ti.isDisposed())
+                ti.setEnabled(!event.getSelection().isEmpty());
+        });
     }
 
-    /**
-     * Создаёт и показывает временное SWT pop-up меню «Подключение» под кнопкой.
-     */
     private static void showConnectionMenu(ToolItem item, ToolBar bar, ColumnViewer viewer)
     {
         Menu menu = new Menu(bar.getShell(), SWT.POP_UP);
 
-        // «Подключить приложение ИР» (заглушка)
         MenuItem connectIr = new MenuItem(menu, SWT.PUSH);
         connectIr.setText("Подключить приложение ИР");
         connectIr.addSelectionListener(new SelectionAdapter()
@@ -487,12 +440,10 @@ public class ApplicationsViewHook implements IStartup
             {
                 IStructuredSelection sel = (IStructuredSelection) viewer.getSelection();
                 sel.toList().forEach(el -> IRApplicationRegistry.getInstance().connect(el));
-                if (!viewer.getControl().isDisposed()) 
-                    viewer.refresh();
+                if (!viewer.getControl().isDisposed()) viewer.refresh();
             }
         });
 
-        // «Отключить приложение ИР» 
         MenuItem disconnectIr = new MenuItem(menu, SWT.PUSH);
         disconnectIr.setText("Отключить приложение ИР");
         disconnectIr.addSelectionListener(new SelectionAdapter()
@@ -502,14 +453,12 @@ public class ApplicationsViewHook implements IStartup
             {
                 IStructuredSelection sel = (IStructuredSelection) viewer.getSelection();
                 sel.toList().forEach(el -> IRApplicationRegistry.getInstance().disconnect(el));
-                if (!viewer.getControl().isDisposed())
-                    viewer.refresh(); // viewer.update(sel, null);
+                if (!viewer.getControl().isDisposed()) viewer.refresh();
             }
         });
 
         new MenuItem(menu, SWT.SEPARATOR);
 
-        // «Отключить конфигуратор»
         MenuItem disconnectConf = new MenuItem(menu, SWT.PUSH);
         disconnectConf.setText("Отключить конфигуратор");
         disconnectConf.addSelectionListener(new SelectionAdapter()
@@ -518,11 +467,9 @@ public class ApplicationsViewHook implements IStartup
             public void widgetSelected(SelectionEvent e)
             {
                 disconnectSsh(((IStructuredSelection) viewer.getSelection()).toList(), viewer);
-                // viewer.update(sel, null);
             }
         });
 
-        // Позиционируем под кнопкой тулбара
         Rectangle bounds = item.getBounds();
         Point loc = bar.toDisplay(bounds.x, bounds.y + bounds.height);
         menu.setLocation(loc);
@@ -537,25 +484,7 @@ public class ApplicationsViewHook implements IStartup
             }
         });
     }
-    
-    private void subscribeToUpdates(ColumnViewer viewer) {
-        IRApplicationRegistry registry = IRApplicationRegistry.getInstance();
-        
-        Runnable updateTask = () -> {
-            Display.getDefault().asyncExec(() -> {
-                if (viewer.getControl() != null && !viewer.getControl().isDisposed()) {
-                    // refresh() заставит переотработать LabelProvider для всех видимых строк
-                    viewer.refresh(true); 
-                }
-            });
-        };
 
-        registry.addChangeListener(updateTask);
-
-        // Удаляем слушателя при закрытии вьюхи, чтобы не было утечек памяти
-        viewer.getControl().addDisposeListener(e -> registry.removeChangeListener(updateTask));
-    }
-    
     // =======================================================================
     // 4. Контекстное меню: CASCADE «Подключение»
     // =======================================================================
@@ -574,18 +503,17 @@ public class ApplicationsViewHook implements IStartup
             public void menuShown(MenuEvent e)
             {
                 IStructuredSelection sel = (IStructuredSelection) viewer.getSelection();
+                // Контекстное меню не показываем при пустом выделении
                 if (sel.isEmpty()) return;
 
                 DesignerSessionPoolAccessor sshAcc = DesignerSessionPoolAccessor.getInstance();
-                IRApplicationRegistry irReg = IRApplicationRegistry.getInstance();
+                IRApplicationRegistry       irReg  = IRApplicationRegistry.getInstance();
 
-                boolean anySshConnected = sel.toList().stream().anyMatch(sshAcc::isConnected);
-                boolean anyIrConnected  = sel.toList().stream().anyMatch(irReg::isConnected);
+                boolean anySsh = sel.toList().stream().anyMatch(sshAcc::isConnected);
+                boolean anyIr  = sel.toList().stream().anyMatch(irReg::isConnected);
 
-                // Разделитель
                 added.add(new MenuItem(finalMenu, SWT.SEPARATOR));
 
-                // Подменю «Подключение» (CASCADE)
                 MenuItem cascade = new MenuItem(finalMenu, SWT.CASCADE);
                 cascade.setText("Подключение");
                 added.add(cascade);
@@ -593,10 +521,10 @@ public class ApplicationsViewHook implements IStartup
                 Menu sub = new Menu(finalMenu);
                 cascade.setMenu(sub);
 
-                // «Подключить приложение ИР»
+                final IStructuredSelection snap = sel;
+
                 MenuItem connectIr = new MenuItem(sub, SWT.PUSH);
                 connectIr.setText("Подключить приложение ИР");
-                final IStructuredSelection snap = sel;
                 connectIr.addSelectionListener(new SelectionAdapter()
                 {
                     @Override
@@ -607,10 +535,9 @@ public class ApplicationsViewHook implements IStartup
                     }
                 });
 
-                // «Отключить приложение ИР»
                 MenuItem disconnectIr = new MenuItem(sub, SWT.PUSH);
                 disconnectIr.setText("Отключить приложение ИР");
-                disconnectIr.setEnabled(anyIrConnected);
+                disconnectIr.setEnabled(anyIr);
                 disconnectIr.addSelectionListener(new SelectionAdapter()
                 {
                     @Override
@@ -623,10 +550,9 @@ public class ApplicationsViewHook implements IStartup
 
                 new MenuItem(sub, SWT.SEPARATOR);
 
-                // «Отключить конфигуратор»
                 MenuItem disconnectConf = new MenuItem(sub, SWT.PUSH);
                 disconnectConf.setText("Отключить конфигуратор");
-                disconnectConf.setEnabled(anySshConnected);
+                disconnectConf.setEnabled(anySsh);
                 disconnectConf.addSelectionListener(new SelectionAdapter()
                 {
                     @Override
@@ -653,20 +579,31 @@ public class ApplicationsViewHook implements IStartup
     }
 
     // =======================================================================
-    // 5. Автообновление при смене состояния пула
+    // 5. Автообновление
     // =======================================================================
 
     private void registerRedrawOnPoolChange(ColumnViewer viewer)
     {
         DesignerSessionPoolAccessor acc = DesignerSessionPoolAccessor.getInstance();
-        Runnable listener = () ->
-            Display.getDefault().asyncExec(() ->
-            {
-                Control c = viewer.getControl();
-                if (c != null && !c.isDisposed()) viewer.refresh();
-            });
-        acc.addChangeListener(listener);
-        viewer.getControl().addDisposeListener(e -> acc.removeChangeListener(listener));
+        Runnable r = () -> Display.getDefault().asyncExec(() ->
+        {
+            Control c = viewer.getControl();
+            if (c != null && !c.isDisposed()) viewer.refresh();
+        });
+        acc.addChangeListener(r);
+        viewer.getControl().addDisposeListener(e -> acc.removeChangeListener(r));
+    }
+
+    private void registerRedrawOnIrChange(ColumnViewer viewer)
+    {
+        IRApplicationRegistry ir = IRApplicationRegistry.getInstance();
+        Runnable r = () -> Display.getDefault().asyncExec(() ->
+        {
+            Control c = viewer.getControl();
+            if (c != null && !c.isDisposed()) viewer.refresh();
+        });
+        ir.addChangeListener(r);
+        viewer.getControl().addDisposeListener(e -> ir.removeChangeListener(r));
     }
 
     // =======================================================================
@@ -685,8 +622,7 @@ public class ApplicationsViewHook implements IStartup
         if (any)
             Display.getDefault().asyncExec(() ->
             {
-                if (!viewer.getControl().isDisposed()) 
-                    viewer.refresh(); // viewer.update(el, null);
+                if (!viewer.getControl().isDisposed()) viewer.refresh();
             });
     }
 

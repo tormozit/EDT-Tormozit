@@ -1,6 +1,7 @@
 package tormozit.edt.applications;
 
 import java.io.File;
+import java.io.UnsupportedEncodingException;
 import java.lang.reflect.Method;
 import java.net.URL;
 import java.util.Iterator;
@@ -63,6 +64,11 @@ public final class ComJacobBridge
         {
             if (initialized) return;
             initialized = true;
+            
+            
+
+            
+            
             try
             {
                 ClassLoader cl = ComJacobBridge.class.getClassLoader();
@@ -88,13 +94,13 @@ public final class ComJacobBridge
                 methodVariantGetVt         = classVariant.getMethod("getvt");
                 
                 available = true;
-                ComConnectionRegistry.log("Jacob инициализирован успешно"); //$NON-NLS-1$
+                IRApplicationRegistry.log("Jacob инициализирован успешно"); //$NON-NLS-1$
             }
             catch (Exception e)
             {
                 available = false;
                 unavailableReason = e.toString();
-                ComConnectionRegistry.log("Jacob НЕУДАЧА: " + e); //$NON-NLS-1$
+                IRApplicationRegistry.log("Jacob НЕУДАЧА: " + e); //$NON-NLS-1$
             }
         }
     }
@@ -153,7 +159,7 @@ public final class ComJacobBridge
 
     public static boolean connect(Object dispatch, String connectionString)
     {
-        return toBoolean(invoke(dispatch, "Connect", connectionString)); //$NON-NLS-1$
+        return toBoolean(invoke(dispatch, "Connect", connectionString));
     }
     
     /** * Достает чистый Dispatch из Variant'а, если это необходимо.
@@ -168,7 +174,7 @@ public final class ComJacobBridge
         }
         return obj;
     }
-    
+  
     static Object invoke(Object dispatch, String method, Object... args)
     {
         requireJacob();
