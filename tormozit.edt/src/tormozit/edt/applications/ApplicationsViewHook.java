@@ -166,6 +166,65 @@ public class ApplicationsViewHook implements IStartup
         addContextMenu(viewer, control);
         registerRedrawOnPoolChange(viewer);
         subscribeToUpdates(viewer);
+        
+        org.eclipse.swt.widgets.Menu contextMenu = viewer.getControl().getMenu();
+        if (contextMenu != null) {
+            contextMenu.addMenuListener(new org.eclipse.swt.events.MenuAdapter() {
+                @Override
+                public void menuShown(org.eclipse.swt.events.MenuEvent e) { // Исправлено здесь
+                    boolean hasSelection = !viewer.getSelection().isEmpty();
+                    
+                    for (org.eclipse.swt.widgets.MenuItem item : contextMenu.getItems()) {
+                        String text = item.getText();
+                        if (text != null && text.contains("Подключение")) { //$NON-NLS-1$
+                            item.setEnabled(hasSelection);
+                        }
+                    }
+                }
+            });
+        }
+      
+     // Добавляем слушатель изменения выделения в дереве
+        viewer.addSelectionChangedListener(event -> {
+            boolean hasSelection = !event.getSelection().isEmpty();
+            
+            // Получаем менеджер тулбара через Eclipse Workbench API
+            if (part instanceof org.eclipse.ui.IViewPart) {
+                org.eclipse.ui.IViewSite site = ((org.eclipse.ui.IViewPart) part).getViewSite();
+                if (site != null && site.getActionBars() != null) {
+                    org.eclipse.jface.action.IToolBarManager toolBarManager = site.getActionBars().getToolBarManager();
+                    
+                    if (toolBarManager != null) {
+                        // Ищем наш элемент в тулбаре. 
+                        // Вариант А: Если вы задавали ID при добавлении элемента (например, "tormozit.connectMenu")
+                        org.eclipse.jface.action.IContributionItem item = toolBarManager.find("tormozit.connectMenu"); //$NON-NLS-1$
+                        
+                        // Вариант Б (Запасной): Если ID нет, ищем по типу ActionContributionItem и тексту внутри
+                        if (item == null) {
+                            for (org.eclipse.jface.action.IContributionItem actionItem : toolBarManager.getItems()) {
+                                if (actionItem instanceof org.eclipse.jface.action.ActionContributionItem) {
+                                    org.eclipse.jface.action.IAction action = ((org.eclipse.jface.action.ActionContributionItem) actionItem).getAction();
+                                    if (action != null && action.getText() != null && action.getText().contains("Подключение")) { //$NON-NLS-1$
+                                        action.setEnabled(hasSelection);
+                                    }
+                                }
+                            }
+                        } else {
+                            // Если нашли элемент по ID, управляем его доступностью
+                            if (item instanceof org.eclipse.jface.action.MenuManager) {
+                                ((org.eclipse.jface.action.MenuManager) item).getMenu().setEnabled(hasSelection);
+                            } else if (item instanceof org.eclipse.jface.action.ActionContributionItem) {
+                                ((org.eclipse.jface.action.ActionContributionItem) item).getAction().setEnabled(hasSelection);
+                            }
+                        }
+                        
+                        // Принудительно заставляем Eclipse перерисовать тулбар панели
+                        toolBarManager.update(true);
+                        site.getActionBars().updateActionBars();
+                    }
+                }
+            }
+        });
     }
 
     // =======================================================================
@@ -213,8 +272,10 @@ public class ApplicationsViewHook implements IStartup
             {
                 Object el = cell.getElement();
                 DesignerSessionPoolAccessor acc = DesignerSessionPoolAccessor.getInstance();
-                LocalDateTime start = acc.getSessionStart(acc.findPoolKey(el));
-                renderSessionCell(cell, start);
+                Object poolKey = acc.findPoolKey(el);
+                LocalDateTime start = acc.getSessionStart(poolKey);
+                String version = IRApplicationRegistry.getInstance().extractEDTPlatformVersion(el);
+                renderSessionCell(cell, start, version);
             }
 
             @Override
@@ -273,7 +334,8 @@ public class ApplicationsViewHook implements IStartup
             {
                 Object el = cell.getElement();
                 LocalDateTime start = IRApplicationRegistry.getInstance().getSessionStart(el);
-                renderSessionCell(cell, start);
+                String version = IRApplicationRegistry.getInstance().getSessionPlatformVersion(el);
+                renderSessionCell(cell, start, version);
             }
 
             @Override
@@ -293,11 +355,11 @@ public class ApplicationsViewHook implements IStartup
      * Отрисовка ячейки статуса: «● дата» зелёным или «—» серым.
      * Используется обеими колонками подключений.
      */
-    private static void renderSessionCell(ViewerCell cell, LocalDateTime start)
+    private static void renderSessionCell(ViewerCell cell, LocalDateTime start, String version)
     {
         if (start != null)
         {
-            cell.setText("\u25CF " + DATE_FMT.format(start)); // ● //$NON-NLS-1$
+            cell.setText(version + ", " + DATE_FMT.format(start)); // ● //$NON-NLS-1$
             cell.setForeground(
                 cell.getControl().getDisplay().getSystemColor(SWT.COLOR_DARK_GREEN));
         }
@@ -326,8 +388,8 @@ public class ApplicationsViewHook implements IStartup
                 TreeItem item = itemAt(tree, e.x, e.y);
                 Object element = item != null ? item.getData() : null;
 
-                boolean hand =
-                    (col == COL_SSH && DesignerSessionPoolAccessor.getInstance().isConnected(element))
+                boolean hand = false
+                    || (col == COL_SSH && DesignerSessionPoolAccessor.getInstance().isConnected(element))
                     || (col == COL_IR  && IRApplicationRegistry.getInstance().isConnected(element));
 
                 tree.setCursor(hand

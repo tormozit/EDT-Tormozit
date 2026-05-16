@@ -372,8 +372,13 @@ public final class DesignerSessionPoolAccessor
                 if (!Map.class.isAssignableFrom(f.getType())) continue;
                 f.setAccessible(true);
                 String n = f.getName().toLowerCase(java.util.Locale.ROOT);
-                (n.contains("session") || n.contains("client") || n.contains("connect") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                    || n.contains("cache") || n.contains("active") || n.contains("pool") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                (false
+                    || n.contains("session")
+                    || n.contains("client") 
+                    || n.contains("connect") 
+                    || n.contains("cache") 
+                    || n.contains("active") 
+                    || n.contains("pool")
                         ? prio : rest).add(f);
                 log("  Map field: " + f.getName()); //$NON-NLS-1$
             }
@@ -437,15 +442,14 @@ public final class DesignerSessionPoolAccessor
     // Eclipse Error Log
     // -----------------------------------------------------------------------
 
+ // tormozit.edt.applications.DesignerSessionPoolAccessor
     static void log(String msg)
     {
         try
         {
-            Bundle b = FrameworkUtil.getBundle(DesignerSessionPoolAccessor.class);
-            String id = b != null ? b.getSymbolicName() : PLUGIN_ID;
-            ILog ilog = Platform.getLog(b != null ? b : Platform.getBundle(PLUGIN_ID));
-            ilog.log(new Status(IStatus.INFO, id, "[TormozitPool] " + msg)); //$NON-NLS-1$
+            String timestamp = java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
+            System.out.println("[TormozitPool " + timestamp + "] " + msg);
         }
-        catch (Exception e) { System.err.println("[TormozitPool] " + msg); } //$NON-NLS-1$
+        catch (Exception ignored) {}
     }
 }

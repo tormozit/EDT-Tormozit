@@ -97,6 +97,11 @@ public final class ComConnectionRegistry
         ComSession s = sessions.get(key);
         return (s != null && s.state == State.CONNECTED) ? s.startTime : null;
     }
+    
+    public String getPlatformVersion(Object key)
+    {
+        return "?"; // TODO
+    }
 
     public void addChangeListener(Runnable l)    { if (l != null) changeListeners.add(l); }
     public void removeChangeListener(Runnable l) { changeListeners.remove(l); }

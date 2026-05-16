@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import tormozit.edt.handlers.OpenObjectHandler;
 import tormozit.edt.menu.CompareEditorMenuHook;
 
 /**
@@ -88,7 +89,7 @@ public final class IRApplicationRegistry
     public void connect(Object element)
     {
         String connectionString = buildConnectionString(element);
-        String platformVersion  = extractPlatformVersion(element);
+        String platformVersion  = extractEDTPlatformVersion(element);
         String appLabel         = DesignerSessionPoolAccessor.nameOf(element);
 
         ComConnectionRegistry.log(
@@ -130,85 +131,24 @@ public final class IRApplicationRegistry
     // Строка соединения 1С
     // Аналог СтрокаСоединенияБазыКонфигуратора() из RDT.os
     // -----------------------------------------------------------------------
-
-    /**
-     * Строит строку соединения 1C из EDT-элемента.
-     *
-     * <p>Порядок попыток:
-     * <ol>
-     *   <li>Рефлексия на {@code InfobaseReferenceImpl}: поля type/path/server/database/user.</li>
-     *   <li>Метод {@code getConnectionString()} или {@code buildConnectionString()}.</li>
-     *   <li>Парсинг toString() на наличие File="..." или Srvr="...".</li>
-     *   <li>Пустая строка (Connect() попробует подключиться без явной строки).</li>
-     * </ol>
-     */
     static String buildConnectionString(Object element)
     {
         Object infobase = getInfobase(element);
         Object connectionString = CompareEditorMenuHook.getField(infobase, "connectionString");
-        Object result = tryCall(connectionString, "asConnectionString");
-        if (result instanceof String && !((String) result).isEmpty()
-                && (((String) result).contains("File=") //$NON-NLS-1$
-                    || ((String) result).contains("Srvr="))) //$NON-NLS-1$
+        String result = (String) tryCall(connectionString, "asConnectionString");
+        if (true
+            && !result.isEmpty()
+            && (false
+                || result.contains("File=") //$NON-NLS-1$
+                || result.contains("Srvr="))) //$NON-NLS-1$
             return (String) result;
         return ""; //$NON-NLS-1$
     }
 
-    /**
-     * Собирает строку соединения из отдельных полей объекта инфобазы.
-     * Поля читаются рефлексивно — имена соответствуют EDT-модели.
-     */
-    private static String assembleFromFields(Object infobase)
-    {
-        // Определяем тип: файловая или серверная
-        // Пробуем поле "type", "dbType", "connectionType", "mode"
-        String type = ""; //$NON-NLS-1$
-        for (String fn : new String[]{ "type", "dbType", "connectionType", "mode", "infobaseType" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
-        {
-            Object v = readField(infobase, fn);
-            if (v != null) { type = v.toString().toLowerCase(); break; }
-        }
-
-        // Файловая база
-        if (type.contains("file") || type.contains("local"))
-        {
-            String path = readStringField(infobase, "path", "directory", "filePath", "location"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            if (!path.isEmpty())
-            {
-                String cs = "File=\"" + path + "\";"; //$NON-NLS-1$ //$NON-NLS-2$
-                String user = readStringField(infobase, "user", "userName", "login"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                if (!user.isEmpty()) cs += "Usr=\"" + user + "\";"; //$NON-NLS-1$ //$NON-NLS-2$
-                return cs;
-            }
-        }
-
-        // Серверная база
-        String server = readStringField(infobase, "server", "host", "serverHost", "srvr"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        String dbName = readStringField(infobase, "database", "dbName", "ref", "infobase", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            "databaseName", "dbRef"); //$NON-NLS-1$ //$NON-NLS-2$
-        if (!server.isEmpty() && !dbName.isEmpty())
-        {
-            String cs = "Srvr=\"" + server + "\";Ref=\"" + dbName + "\";"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            String user = readStringField(infobase, "user", "userName", "login"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            if (!user.isEmpty()) cs += "Usr=\"" + user + "\";"; //$NON-NLS-1$ //$NON-NLS-2$
-            return cs;
-        }
-
-        // Если тип не определён, пробуем угадать по доступным полям
-        if (!server.isEmpty())
-        {
-            // Серверная, но dbName не найдено
-            return "Srvr=\"" + server + "\";"; //$NON-NLS-1$ //$NON-NLS-2$
-        }
-
-        return ""; //$NON-NLS-1$
-    }
-
     // -----------------------------------------------------------------------
-    // Версия платформы — из ключа DesignerSessionPool ("uuid:8.5.1.1343")
+    // Версия платформы, которую использует EDT для подключения к базе (из активной сессии или из свойства инфобазы)
     // -----------------------------------------------------------------------
-
-    static String extractPlatformVersion(Object element)
+    static String extractEDTPlatformVersion(Object element)
     {
         // Ключ пула: "199a85b4-...:8.5.1.1343"
         Set<Object> keys = DesignerSessionPoolAccessor.getInstance().getActiveKeys();
@@ -217,10 +157,12 @@ public final class IRApplicationRegistry
         {
             for (Object k : keys)
             {
-                if (k instanceof String && ((String) k).startsWith(uuid + ":")) //$NON-NLS-1$
+                if (true
+//                    && k instanceof DebuggerSessionKey 
+                    )
                 {
-                    String version = ((String) k).substring(uuid.length() + 1);
-                    ComConnectionRegistry.log("Версия платформы из ключа пула: " + version); //$NON-NLS-1$
+                    String version = (String) OpenObjectHandler.getField(k, "installationVersionWithBuild");
+//                    ComConnectionRegistry.log("Версия платформы из ключа пула: " + version); //$NON-NLS-1$
                     return version;
                 }
             }
@@ -293,19 +235,6 @@ public final class IRApplicationRegistry
         return null;
     }
 
-    /**
-     * Ищет первое непустое строковое поле среди перечисленных имён.
-     */
-    private static String readStringField(Object obj, String... fieldNames)
-    {
-        for (String name : fieldNames)
-        {
-            Object v = readField(obj, name);
-            if (v instanceof String && !((String)v).isEmpty()) return (String)v;
-        }
-        return ""; //$NON-NLS-1$
-    }
-
     private void notifyListeners()
     {
         changeListeners.forEach(r -> { try { r.run(); } catch (Exception ignored) {} });
@@ -319,6 +248,14 @@ public final class IRApplicationRegistry
 
     public void setAutoConnect(Object element, boolean auto) {
         autoConnectMap.put(sessionKey(element), auto);
+    }
+    /**
+     * @param el
+     * @return
+     */
+    public String getSessionPlatformVersion(Object element)
+    {
+        return ComConnectionRegistry.getInstance().getPlatformVersion(sessionKey(element));
     }
     
 }
