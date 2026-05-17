@@ -9,16 +9,25 @@ import java.util.concurrent.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IResource;
+import org.eclipse.core.runtime.IAdaptable;
 import org.eclipse.core.runtime.ILog;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.Status;
+import org.eclipse.jface.viewers.ISelection;
+import org.eclipse.jface.viewers.IStructuredSelection;
+import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.PlatformUI;
-import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
-import org.osgi.framework.FrameworkUtil;
 import org.osgi.framework.InvalidSyntaxException;
 import org.osgi.framework.ServiceReference;
+
+import com._1c.g5.v8.dt.platform.services.core.runtimes.environments.FixedRuntimeResolvable;
+import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
+import com._1c.g5.v8.dt.platform.services.model.RuntimeInstallation;
+import com._1c.g5.v8.dt.platform.services.model.impl.RuntimeInstallationImpl;
 
 import tormozit.edt.Reflect;
 
@@ -42,8 +51,7 @@ public final class DesignerSessionPoolAccessor
     // -----------------------------------------------------------------------
 
     static final String POOL_CLASS_NAME =
-        "com._1c.g5.v8.dt.internal.platform.services.core.runtimes.execution" //$NON-NLS-1$
-        + ".DesignerSessionPool"; //$NON-NLS-1$
+        "com._1c.g5.v8.dt.internal.platform.services.core.runtimes.execution.DesignerSessionPool"; //$NON-NLS-1$
 
     private static final String EDT_PKG_PREFIX   = "com._1c.g5"; //$NON-NLS-1$
     private static final String PLUGIN_ID         = "tormozit.edt"; //$NON-NLS-1$
@@ -128,11 +136,12 @@ public final class DesignerSessionPoolAccessor
         return Collections.unmodifiableSet(firstSeenTimes.keySet());
     }
 
+    // тип Object важен
     public boolean isConnected(Object infobase) {
-        return findPoolKey(infobase) != null;
+        return findPoolKey((InfobaseReference)infobase) != null;
     }
 
-    public Object findPoolKey(Object infobase)
+    public Object findPoolKey(InfobaseReference infobase)
     {
         UUID uuid = extractInfobaseUuid(infobase);
         for (Object k : getActiveKeys())
@@ -145,82 +154,28 @@ public final class DesignerSessionPoolAccessor
      * Извлекает UUID инфобазы из элемента дерева.
      * Цепочка: el → getInfobase()/поле "infobase" → getUuid() / regex из toString().
      */
-    private static UUID extractInfobaseUuid(Object infobase)
+    private static UUID extractInfobaseUuid(InfobaseReference infobase)
     {
         UUID uuid = (UUID) Reflect.call(infobase, "getUuid"); //$NON-NLS-1$
         if (uuid instanceof UUID)
             return uuid;
         return null;
     }
-    
-    /**
-     * Находит путь к {@code 1cv8.exe} (thick client) для заданной инфобазы.
-     *
-     * <p>Три стратегии по убыванию надёжности:
-     * <ol>
-     *   <li><b>getLocation()</b> — {@code DesignerSessionKey.installation}
-     *       ({@code RuntimeInstallation}) имеет метод {@code getLocation()},
-     *       возвращающий путь к директории платформы. Самый точный источник:
-     *       EDT знает именно ту установку, с которой работает.</li>
-     *   <li><b>Реестр</b> — {@code installationVersionWithBuild} из ключа пула
-     *       → {@code HKLM/HKCU\SOFTWARE\1C\1Cv8\{version}\InstallDir}.</li>
-     *   <li><b>ProcessHandle</b> (крайний случай) — {@code DesignerAgentConnection.agentProcess}
-     *       ({@code java.lang.Process}) → {@code ProcessHandle.of(pid).info().command()}.</li>
-     * </ol>
-     *
-     * @param infobase элемент дерева, для которого нужно найти exe
-     * @return абсолютный путь к {@code 1cv8.exe}, или {@code null} если не найдено
-     */
-    public String extractThickClientExe(Object infobase)
-    {
-        Object poolKey = findPoolKey(infobase);
-        if (poolKey == null)
-        {
-            log("эфф: poolKey не найден для инфобазы"); //$NON-NLS-1$
-            return null;
-        }
 
-        // Стратегия 1: RuntimeInstallation.getLocation()
-        // DesignerSessionKey.installation → RuntimeInstallation.getLocation() → директория платформы
-        Object installation = Reflect.getField(poolKey, "installation"); //$NON-NLS-1$
-        if (installation != null)
+    static String getPlatformVersionFromActiveSession(InfobaseReference infobase)
+    {
+        Set<Object> keys = DesignerSessionPoolAccessor.getInstance().getActiveKeys();
+        for (Object k : keys)
         {
-            Object loc = Reflect.call(installation, "getLocation"); //$NON-NLS-1$
-            String dir  = locationToDir(loc);
-            if (dir != null)
+            if (k == infobase.getUuid())
             {
-                String exe = dir + File.separator + "bin" + File.separator + "1cv8.exe"; //$NON-NLS-1$ //$NON-NLS-2$
-                if (new File(exe).exists())
-                {
-                    return exe;
-                }
+                String version = (String)Reflect.getField(k, "installationVersionWithBuild");
+                return version;
             }
         }
-
-        // Стратегия 3 (крайний случай): DesignerAgentConnection.agentProcess → ProcessHandle
-        Object connVal = mapValue(poolKey);
-        if (connVal != null)
-        {
-            Object agentProc = Reflect.getField(connVal, "agentProcess"); //$NON-NLS-1$
-            if (agentProc instanceof Process)
-            {
-                Process p = (Process) agentProc;
-                String exe = exeFromProcess(p);
-                if (exe != null)
-                {
-                     return exe;
-                }
-            }
-        }
-        return null;
+        return "8.3.0.0"; //$NON-NLS-1$
     }
     
-    boolean is64FromInfobase(Object infobase)
-    {
-        // Временно грязно
-        return ! extractThickClientExe(infobase).contains("(x86)");
-    }
-
     /**
      * Преобразует результат {@code RuntimeInstallation.getLocation()} в путь к директории.
      *
@@ -284,7 +239,7 @@ public final class DesignerSessionPoolAccessor
                 return; 
             }
             catch (Exception ignored) {
-                log("DesignerAgentConnection.release() → fail");
+                Reflect.log("DesignerAgentConnection.release() → fail");
             }
     }
 
@@ -307,7 +262,7 @@ public final class DesignerSessionPoolAccessor
             added.forEach(k -> firstSeenTimes.put(k, now));
             removed.forEach(firstSeenTimes::remove);
             prevKeys = cur;
-            log("Сессии: +" + added.size() + " -" + removed.size() //$NON-NLS-1$ //$NON-NLS-2$
+            Reflect.log("Сессии: +" + added.size() + " -" + removed.size() //$NON-NLS-1$ //$NON-NLS-2$
                 + " итого=" + firstSeenTimes.size() + " keys=" + cur); //$NON-NLS-1$ //$NON-NLS-2$
             notifyListeners();
         }
@@ -345,14 +300,10 @@ public final class DesignerSessionPoolAccessor
         return null;
     }
 
-    // =======================================================================
-    // Поиск пула — 4 стратегии
-    // =======================================================================
-
     private synchronized void ensurePool()
     {
         if (pool != null) return;
-        BundleContext ctx = ourContext();
+        BundleContext ctx = Reflect.ourContext();
         if (ctx == null) return;
         ServiceReference<Object>[] refs = null;
         try
@@ -401,7 +352,8 @@ public final class DesignerSessionPoolAccessor
     private Object scanFields(Object obj, int depth, Set<Object> visited)
     {
         if (obj == null || depth > SCAN_DEPTH || !visited.add(obj)) return null;
-        if (classNameInHierarchy(obj.getClass())) return obj;
+        if (classNameInHierarchy(obj.getClass())) 
+            return obj;
         // Заходим только в EDT-объекты
         if (!obj.getClass().getName().startsWith(EDT_PKG_PREFIX) && depth > 0) return null;
 
@@ -465,7 +417,7 @@ public final class DesignerSessionPoolAccessor
                     || n.contains("active") 
                     || n.contains("pool")
                         ? prio : rest).add(f);
-                log("  Map field: " + f.getName()); //$NON-NLS-1$
+                Reflect.log("  Map field: " + f.getName()); //$NON-NLS-1$
             }
         mapFields.addAll(prio);
         mapFields.addAll(rest);
@@ -484,12 +436,6 @@ public final class DesignerSessionPoolAccessor
         return false;
     }
 
-    private static BundleContext ourContext()
-    {
-        Bundle b = FrameworkUtil.getBundle(DesignerSessionPoolAccessor.class);
-        return b != null ? b.getBundleContext() : null;
-    }
-
     static String nameOf(Object obj)
     {
         if (obj == null) return ""; //$NON-NLS-1$
@@ -506,18 +452,4 @@ public final class DesignerSessionPoolAccessor
         changeListeners.forEach(r -> { try { r.run(); } catch (Exception ignored) {} });
     }
 
-    // -----------------------------------------------------------------------
-    // Eclipse Error Log
-    // -----------------------------------------------------------------------
-
- // tormozit.edt.applications.DesignerSessionPoolAccessor
-    static void log(String msg)
-    {
-        try
-        {
-            String timestamp = java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
-            System.out.println("[TormozitPool " + timestamp + "] " + msg);
-        }
-        catch (Exception ignored) {}
-    }
 }

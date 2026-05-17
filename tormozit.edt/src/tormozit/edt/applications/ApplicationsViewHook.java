@@ -6,6 +6,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.eclipse.core.resources.IProject;
 import org.eclipse.jface.action.ContributionItem;
 import org.eclipse.jface.action.IToolBarManager;
 import org.eclipse.jface.action.Separator;
@@ -47,6 +48,15 @@ import org.eclipse.ui.IWorkbenchPart;
 import org.eclipse.ui.IWorkbenchPartReference;
 import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.PlatformUI;
+import org.osgi.framework.BundleContext;
+import org.osgi.framework.ServiceReference;
+
+import com._1c.g5.v8.dt.platform.services.core.runtimes.environments.ExecutionEnvironmentResolvable;
+import com._1c.g5.v8.dt.platform.services.core.runtimes.environments.FixedRuntimeResolvable;
+import com._1c.g5.v8.dt.platform.services.model.AppArch;
+import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
+import com._1c.g5.v8.dt.platform.services.model.RuntimeInstallation;
+import com._1c.g5.v8.dt.platform.services.core.runtimes.environments.IResolvableRuntimeInstallation;
 
 import tormozit.edt.Reflect;
 
@@ -67,9 +77,10 @@ public class ApplicationsViewHook implements IStartup
         "com.e1c.g5.dt.internal.applications.ui.view.ApplicationsView"; //$NON-NLS-1$
 
     private static final int COL_DB  = 0;
-    private static final int COL_SSH = 1;
-    private static final int COL_IR  = 2;
-    private static final int COL_AUTO = 3;
+    private static final int COL_VR = 1;
+    private static final int COL_SSH = 2;
+    private static final int COL_IR  = 3;
+    private static final int COL_AUTO = 4;
 
     private static final int COL_DB_WIDTH   = 200;
     private static final int COL_SSH_WIDTH  = 165;
@@ -180,7 +191,7 @@ public class ApplicationsViewHook implements IStartup
 
         final IBaseLabelProvider origProvider = viewer.getLabelProvider();
 
-        // ---- Колонка 0: «Инфобаза» ----
+        // ---- Колонка: «Инфобаза» ----
         TreeViewerColumn col0 = new TreeViewerColumn((TreeViewer) viewer, SWT.NONE);
         col0.getColumn().setText("Инфобаза");
         col0.getColumn().setWidth(COL_DB_WIDTH);
@@ -200,13 +211,12 @@ public class ApplicationsViewHook implements IStartup
                 }
             }
         });
-
-        // ---- Колонка 1: «Конфигуратор SSH» ----
+        
+        // ---- Колонка: «Версия платформы» ---- Номера колонок пока жестко прошиты в константах COL_VR
         TreeViewerColumn col1 = new TreeViewerColumn((TreeViewer) viewer, SWT.NONE);
-        col1.getColumn().setText("Конфигуратор SSH");
-        col1.getColumn().setToolTipText(
-            "Версия платформы и дата начала сеанса конфигуратора SSH. Нажмите ячейку для отключения.");
-        col1.getColumn().setWidth(COL_SSH_WIDTH);
+        col1.getColumn().setText("Версия платформы");
+        col1.getColumn().setToolTipText("Версия платформы для взаимодействия EDT с базой");
+        col1.getColumn().setWidth(80);
         col1.getColumn().setResizable(true);
         col1.setLabelProvider(new CellLabelProvider()
         {
@@ -214,24 +224,43 @@ public class ApplicationsViewHook implements IStartup
             public void update(ViewerCell cell)
             {
                 Object el = cell.getElement();
+                InfobaseReference infobase = getInfobaseFromApplication(el);
+                String version = getRuntimeInstallation((IProject)Reflect.getField(el, "project"), infobase).getVersionWithBuild();
+                cell.setText(version);
+
+            }
+        });
+
+        // ---- Колонка: «Конфигуратор SSH» ----
+        TreeViewerColumn col1a = new TreeViewerColumn((TreeViewer) viewer, SWT.NONE);
+        col1a.getColumn().setText("Конфигуратор SSH");
+        col1a.getColumn().setToolTipText(
+            "Дата начала сеанса конфигуратора SSH. Нажмите ячейку для отключения.");
+        col1a.getColumn().setWidth(COL_SSH_WIDTH);
+        col1a.getColumn().setResizable(true);
+        col1a.setLabelProvider(new CellLabelProvider()
+        {
+            @Override
+            public void update(ViewerCell cell)
+            {
+                Object el = cell.getElement();
                 DesignerSessionPoolAccessor acc = DesignerSessionPoolAccessor.getInstance();
-                Object infobase = getInfobaseFromApplication(el);
+                InfobaseReference infobase = getInfobaseFromApplication(el);
                 LocalDateTime start   = acc.getSessionStart(acc.findPoolKey(infobase));
-                String version = IRApplicationRegistry.extractEDTPlatformVersion(infobase);
-                renderSessionCell(cell, start, version);
+                renderSessionCell(cell, start, "");
             }
 
             @Override
             public String getToolTipText(Object element)
             {
-                Object infobase = getInfobaseFromApplication(element);
+                InfobaseReference infobase = getInfobaseFromApplication(element);
                 return DesignerSessionPoolAccessor.getInstance().isConnected(infobase)
                     ? "Нажмите для отключения конфигуратора SSH"
                     : "Конфигуратор SSH не подключен";
             }
         });
 
-        // ---- Колонка 2: «Приложение ИР» ----
+        // ---- Колонка: «Приложение ИР» ----
         TreeViewerColumn col2 = new TreeViewerColumn((TreeViewer) viewer, SWT.NONE);
         col2.getColumn().setText("Приложение ИР");
         col2.getColumn().setToolTipText(
@@ -253,14 +282,14 @@ public class ApplicationsViewHook implements IStartup
             @Override
             public String getToolTipText(Object element)
             {
-                Object infobase = getInfobaseFromApplication(element);
+                InfobaseReference infobase = getInfobaseFromApplication(element);
                 return IRApplicationRegistry.getInstance().isConnected(infobase)
                     ? "Нажмите для отключения приложения ИР"
                     : "Приложение ИР не подключено";
             }
         });
 
-        // ---- Колонка 3: «Авто» (чекбокс авто-подключения ИР) ----
+        // ---- Колонка: «Авто» (чекбокс авто-подключения ИР) ----
         TreeViewerColumn col3 = new TreeViewerColumn((TreeViewer) viewer, SWT.CENTER);
         col3.getColumn().setText("Авто");
         col3.getColumn().setToolTipText("Автоматически подключать приложение ИР");
@@ -297,7 +326,29 @@ public class ApplicationsViewHook implements IStartup
         tree.setHeaderVisible(true);
         tree.setLinesVisible(true);
     }
-
+    
+    static public RuntimeInstallation getRuntimeInstallation(IProject project, InfobaseReference infobase)
+    {
+        try
+        {
+            BundleContext ctx = Reflect.ourContext();
+            if (ctx == null) return null;
+            ServiceReference<?> ref = ctx.getServiceReference(
+                "com._1c.g5.v8.dt.platform.services.core.infobases.sync.IInfobaseSynchronizationManager"); //$NON-NLS-1$
+            if (ref == null) return null;
+            Object syncMgr = ctx.getService(ref);
+            if (syncMgr == null) return null;
+            IResolvableRuntimeInstallation resolvable = (IResolvableRuntimeInstallation) Reflect.invoke(syncMgr, "getInstallation", project, infobase); //$NON-NLS-1$
+            RuntimeInstallation installation = resolvable.resolve(List.of("com._1c.g5.v8.dt.platform.services.core.componentTypes.ThickClient"), infobase.getAppArch());
+            return installation;
+        }
+        catch (Exception e)
+        {
+            Reflect.log("эфф SyncMgr ошибка: " + e.getMessage()); //$NON-NLS-1$
+        }
+        return null;
+    }
+    
     /**
      * Отрисовка ячейки: «версия, дата» зелёным или «—» серым.
      */
@@ -325,11 +376,11 @@ public class ApplicationsViewHook implements IStartup
     // 2. Клик и курсор
     // =======================================================================
 
-    static Object getInfobaseFromApplication(Object element)
+    static InfobaseReference getInfobaseFromApplication(Object element)
     {
         if (element == null) return null;
-        Object ib = Reflect.call(element, "getInfobase"); //$NON-NLS-1$
-        return ib != null ? ib : Reflect.getField(element, "infobase"); //$NON-NLS-1$
+        InfobaseReference ib = (InfobaseReference) Reflect.call(element, "getInfobase"); //$NON-NLS-1$
+        return ib != null ? ib : (InfobaseReference) Reflect.getField(element, "infobase"); //$NON-NLS-1$
     }
     
     private void addClickableColumns(ColumnViewer viewer, Tree tree)
@@ -341,7 +392,7 @@ public class ApplicationsViewHook implements IStartup
             {
                 int      col     = columnAt(tree, e.x, e.y);
                 TreeItem item    = itemAt(tree, e.x, e.y);
-                Object   infobase = item==null ? null : getInfobaseFromApplication(item.getData());
+                InfobaseReference infobase = item==null ? null : getInfobaseFromApplication(item.getData());
 
                 boolean hand =
                     (col == COL_SSH && DesignerSessionPoolAccessor.getInstance().isConnected(infobase))
@@ -365,7 +416,7 @@ public class ApplicationsViewHook implements IStartup
                 TreeItem item = itemAt(tree, e.x, e.y);
                 if (item == null) return;
                 Object element = item.getData();
-                Object infobase = item==null ? null : getInfobaseFromApplication(item.getData());
+                InfobaseReference infobase = item==null ? null : getInfobaseFromApplication(item.getData());
 
                 if (col == COL_SSH)
                 {
@@ -465,8 +516,12 @@ public class ApplicationsViewHook implements IStartup
             public void widgetSelected(SelectionEvent e)
             {
                 IStructuredSelection sel = (IStructuredSelection) viewer.getSelection();
-                sel.toList().forEach(el -> IRApplicationRegistry.getInstance().disconnect(el));
-                if (!viewer.getControl().isDisposed()) viewer.refresh();
+                if (sel.size() > 0)
+                {
+                    sel.toList().forEach(el -> IRApplicationRegistry.getInstance().disconnect(getInfobaseFromApplication(el)));
+                    if (!viewer.getControl().isDisposed())
+                        viewer.refresh();
+                }
             }
         });
 
@@ -556,7 +611,7 @@ public class ApplicationsViewHook implements IStartup
                     @Override
                     public void widgetSelected(SelectionEvent ev)
                     {
-                        snap.toList().forEach(el -> irReg.disconnect(el));
+                        snap.toList().forEach(el -> irReg.disconnect(getInfobaseFromApplication(el)));
                         if (!viewer.getControl().isDisposed()) viewer.refresh();
                     }
                 });

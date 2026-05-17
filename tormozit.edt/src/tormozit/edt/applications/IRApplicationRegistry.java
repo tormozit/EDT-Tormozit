@@ -12,12 +12,26 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+
+import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IResource;
+import org.eclipse.core.runtime.IAdaptable;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.Status;
+import org.eclipse.jface.viewers.ISelection;
+import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.swt.widgets.Shell;
+import org.eclipse.ui.IWorkbenchWindow;
+import org.eclipse.ui.PlatformUI;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.FrameworkUtil;
+
+import com._1c.g5.v8.dt.platform.services.model.Arch;
+import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
+import com._1c.g5.v8.dt.platform.services.model.RuntimeInstallation;
+import com._1c.g5.v8.dt.platform.services.model.impl.RuntimeInstallationImpl;
+import com.e1c.g5.dt.applications.infobases.IInfobaseApplication;
 
 import tormozit.edt.Reflect;
 
@@ -102,9 +116,10 @@ public final class IRApplicationRegistry
     public void addChangeListener(Runnable l)    { if (l != null) changeListeners.add(l); }
     public void removeChangeListener(Runnable l) { changeListeners.remove(l); }
 
+    // Тип Object важен
     public boolean isConnected(Object infobase)
     {
-        String key = sessionKey(infobase);
+        String key = sessionKey((InfobaseReference)infobase);
         IrSession s = sessions.get(key);
         return s != null && s.state == State.CONNECTED;
     }
@@ -114,7 +129,7 @@ public final class IRApplicationRegistry
      */
     public LocalDateTime getSessionStart(Object element)
     {
-        Object infobase = ApplicationsViewHook.getInfobaseFromApplication(element);
+        InfobaseReference infobase = ApplicationsViewHook.getInfobaseFromApplication(element);
         String key = sessionKey(infobase);
         IrSession s = sessions.get(key);
         return (s != null && s.state == State.CONNECTED) ? s.startTime : null;
@@ -128,7 +143,7 @@ public final class IRApplicationRegistry
      */
     public String getSessionPlatformVersion(Object element)
     {
-        Object infobase = ApplicationsViewHook.getInfobaseFromApplication(element);
+        InfobaseReference infobase = ApplicationsViewHook.getInfobaseFromApplication(element);
         String key = sessionKey(infobase);
         IrSession s = sessions.get(key);
         return (s != null && s.state == State.CONNECTED) ? s.platformVersion : null;
@@ -136,14 +151,16 @@ public final class IRApplicationRegistry
 
     public boolean isAutoConnect(Object element)
     {
-        return autoConnectMap.getOrDefault(sessionKey(element), false);
+        InfobaseReference infobase = ApplicationsViewHook.getInfobaseFromApplication(element);
+        return autoConnectMap.getOrDefault(sessionKey(infobase), false);
     }
 
     public void setAutoConnect(Object element, boolean auto)
     {
-        autoConnectMap.put(sessionKey(element), auto);
+        InfobaseReference infobase = ApplicationsViewHook.getInfobaseFromApplication(element);
+        autoConnectMap.put(sessionKey(infobase), auto);
     }
-
+    
     // -----------------------------------------------------------------------
     // Подключение (аналог ПодключениеИР)
     // -----------------------------------------------------------------------
@@ -154,30 +171,30 @@ public final class IRApplicationRegistry
      */
     public void connect(Object element)
     {
-        Object infobase = ApplicationsViewHook.getInfobaseFromApplication(element);
+        InfobaseReference infobase = ApplicationsViewHook.getInfobaseFromApplication(element);
         String key = sessionKey(infobase);
 
         IrSession existing = sessions.get(key);
         if (existing != null && (existing.state == State.CONNECTING
                 || existing.state == State.CONNECTED)) return;
-
+        IProject activeProject = (IProject) Reflect.getField(element, "project");
         sessions.put(key, IrSession.connecting());
         notifyListeners();
-        CompletableFuture.runAsync(() -> doConnect(infobase));
+        CompletableFuture.runAsync(() -> doConnect(activeProject, infobase));
     }
 
     /**
      * Фоновый метод — тост создаётся здесь (syncExec → Shell гарантирован),
      * закрывается в {@code finally} при любом исходе.
      */
-    private void doConnect(Object infobase)
+    private void doConnect(IProject project, InfobaseReference infobase)
     {
         String appLabel = DesignerSessionPoolAccessor.nameOf(infobase);
         Shell connectingToast = EclipseToastNotification.show("Подключение",
             "Подключается приложение ИР «" + appLabel + "». Закрыть командой «Отключить приложение ИР».", 60_000);
         try
         {
-            doConnectInternal(infobase);
+            doConnectInternal(project, infobase);
         }
         catch (Exception e)
         {
@@ -195,14 +212,14 @@ public final class IRApplicationRegistry
      * Основная логика подключения — порт вложенного цикла из {@code ПодключениеИР()}.
      * @throws UnsupportedEncodingException 
      */
-    private void doConnectInternal(Object infobase)
+    private void doConnectInternal(IProject project, InfobaseReference infobase)
     {
         String key = sessionKey(infobase);
         String connectionString = buildConnectionString(infobase);
-        String platformVersion = extractEDTPlatformVersion(infobase);
+        String platformVersion = DesignerSessionPoolAccessor.getPlatformVersionFromActiveSession(infobase);
 //        String appLabel = DesignerSessionPoolAccessor.nameOf(infobase);
-        String exeFullName = DesignerSessionPoolAccessor.getInstance().extractThickClientExe(infobase);
-        boolean configBitness64 = DesignerSessionPoolAccessor.getInstance().is64FromInfobase(infobase); 
+        RuntimeInstallation RuntimeInstallation = ApplicationsViewHook.getRuntimeInstallation(project, infobase);
+        boolean configBitness64 = RuntimeInstallation.getArch() == Arch.X86_64; 
         log("connect() key=" + connectionString + " cs=" + removePassword(connectionString) //$NON-NLS-1$ //$NON-NLS-2$
             + " platform=" + platformVersion); //$NON-NLS-1$
 
@@ -266,7 +283,8 @@ public final class IRApplicationRegistry
                     sessions.remove(key); notifyListeners(); return;
                 }
                 log("Попытка " + attempt + " неудача. Повтор..."); //$NON-NLS-1$ //$NON-NLS-2$
-                registerComClass(className, exeFullName, attempt, configBitness64);
+                // Еще есть красивый способо com._1c.g5.v8.dt.internal.platform.services.core.infobases.sync.connections.DesignerSessionInfobaseConnection.getBaseDirectory()
+                registerComClass(className, RuntimeInstallation.getLocation().getPath(), attempt, configBitness64);
             }
         }
 
@@ -306,7 +324,7 @@ public final class IRApplicationRegistry
     // Отключение (аналог ЗакрытьПриложениеИР)
     // -----------------------------------------------------------------------
 
-    public void disconnect(Object infobase)
+    public void disconnect(InfobaseReference infobase)
     {
         String key = sessionKey(infobase);
         IrSession session = sessions.get(key);
@@ -369,32 +387,10 @@ public final class IRApplicationRegistry
     }
 
     // -----------------------------------------------------------------------
-    // Версия платформы из EDT-ключа пула ("uuid:version")
-    // -----------------------------------------------------------------------
-
-    static String extractEDTPlatformVersion(Object infobase)
-    {
-        Set<Object> keys = DesignerSessionPoolAccessor.getInstance().getActiveKeys();
-        String uuid = extractInfobaseUuid(infobase);
-
-        if (!uuid.isEmpty())
-        {
-            for (Object k : keys)
-            {
-                String version = (String) Reflect.getField(k, "installationVersionWithBuild");
-                return version;
-            }
-        }
-
-//        log("Версия платформы не определена, используется 8.3"); //$NON-NLS-1$
-        return "8.3.0.0"; //$NON-NLS-1$
-    }
-    
-    // -----------------------------------------------------------------------
     // Ключ сессии = UUID инфобазы
     // -----------------------------------------------------------------------
 
-    private static String sessionKey(Object infobase)
+    private static String sessionKey(InfobaseReference infobase)
     {
         String uuid = extractInfobaseUuid(infobase);
         return uuid.isEmpty() ? String.valueOf(System.identityHashCode(infobase)) : uuid;

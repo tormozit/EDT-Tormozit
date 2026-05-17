@@ -2,6 +2,12 @@ package tormozit.edt;
 
 import java.lang.reflect.Field;
 
+import org.osgi.framework.Bundle;
+import org.osgi.framework.BundleContext;
+import org.osgi.framework.FrameworkUtil;
+
+import tormozit.edt.applications.DesignerSessionPoolAccessor;
+
 /**
  * Утилиты Java-рефлексии — единый источник правды для всего плагина.
  *
@@ -41,6 +47,41 @@ public final class Reflect
     }
 
     /**
+     * Вызывает метод {@code methodName} с переданными аргументами на объекте {@code obj}.
+     * Метод ищется по имени и количеству аргументов по всей иерархии классов,
+     * включая private и protected.
+     *
+     * @return результат вызова, или {@code null} при любой ошибке
+     * @throws RuntimeException если метод бросает проверяемое исключение (причина из {@code InvocationTargetException})
+     */
+    public static Object invoke(Object obj, String methodName, Object... args)
+    {
+        if (obj == null || methodName == null) return null;
+        int argc = args == null ? 0 : args.length;
+        for (Class<?> c = obj.getClass(); c != null; c = c.getSuperclass())
+        {
+            for (java.lang.reflect.Method m : c.getDeclaredMethods())
+            {
+                if (m.getName().equals(methodName) && m.getParameterCount() == argc)
+                {
+                    try
+                    {
+                        m.setAccessible(true);
+                        return m.invoke(obj, args);
+                    }
+                    catch (java.lang.reflect.InvocationTargetException e)
+                    {
+                        Throwable cause = e.getCause();
+                        if (cause instanceof RuntimeException) throw (RuntimeException) cause;
+                        throw new RuntimeException(cause);
+                    }
+                    catch (Exception ignored) { return null; }
+                }
+            }
+        }
+        return null;
+    }
+    /**
      * Вызывает публичный метод {@code methodName} без аргументов на объекте {@code obj}.
      *
      * @return результат вызова, или {@code null} при любой ошибке / отсутствии метода
@@ -50,5 +91,17 @@ public final class Reflect
         if (obj == null || methodName == null) return null;
         try { return obj.getClass().getMethod(methodName).invoke(obj); }
         catch (Exception ignored) { return null; }
+    }
+
+    public static BundleContext ourContext()
+    {
+        Bundle b = FrameworkUtil.getBundle(DesignerSessionPoolAccessor.class);
+        return b != null ? b.getBundleContext() : null;
+    }
+
+    public static void log(String msg)
+    {
+       String timestamp = java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
+       System.out.println("[Tormozit " + timestamp + "] " + msg);
     }
 }
