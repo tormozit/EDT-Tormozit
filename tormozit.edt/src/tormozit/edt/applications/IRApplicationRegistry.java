@@ -31,6 +31,7 @@ import com._1c.g5.v8.dt.platform.services.model.Arch;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com._1c.g5.v8.dt.platform.services.model.RuntimeInstallation;
 import com._1c.g5.v8.dt.platform.services.model.impl.RuntimeInstallationImpl;
+import com._1c.g5.v8.dt.platform.version.Version;
 import com.e1c.g5.dt.applications.infobases.IInfobaseApplication;
 
 import tormozit.edt.Reflect;
@@ -216,9 +217,8 @@ public final class IRApplicationRegistry
     {
         String key = sessionKey(infobase);
         String connectionString = buildConnectionString(infobase);
-        String platformVersion = DesignerSessionPoolAccessor.getPlatformVersionFromActiveSession(infobase);
-//        String appLabel = DesignerSessionPoolAccessor.nameOf(infobase);
         RuntimeInstallation RuntimeInstallation = ApplicationsViewHook.getRuntimeInstallation(project, infobase);
+        String platformVersion = RuntimeInstallation.getVersion().toString();
         boolean configBitness64 = RuntimeInstallation.getArch() == Arch.X86_64; 
         log("connect() key=" + connectionString + " cs=" + removePassword(connectionString) //$NON-NLS-1$ //$NON-NLS-2$
             + " platform=" + platformVersion); //$NON-NLS-1$
