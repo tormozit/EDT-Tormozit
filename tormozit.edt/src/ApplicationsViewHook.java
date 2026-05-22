@@ -58,6 +58,7 @@ import org.osgi.framework.ServiceReference;
 import com._1c.g5.v8.dt.platform.services.core.runtimes.environments.IResolvableRuntimeInstallation;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com._1c.g5.v8.dt.platform.services.model.RuntimeInstallation;
+import com.e1c.g5.dt.applications.infobases.IInfobaseApplication;
 
 /**
  * Хук панели «Приложения» EDT.
@@ -560,7 +561,7 @@ public class ApplicationsViewHook implements IStartup
             Menu menu = new Menu(bar.getShell(), SWT.POP_UP);
 
             addItem(menu, "Подключить приложение ИР", true, () -> { //$NON-NLS-1$
-                sel.toList().forEach(el -> irReg.connect(el));
+                sel.toList().forEach(el -> irReg.connectInfobaseApplication((IInfobaseApplication)el));
                 safeRefresh(viewer);
             });
             addItem(menu, "Отключить приложение ИР", anyIr, () -> { //$NON-NLS-1$
@@ -629,7 +630,7 @@ public class ApplicationsViewHook implements IStartup
                     cascade.setMenu(sub);
 
                     addItem(sub, "Подключить приложение ИР", true, () -> { //$NON-NLS-1$
-                        sel.toList().forEach(el -> irReg.connect(el));
+                        sel.toList().forEach(el -> irReg.connectInfobaseApplication((IInfobaseApplication)el));
                         safeRefresh(viewer);
                     });
                     addItem(sub, "Отключить приложение ИР", anyIr, () -> { //$NON-NLS-1$

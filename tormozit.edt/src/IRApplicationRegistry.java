@@ -5,6 +5,8 @@ import java.io.UnsupportedEncodingException;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -18,6 +20,7 @@ import java.util.concurrent.Executors;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
+import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IAdaptable;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Platform;
@@ -28,8 +31,12 @@ import org.eclipse.swt.widgets.Shell;
 import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.PlatformUI;
 import org.osgi.framework.Bundle;
+import org.osgi.framework.BundleContext;
 import org.osgi.framework.FrameworkUtil;
+import org.osgi.framework.InvalidSyntaxException;
+import org.osgi.framework.ServiceReference;
 
+import com._1c.g5.v8.dt.compare.model.RelatedFeature;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.platform.services.model.Arch;
 import com._1c.g5.v8.dt.platform.services.model.IConnectionString;
@@ -38,6 +45,34 @@ import com._1c.g5.v8.dt.platform.services.model.RuntimeInstallation;
 import com._1c.g5.v8.dt.platform.services.model.impl.RuntimeInstallationImpl;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.e1c.g5.dt.applications.infobases.IInfobaseApplication;
+import com.google.common.base.Strings;
+import com.google.common.util.concurrent.Service;
+import com._1c.g5.v8.dt.core.platform.IExtensionProject;
+import com._1c.g5.v8.dt.core.platform.IV8Project;
+import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessManager;
+import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessSettings;
+import com._1c.g5.v8.dt.platform.services.core.infobases.InfobaseAccessType;
+import com._1c.g5.v8.dt.platform.services.core.infobases.sync.v2.IInfobaseSynchronizationStateManager;
+import com._1c.g5.v8.dt.platform.services.core.infobases.sync.v2.IUpdateProjectFlow;
+import com._1c.g5.v8.dt.platform.services.core.runtimes.RuntimeInstallations;
+import com._1c.g5.v8.dt.platform.services.core.runtimes.environments.IResolvableRuntimeInstallation;
+import com._1c.g5.v8.dt.platform.services.core.runtimes.environments.IResolvableRuntimeInstallationManager;
+import com._1c.g5.v8.dt.platform.services.core.runtimes.execution.ComponentExecutorInfo;
+import com._1c.g5.v8.dt.platform.services.core.runtimes.execution.IDesignerSessionThickClientLauncher;
+import com._1c.g5.v8.dt.platform.services.core.runtimes.execution.ILaunchableRuntimeComponent;
+import com._1c.g5.v8.dt.platform.services.core.runtimes.execution.IRuntimeComponentManager;
+import com._1c.g5.v8.dt.platform.services.core.runtimes.execution.IRuntimeComponentTypes;
+import com._1c.g5.v8.dt.platform.services.core.runtimes.execution.RuntimeExecutionException;
+import com._1c.g5.v8.dt.platform.services.core.runtimes.execution.impl.RuntimeExecutionCommandBuilder;
+import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
+import com._1c.g5.v8.dt.platform.services.model.RuntimeInstallation;
+import com._1c.g5.v8.dt.platform.version.Version;
+import com._1c.g5.v8.dt.team.git.infobases.IGitBranchIssueDescriptor;
+import com._1c.g5.wiring.ServiceAccess;
+import com._1c.g5.wiring.ServiceSupplier;
+import com.e1c.g5.dt.applications.IApplication;
+import com.e1c.g5.dt.applications.IApplicationManager;
 
 /**
  * Реестр подключений к приложению ИР (Инструменты Разработчика 1С).
@@ -67,7 +102,8 @@ public final class IRApplicationRegistry
     // -----------------------------------------------------------------------
 
     private static final IRApplicationRegistry INSTANCE = new IRApplicationRegistry();
-
+    private static ServiceSupplier<IInfobaseAccessManager> infobaseAccessManagerSupplier = 
+        ServiceAccess.supplier(IInfobaseAccessManager.class, Reflect.ourContext()); 
     public static IRApplicationRegistry getInstance() { return INSTANCE; }
 
     private IRApplicationRegistry() {}
@@ -80,35 +116,33 @@ public final class IRApplicationRegistry
 
     public final class IrSession
     {
-        public final State         state;
-        public final LocalDateTime startTime;      
-        public final long          pid;            
-        public final String        platformVersion; 
-        final Object               dispatch;       
-        final Object               processObj;     
-        public String               appTitle;       
+        public final State state;
+        public final LocalDateTime startTime;
+        public final long pid;
+        public final String platformVersion;
+        final Object root;
+        final Object processObj;
+        public String appTitle;
         public IProject project;
-        
-        // Выделенный поток для всех операций с этой COM-сессией
-        public final ExecutorService executor; 
+        public final ExecutorService executor; // Выделенный поток для всех операций с этой COM-сессией 
 
         IrSession(State state, LocalDateTime startTime, long pid, String platformVersion,
-                  Object dispatch, Object processObj, String appTitle, IProject project, ExecutorService executor)
+                  Object root, Object processObj, String appTitle, IProject project, ExecutorService executor)
         {
-            this.state           = state;
-            this.startTime       = startTime;
-            this.pid             = pid;
+            this.state = state;
+            this.startTime = startTime;
+            this.pid = pid;
             this.platformVersion = platformVersion;
-            this.dispatch        = dispatch;
-            this.processObj      = processObj;
-            this.appTitle        = appTitle;
-            this.project         = project;
-            this.executor        = executor; // Сохраняем экзекутор
+            this.root = root;
+            this.processObj = processObj;
+            this.appTitle = appTitle;
+            this.project = project;
+            this.executor = executor;
         }
 
         public Object getModule(String name)
         {
-            return ComJacobBridge.getProperty(dispatch, name);
+            return ComJacobBridge.getProperty(root, name);
         }
     }
     IrSession newSession(ExecutorService executor)
@@ -166,8 +200,8 @@ public final class IRApplicationRegistry
     public Object getAnyActiveDispatch()
     {
         for (IrSession s : sessions.values())
-            if (s.state == State.CONNECTED && s.dispatch != null)
-                return s.dispatch;
+            if (s.state == State.CONNECTED && s.root != null)
+                return s.root;
         return null;
     }
 
@@ -183,15 +217,7 @@ public final class IRApplicationRegistry
         autoConnectMap.put(sessionKey(infobase), auto);
     }
     
-    // -----------------------------------------------------------------------
-    // Подключение (аналог ПодключениеИР)
-    // -----------------------------------------------------------------------
-
-    /**
-     * Запускает асинхронное подключение к приложению ИР.
-     * Немедленно устанавливает состояние CONNECTING — колонка показывает «подключение».
-     */
-    public void connect(Object element)
+    public void connectInfobaseApplication(IInfobaseApplication element)
     {
         InfobaseReference infobase = ApplicationsViewHook.getInfobaseFromApplication(element);
         String key = sessionKey(infobase);
@@ -222,11 +248,9 @@ public final class IRApplicationRegistry
             {
                 log("Исключение в потоке подключения COM: " + e.getMessage());
             }
-            // ВАЖНО: Мы НЕ вызываем здесь ComJacobBridge.releaseComThread(), 
-            // так как поток продолжает жить и обслуживать вызовы!
         });
     }
-
+    
     /**
      * Фоновый метод — тост создаётся здесь (syncExec → Shell гарантирован),
      * закрывается в {@code finally} при любом исходе.
@@ -371,7 +395,7 @@ public final class IRApplicationRegistry
             title + " подключено за " + duration + " сек", 3_000); //$NON-NLS-1$ //$NON-NLS-2$
         log("Подключено: " + title + " за " + duration + " с, PID=" + finalPid //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + " platform=" + platformVersion); //$NON-NLS-1$
-//        Object irClient = irSession.getModule("ирКлиент");
+        Object irClient = irSession.getModule("ирКлиент");
     }
 
     // -----------------------------------------------------------------------
@@ -392,11 +416,11 @@ public final class IRApplicationRegistry
     {
         boolean killed = false;
 
-        if (session.dispatch != null)
+        if (session.root != null)
         {
             try
             {
-                ComJacobBridge.invoke(session.dispatch, "ЗавершитьРаботуСистемы", false);
+                ComJacobBridge.invoke(session.root, "ЗавершитьРаботуСистемы", false);
                 log("ЗавершитьРаботуСистемы(false) — OK");
             }
             catch (Exception e)
@@ -437,13 +461,26 @@ public final class IRApplicationRegistry
         String result = (String) Reflect.call(connectionString, "asConnectionString"); //$NON-NLS-1$
         if (result != null && !result.isEmpty()
                 && (result.contains("File=") || result.contains("Srvr="))) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            if (withUser)
             {
-                if (withUser)
+                IInfobaseAccessSettings access;
+                try
                 {
-//                    result += ";Usr=" + infobase.getAuthentication().name() + ";Pwd=" + infobase.getAuthentication().;
+                    access = infobaseAccessManagerSupplier.get().resolveSettings(infobase);
                 }
-                return result;
+                catch (CoreException e)
+                {
+                    // TODO Auto-generated catch block
+                    throw new RuntimeException("IInfobaseAccessSettings.: " + e.getMessage(), e);
+                }
+                if (!Strings.isNullOrEmpty(access.userName()))
+                {
+                    result += ";Usr=\"" + access.userName() + "\";Pwd=\"" + access.password() + "\"";
+                }
             }
+            return result;
+        }
         return ""; //$NON-NLS-1$
     }
 
@@ -663,6 +700,7 @@ public final class IRApplicationRegistry
     */
     public static IrSession getSession(IDtProject dtProject)
     {
+        // Сначала ищем любую подключенную сессию этого проекта, отдавая предпочтение основному приложению
         for (Map.Entry<String, IrSession> entry : sessions.entrySet())
         {
             String key = entry.getKey();
@@ -670,6 +708,29 @@ public final class IRApplicationRegistry
             if (session.project == dtProject.getWorkspaceProject())
                 return session;
         }
+        // Ищем любое приложение этого проекта, отдавая предпочтение основному приложению
+        BundleContext ctx = Reflect.ourContext();
+        ServiceReference<Object>[] refs = null;
+        try
+        {
+            refs = (ServiceReference<Object>[]) ctx.getAllServiceReferences(null, null);
+        }
+        catch (Exception e)
+        { return null; }
+        IApplicationManager appManager = ctx.getService(ctx.getServiceReference(IApplicationManager.class));
+        List <IApplication> apps = appManager.getApplications(dtProject.getWorkspaceProject());
+        IInfobaseApplication application = null;
+        for (IApplication elem : apps)
+        {
+            if (elem instanceof IInfobaseApplication)
+                if (Reflect.invoke(elem, "getProject") == dtProject.getWorkspaceProject())
+                {
+                    application = (IInfobaseApplication) elem;
+                }
+        }
+        if (application==null)
+            return null;            
+        getInstance().connectInfobaseApplication(application);
         return null;
     }
 }

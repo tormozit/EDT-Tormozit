@@ -105,8 +105,8 @@ public class CompareConfigCompareInIRHandler extends AbstractHandler {
             try 
             {
                 // Здесь мы находимся в родном потоке для этого COM-объекта. 
-                // Никаких дополнительных initComThread/releaseComThread делать НЕ нужно.
                 Object irClient = irSession.getModule("ирКлиент");
+                ComJacobBridge.setProperty(irSession.root, "Visible", true);
                 ComJacobBridge.invoke(irClient, "СравнитьТабличныеДокументыИмпортЛкс", pathMain.toString(), pathOther.toString());
             } 
             catch (Exception e) 
