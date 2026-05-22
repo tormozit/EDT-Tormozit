@@ -5,6 +5,7 @@ import java.io.UnsupportedEncodingException;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -12,6 +13,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
@@ -78,15 +81,19 @@ public final class IRApplicationRegistry
     public final class IrSession
     {
         public final State         state;
-        public final LocalDateTime startTime;      // момент успешного Connect()
-        public final long          pid;            // PID процесса 1cv8.exe (0 если неизвестен)
-        public final String        platformVersion; // версия платформы, например "8.5.1.1343"
-        final Object               dispatch;       // Jacob ActiveXComponent (1С COM)
-        final Object               processObj;     // Win32_Process COM-объект (для Terminate)
-        final String               appTitle;       // заголовок «ИР - Srvr=...»
+        public final LocalDateTime startTime;      
+        public final long          pid;            
+        public final String        platformVersion; 
+        final Object               dispatch;       
+        final Object               processObj;     
+        public String               appTitle;       
+        public IProject project;
+        
+        // Выделенный поток для всех операций с этой COM-сессией
+        public final ExecutorService executor; 
 
         IrSession(State state, LocalDateTime startTime, long pid, String platformVersion,
-                  Object dispatch, Object processObj, String appTitle)
+                  Object dispatch, Object processObj, String appTitle, IProject project, ExecutorService executor)
         {
             this.state           = state;
             this.startTime       = startTime;
@@ -95,6 +102,8 @@ public final class IRApplicationRegistry
             this.dispatch        = dispatch;
             this.processObj      = processObj;
             this.appTitle        = appTitle;
+            this.project         = project;
+            this.executor        = executor; // Сохраняем экзекутор
         }
 
         public Object getModule(String name)
@@ -102,14 +111,14 @@ public final class IRApplicationRegistry
             return ComJacobBridge.getProperty(dispatch, name);
         }
     }
-    IrSession newSession()
+    IrSession newSession(ExecutorService executor)
     {
-        return new IrSession(State.CONNECTING, LocalDateTime.now(), 0, "", null, null, ""); //$NON-NLS-1$ //$NON-NLS-2$
+        return new IrSession(State.CONNECTING, LocalDateTime.now(), 0, "", null, null, "", null, executor);
     }
     
     // UUID инфобазы → сессия
-    private final Map<String, IrSession> sessions        = new ConcurrentHashMap<>();
-    private final List<Runnable>         changeListeners = new CopyOnWriteArrayList<>();
+    static private final Map<String, IrSession> sessions        = new ConcurrentHashMap<>();
+    static private final List<Runnable>         changeListeners = new CopyOnWriteArrayList<>();
 
     // авто-подключение при открытии базы в EDT
     private final Map<String, Boolean> autoConnectMap = new ConcurrentHashMap<>();
@@ -191,9 +200,31 @@ public final class IRApplicationRegistry
         if (existing != null && (existing.state == State.CONNECTING
                 || existing.state == State.CONNECTED)) return;
         IProject activeProject = (IProject) Reflect.getField(element, "project");
-        sessions.put(key, newSession());
+
+        // Создаем поток-одиночку для этой сессии. Поток будет жить, пока сессия активна.
+        ExecutorService executor = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "IR-COMThread-" + extractInfobaseUuid(infobase));
+            t.setDaemon(true);
+            return t;
+        });
+
+        sessions.put(key, newSession(executor));
         notifyListeners();
-        CompletableFuture.runAsync(() -> doConnect(activeProject, infobase));
+
+        // Запускаем подключение строго в контексте этого потока
+        executor.submit(() -> {
+            ComJacobBridge.initComThread(); // Инициализируем STA для потока ОДИН раз при старте
+            try
+            {
+                doConnect(activeProject, infobase);
+            }
+            catch (Exception e)
+            {
+                log("Исключение в потоке подключения COM: " + e.getMessage());
+            }
+            // ВАЖНО: Мы НЕ вызываем здесь ComJacobBridge.releaseComThread(), 
+            // так как поток продолжает жить и обслуживать вызовы!
+        });
     }
 
     /**
@@ -212,7 +243,12 @@ public final class IRApplicationRegistry
         catch (Exception e)
         {
             EclipseToastNotification.show("Ошибка подключения ИР", e.getMessage(), 10_000);
-            sessions.remove(infobase);
+            String key = sessionKey(infobase);
+            IrSession s = sessions.remove(key);
+            if (s != null && s.executor != null) {
+                s.executor.submit(() -> ComJacobBridge.releaseComThread());
+                s.executor.shutdown();
+            }
             notifyListeners();
         }
         finally
@@ -321,15 +357,21 @@ public final class IRApplicationRegistry
         final Object finalProcObj  = processObj;
         final String finalVersion  = platformVersion;
 
-        sessions.put(key, new IrSession(
+     // Находим временную сессию, чтобы забрать созданный executor
+        IrSession connectingSession = sessions.get(key);
+        ExecutorService currentExecutor = connectingSession != null ? connectingSession.executor : null;
+
+        IrSession irSession = new IrSession(
             State.CONNECTED, LocalDateTime.now(), finalPid, finalVersion,
-            finalDispatch, finalProcObj, title));
+            finalDispatch, finalProcObj, title, project, currentExecutor);
+        sessions.put(key, irSession);
         notifyListeners();
 
         EclipseToastNotification.show("ИР подключено", //$NON-NLS-1$
             title + " подключено за " + duration + " сек", 3_000); //$NON-NLS-1$ //$NON-NLS-2$
         log("Подключено: " + title + " за " + duration + " с, PID=" + finalPid //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + " platform=" + platformVersion); //$NON-NLS-1$
+//        Object irClient = irSession.getModule("ирКлиент");
     }
 
     // -----------------------------------------------------------------------
@@ -341,7 +383,9 @@ public final class IRApplicationRegistry
         String key = sessionKey(infobase);
         IrSession session = sessions.get(key);
         if (session == null || session.state == State.IDLE) return;
-        CompletableFuture.runAsync(() -> doDisconnect(key, session));
+        
+        // Закрываем строго в том же потоке, где выполнялась работа
+        session.executor.submit(() -> doDisconnect(key, session));
     }
 
     private void doDisconnect(String key, IrSession session)
@@ -352,13 +396,12 @@ public final class IRApplicationRegistry
         {
             try
             {
-                // ЗавершитьРаботуСистемы(false) — штатное завершение
-                ComJacobBridge.invoke(session.dispatch, "ЗавершитьРаботуСистемы", false); //$NON-NLS-1$
-                log("ЗавершитьРаботуСистемы(false) — OK"); //$NON-NLS-1$
+                ComJacobBridge.invoke(session.dispatch, "ЗавершитьРаботуСистемы", false);
+                log("ЗавершитьРаботуСистемы(false) — OK");
             }
             catch (Exception e)
             {
-                log("ЗавершитьРаботуСистемы ошибка → УбитьПроцесс: " + e.getMessage()); //$NON-NLS-1$
+                log("ЗавершитьРаботуСистемы ошибка → УбитьПроцесс: " + e.getMessage());
                 Object wmi  = WmiProcessHelper.connectWmi();
                 Object proc = session.processObj != null ? session.processObj
                     : WmiProcessHelper.findProcessByPid(wmi, session.pid);
@@ -620,7 +663,13 @@ public final class IRApplicationRegistry
     */
     public static IrSession getSession(IDtProject dtProject)
     {
-        // TODO Auto-generated method stub
+        for (Map.Entry<String, IrSession> entry : sessions.entrySet())
+        {
+            String key = entry.getKey();
+            IrSession session = entry.getValue();
+            if (session.project == dtProject.getWorkspaceProject())
+                return session;
+        }
         return null;
     }
 }

@@ -56,12 +56,7 @@ public final class ComJacobBridge
         {
             if (initialized) return;
             initialized = true;
-            
-            
-
-            
-            
-            try
+             try
             {
                 ClassLoader cl = ComJacobBridge.class.getClassLoader();
 
@@ -86,6 +81,7 @@ public final class ComJacobBridge
                 methodVariantGetVt         = classVariant.getMethod("getvt");
                 
                 available = true;
+                initComThread();
                 IRApplicationRegistry.log("Jacob инициализирован успешно"); //$NON-NLS-1$
             }
             catch (Exception e)
@@ -135,7 +131,7 @@ public final class ComJacobBridge
         requireJacob();
         try
         {
-            initComThread();
+//            initComThread();
             return classActiveXComponent.getConstructor(String.class).newInstance(className);
         }
         catch (Exception e)
@@ -189,8 +185,10 @@ public final class ComJacobBridge
         try { 
             return methodDispatchGet.invoke(null, getRealDispatch(dispatch), property); 
         }
-        catch (Exception e) {}
-        return null;
+        catch (Exception e) {
+            Throwable c = unwrap(e); 
+            throw new RuntimeException("COM." + property + ": " + c.getMessage(), c); 
+        }
     }
 
     public static void setProperty(Object dispatch, String property, Object value)
@@ -199,7 +197,10 @@ public final class ComJacobBridge
         try { 
             methodDispatchPut.invoke(null, getRealDispatch(dispatch), property, value); 
         }
-        catch (Exception e) {}
+        catch (Exception e) { 
+            Throwable c = unwrap(e); 
+            throw new RuntimeException("COM." + property + ": " + c.getMessage(), c); 
+        }
     }
     
     // -----------------------------------------------------------------------

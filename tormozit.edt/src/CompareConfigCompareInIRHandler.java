@@ -93,8 +93,27 @@ public class CompareConfigCompareInIRHandler extends AbstractHandler {
         }
         IComparisonSession compSession = CompareConfigSelectionProvider.getSession(editor);
         IRApplicationRegistry.IrSession irSession = IRApplicationRegistry.getSession(compSession.getDataSource(ComparisonSide.MAIN).getDtProject());
-        Object irClient = irSession.getModule("ирКлиент"); 
-        ComJacobBridge.invoke(irClient, "СравнитьТабличныеДокументыИмпортЛкс", pathMain, pathOther);
+        
+        if (irSession == null || irSession.executor == null) {
+            Reflect.log("Сессия приложения ИР не найдена или не активна.");
+            return;
+        }
+
+        // Делегируем выполнение выделенному COM-потоку этой сессии.
+        // UI-поток Eclipse (SWT) при этом не блокируется!
+        irSession.executor.submit(() -> {
+            try 
+            {
+                // Здесь мы находимся в родном потоке для этого COM-объекта. 
+                // Никаких дополнительных initComThread/releaseComThread делать НЕ нужно.
+                Object irClient = irSession.getModule("ирКлиент");
+                ComJacobBridge.invoke(irClient, "СравнитьТабличныеДокументыИмпортЛкс", pathMain.toString(), pathOther.toString());
+            } 
+            catch (Exception e) 
+            {
+                Reflect.log("Ошибка вызова ИР: " + e.getMessage());
+            }
+        });
     }
 
     /**
