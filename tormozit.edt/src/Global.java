@@ -22,9 +22,9 @@ import com._1c.g5.wiring.IManagedService;
  *   <li>{@code DesignerSessionPoolAccessor.readField} / {@code tryCall}</li>
  * </ul>
  */
-public final class Reflect
+public final class Global
 {
-    private Reflect() {}
+    private Global() {}
 
     /**
      * Читает значение поля {@code fieldName} из объекта {@code obj},
@@ -103,14 +103,14 @@ public final class Reflect
     }
     
     public static IDtProject getProjectFromEditor(Object editorPart) {
-        Object project = Reflect.getField(editorPart, "project");
+        Object project = Global.getField(editorPart, "project");
         
         if (project instanceof IDtProject) {
             return (IDtProject) project;
         }
-        Object context = Reflect.getField(editorPart, "context");
+        Object context = Global.getField(editorPart, "context");
         if (context != null) {
-            Object p = Reflect.getField(context, "project");
+            Object p = Global.getField(context, "project");
             if (p instanceof IDtProject) return (IDtProject) p;
         }
         return null;
@@ -118,7 +118,7 @@ public final class Reflect
 
     public static IManagedService getServiceByClass(Class<?> clazz)
     {
-        BundleContext ourContext = Reflect.ourContext();
+        BundleContext ourContext = Global.ourContext();
         return (IManagedService) ourContext.getService(ourContext.getServiceReference(clazz));
     }
         

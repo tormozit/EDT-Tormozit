@@ -178,9 +178,9 @@ public class CompareConfigSelectionProvider
      */
     private boolean isLinkingEnabled(CommonNavigator navigator)
     {
-        Object result = Reflect.call(navigator, "isLinkingEnabled");
+        Object result = Global.call(navigator, "isLinkingEnabled");
         if (result instanceof Boolean) return (Boolean) result;
-        result = Reflect.getField(navigator, "isLinkingEnabled");
+        result = Global.getField(navigator, "isLinkingEnabled");
         return result instanceof Boolean && (Boolean) result;
     }
     
@@ -223,19 +223,19 @@ public class CompareConfigSelectionProvider
     public static IComparisonSession getSession(IEditorPart editor)
     {
         // Из comparisonArtifactsList
-        Object list = Reflect.getField(editor, "comparisonArtifactsList");
+        Object list = Global.getField(editor, "comparisonArtifactsList");
         if (list instanceof List) {
             for (Object artifact : (List<?>) list) {
-                Object session = Reflect.call(artifact, "getSession");
+                Object session = Global.call(artifact, "getSession");
                 if (session instanceof IComparisonSession) {
                     return (IComparisonSession) session;
                 }
             }
         }
         // Fallback: из root
-        Object root = Reflect.getField(editor, "root");
+        Object root = Global.getField(editor, "root");
         if (root != null) {
-            Object session = Reflect.call(root, "getComparisonSession");
+            Object session = Global.call(root, "getComparisonSession");
             if (session instanceof IComparisonSession) return (IComparisonSession) session;
         }
         return null;
@@ -252,7 +252,7 @@ public class CompareConfigSelectionProvider
      */
     public static MatchedObjectsComparisonNode resolveMatchedNode(Object element)
     {
-        Object node = Reflect.call(element, "retrieveComparisonNode"); //$NON-NLS-1$
+        Object node = Global.call(element, "retrieveComparisonNode"); //$NON-NLS-1$
         if (node instanceof MatchedObjectsComparisonNode)
             return (MatchedObjectsComparisonNode) node;
         if (element instanceof MatchedObjectsComparisonNode)

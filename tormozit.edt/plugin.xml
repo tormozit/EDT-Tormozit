@@ -27,7 +27,13 @@
           commandId="tormozit.edt.compareConf.showInNavigator"
           contextId="tormozit.edt.compareConf.context"
           schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
-          sequence="Ctrl+T">
+          sequence="M1+T">
+    </key>
+    <key
+          commandId="tormozit.edt.JumpToRef"
+          contextId="org.eclipse.ui.contexts.window"
+          schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+          sequence="M1+F12">
     </key>
   </extension>
 
@@ -35,11 +41,15 @@
     <command
         id="tormozit.edt.compareConf.openObject"
         name="Открыть объект"
-        description="Открыть выбранный объект конфигурации в редакторе"/>
+        description="Открыть выбранный объект конфигурации в редакторе (Tormozit)"/>
      <command
         id="tormozit.edt.compareConf.showInNavigator"
         name="Показать в навигаторе"
-        description="Показать выбранный объект конфигурации в навигаторе"/>
+        description="Показать выбранный объект конфигурации в навигаторе (Tormozit)"/>
+     <command
+            id="tormozit.edt.JumpToRef"
+            name="Перейти"
+            description="Перейти по ссылке из буфера обмена (Tormozit)"/>
   </extension>
 
   <extension point="org.eclipse.ui.handlers">
@@ -61,10 +71,23 @@
         </with>
       </activeWhen>
     </handler>
+    <handler
+        class="JumpToRef"
+        commandId="tormozit.edt.JumpToRef">
+     </handler>
   </extension>
 
   <extension point="org.eclipse.ui.menus">
-  </extension>
+      <menuContribution locationURI="toolbar:org.eclipse.ui.main.toolbar?after=additions">
+         <toolbar id="tormozit.edt.toolbar.mainGroup">
+            <command
+              commandId="tormozit.edt.JumpToRef"
+              tooltip="Перейти по ссылке из буфера обмена (Tormozit)"
+              style="push">
+            </command>
+         </toolbar>
+      </menuContribution>
+   </extension>
 
   <!-- Страница настроек автооткрытия подсказки BSL -->
   <extension point="org.eclipse.ui.preferencePages">

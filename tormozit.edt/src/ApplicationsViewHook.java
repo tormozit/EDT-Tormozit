@@ -260,7 +260,7 @@ public class ApplicationsViewHook implements IStartup
                     {
                         Object el = cell.getElement();
                         InfobaseReference ib = getInfobase(el);
-                        IProject project     = (IProject) Reflect.getField(el, "project"); //$NON-NLS-1$
+                        IProject project     = (IProject) Global.getField(el, "project"); //$NON-NLS-1$
                         RuntimeInstallation inst = getRuntimeInstallation(project, ib);
                         cell.setText(inst != null ? inst.getVersionWithBuild() : ""); //$NON-NLS-1$
                     }
@@ -347,7 +347,7 @@ public class ApplicationsViewHook implements IStartup
         if (project == null || infobase == null) return null;
         try
         {
-            BundleContext ctx = Reflect.ourContext();
+            BundleContext ctx = Global.ourContext();
             if (ctx == null) return null;
             ServiceReference<?> ref = ctx.getServiceReference(
                 "com._1c.g5.v8.dt.platform.services.core.infobases.sync.IInfobaseSynchronizationManager"); //$NON-NLS-1$
@@ -355,7 +355,7 @@ public class ApplicationsViewHook implements IStartup
             Object syncMgr = ctx.getService(ref);
             if (syncMgr == null) return null;
             IResolvableRuntimeInstallation resolvable =
-                (IResolvableRuntimeInstallation) Reflect.invoke(
+                (IResolvableRuntimeInstallation) Global.invoke(
                     syncMgr, "getInstallation", project, infobase); //$NON-NLS-1$
             if (resolvable == null) return null;
             return resolvable.resolve(
@@ -364,7 +364,7 @@ public class ApplicationsViewHook implements IStartup
         }
         catch (Exception e)
         {
-            Reflect.log("getRuntimeInstallation: " + e.getMessage()); //$NON-NLS-1$
+            Global.log("getRuntimeInstallation: " + e.getMessage()); //$NON-NLS-1$
             return null;
         }
     }
@@ -491,7 +491,7 @@ public class ApplicationsViewHook implements IStartup
                         {
                             disconnectSsh(sel.toList(), viewer);
                             InfobaseReference infobase = ApplicationsViewHook.getInfobaseFromApplication(sel.getFirstElement());
-                            IProject project = (IProject) Reflect.getField(sel.getFirstElement(), "project");
+                            IProject project = (IProject) Global.getField(sel.getFirstElement(), "project");
                             String connectionString = IRApplicationRegistry.buildConnectionString(infobase, true);
                             RuntimeInstallation runtimeInstallation = ApplicationsViewHook.getRuntimeInstallation(project, infobase);
                             try
@@ -518,7 +518,7 @@ public class ApplicationsViewHook implements IStartup
                     ? new ToolItem(bar, SWT.DROP_DOWN, index)
                     : new ToolItem(bar, SWT.DROP_DOWN);
                 item.setText("Подключение"); //$NON-NLS-1$
-                item.setToolTipText("Управление подключениями инфобаз"); //$NON-NLS-1$
+                item.setToolTipText("Управление подключениями инфобаз (Tormozit)"); //$NON-NLS-1$
                 item.setEnabled(false);
                 item.addSelectionListener(new SelectionAdapter()
                 {
@@ -587,7 +587,7 @@ public class ApplicationsViewHook implements IStartup
         }
         catch (Exception ex)
         {
-            Reflect.log("showConnectionMenu: " + ex); //$NON-NLS-1$
+            Global.log("showConnectionMenu: " + ex); //$NON-NLS-1$
         }
     }
 
@@ -644,7 +644,7 @@ public class ApplicationsViewHook implements IStartup
                 }
                 catch (Exception ex)
                 {
-                    Reflect.log("addContextMenu.menuShown: " + ex); //$NON-NLS-1$
+                    Global.log("addContextMenu.menuShown: " + ex); //$NON-NLS-1$
                 }
             }
 
@@ -724,9 +724,9 @@ public class ApplicationsViewHook implements IStartup
         if (element == null) return null;
         try
         {
-            InfobaseReference ib = (InfobaseReference) Reflect.call(element, "getInfobase"); //$NON-NLS-1$
+            InfobaseReference ib = (InfobaseReference) Global.call(element, "getInfobase"); //$NON-NLS-1$
             if (ib != null) return ib;
-            return (InfobaseReference) Reflect.getField(element, "infobase"); //$NON-NLS-1$
+            return (InfobaseReference) Global.getField(element, "infobase"); //$NON-NLS-1$
         }
         catch (Exception e) { return null; }
     }

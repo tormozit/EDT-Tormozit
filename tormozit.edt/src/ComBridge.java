@@ -82,13 +82,13 @@ public final class ComBridge
                 
                 available = true;
                 initComThread();
-                IRApplicationRegistry.log("Jacob инициализирован успешно"); //$NON-NLS-1$
+                Global.log("Jacob инициализирован успешно"); //$NON-NLS-1$
             }
             catch (Exception e)
             {
                 available = false;
                 unavailableReason = e.toString();
-                IRApplicationRegistry.log("Jacob НЕУДАЧА: " + e); //$NON-NLS-1$
+                Global.log("Jacob НЕУДАЧА: " + e); //$NON-NLS-1$
             }
         }
     }

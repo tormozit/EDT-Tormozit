@@ -38,12 +38,12 @@ public final class WmiProcessHelper
         {
             Object locator = ComBridge.createComObject("WbemScripting.SWbemLocator"); //$NON-NLS-1$
             Object wmi     = ComBridge.invoke(locator, "ConnectServer", ".", "root\\cimv2"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            IRApplicationRegistry.log("WMI подключён: root\\cimv2"); //$NON-NLS-1$
+            Global.log("WMI подключён: root\\cimv2"); //$NON-NLS-1$
             return wmi;
         }
         catch (Exception e)
         {
-            IRApplicationRegistry.log("WMI connectWmi() ошибка: " + e.getMessage()); //$NON-NLS-1$
+            Global.log("WMI connectWmi() ошибка: " + e.getMessage()); //$NON-NLS-1$
             return null;
         }
     }
@@ -72,7 +72,7 @@ public final class WmiProcessHelper
             wql += " AND CommandLine LIKE '%"+marker+"%'"; //$NON-NLS-1$
         }
 
-        IRApplicationRegistry.log("WQL: " + wql); //$NON-NLS-1$
+        Global.log("WQL: " + wql); //$NON-NLS-1$
         try
         {
             Object resultSet = ComBridge.invoke(wmi, "ExecQuery", wql); //$NON-NLS-1$
@@ -82,15 +82,15 @@ public final class WmiProcessHelper
             for (Object process : ComBridge.iterateComCollection(resultSet))
             {
                 long pid = ComBridge.toLong(ComBridge.getProperty(process, "ProcessId")); //$NON-NLS-1$
-                IRApplicationRegistry.log("Процесс ОС найден, PID=" + pid); //$NON-NLS-1$
+                Global.log("Процесс ОС найден, PID=" + pid); //$NON-NLS-1$
                 return process;
             }
-            IRApplicationRegistry.log("Процесс ОС не найден (0 результатов)"); //$NON-NLS-1$
+            Global.log("Процесс ОС не найден (0 результатов)"); //$NON-NLS-1$
             return null;
         }
         catch (Exception e)
         {
-            IRApplicationRegistry.log("WMI ExecQuery ошибка: " + e.getMessage()); //$NON-NLS-1$
+            Global.log("WMI ExecQuery ошибка: " + e.getMessage()); //$NON-NLS-1$
             return null;
         }
     }
@@ -109,7 +109,7 @@ public final class WmiProcessHelper
         }
         catch (Exception e)
         {
-            IRApplicationRegistry.log("findProcessByPid(" + pid + "): " + e.getMessage()); //$NON-NLS-1$ //$NON-NLS-2$
+            Global.log("findProcessByPid(" + pid + "): " + e.getMessage()); //$NON-NLS-1$ //$NON-NLS-2$
             return null;
         }
     }
@@ -131,12 +131,12 @@ public final class WmiProcessHelper
             try
             {
                 ComBridge.invoke(processObj, "Terminate"); //$NON-NLS-1$
-                IRApplicationRegistry.log("Win32_Process.Terminate() OK, PID=" + pid); //$NON-NLS-1$
+                Global.log("Win32_Process.Terminate() OK, PID=" + pid); //$NON-NLS-1$
                 return;
             }
             catch (Exception e)
             {
-                IRApplicationRegistry.log("Terminate() ошибка → taskkill: " + e.getMessage()); //$NON-NLS-1$
+                Global.log("Terminate() ошибка → taskkill: " + e.getMessage()); //$NON-NLS-1$
             }
         }
         killByPid(pid);
@@ -162,8 +162,8 @@ public final class WmiProcessHelper
         {
             new ProcessBuilder("taskkill", "/F", "/PID", String.valueOf(pid)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 .redirectErrorStream(true).start().waitFor();
-            IRApplicationRegistry.log("taskkill /F /PID " + pid + " выполнен"); //$NON-NLS-1$ //$NON-NLS-2$
+            Global.log("taskkill /F /PID " + pid + " выполнен"); //$NON-NLS-1$ //$NON-NLS-2$
         }
-        catch (Exception e) { IRApplicationRegistry.log("taskkill ошибка: " + e.getMessage()); } //$NON-NLS-1$
+        catch (Exception e) { Global.log("taskkill ошибка: " + e.getMessage()); } //$NON-NLS-1$
     }
 }

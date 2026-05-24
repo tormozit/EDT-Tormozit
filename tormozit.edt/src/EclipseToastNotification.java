@@ -61,6 +61,11 @@ public final class EclipseToastNotification
     {
         return show(title, message, durationMs, null, null);
     }
+    
+    public static Shell show(String title, String message, int durationMs, Runnable action)
+    {
+        return show(title, message, durationMs, action, null);
+    }
 
     /**
      * Показывает всплывающее уведомление.
@@ -76,12 +81,12 @@ public final class EclipseToastNotification
      * @param action      действие при клике на гиперссылку; произвольные параметры
      *                    передаются через замыкание лямбды (null = не отображать)
      */
-    public static Shell show(String title, String message, int durationMs,
-                              String actionLabel, Runnable action)
+    public static Shell show(String title, String message, int durationMs, Runnable action, String actionLabel)
     {
         Display display = Display.getDefault();
         if (display == null || display.isDisposed()) return null;
         Shell[] holder = new Shell[1];
+        Global.log(title + ": "+ message);
 
         display.syncExec(() ->
         {

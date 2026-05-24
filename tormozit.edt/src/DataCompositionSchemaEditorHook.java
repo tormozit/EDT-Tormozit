@@ -158,11 +158,11 @@ public class DataCompositionSchemaEditorHook implements IStartup
                 return; // Проверяем еще раз перед самой вставкой
             ToolItem item = new ToolItem(toolbar, SWT.PUSH);
             item.setText("Редактор ИР"); 
-            item.setToolTipText("Редактировать в консоли компоновки данных ИР");
+            item.setToolTipText("Редактировать в консоли компоновки данных ИР (Tormozit)");
             item.addListener(SWT.Selection, event -> {
-                Object editor = Reflect.getField(page, "editor");
-                Object BmModel = Reflect.getField(editor, "bmModel");
-                IDtProject project = (IDtProject)Reflect.getField(BmModel, "project");
+                Object editor = Global.getField(page, "editor");
+                Object BmModel = Global.getField(editor, "bmModel");
+                IDtProject project = (IDtProject)Global.getField(BmModel, "project");
                 IRApplicationRegistry.IrSession irSession = IRApplicationRegistry.getSession(project);
                 if (irSession == null || irSession.executor == null) {
                     return;
@@ -175,7 +175,7 @@ public class DataCompositionSchemaEditorHook implements IStartup
                         // com._1c.g5.v8.dt.dcs.ui.datasets.DataSetsSaveHandler.DataSetsSaveHandler()
                         String file = File.createTempFile("tormozit.edt", ".xml").getPath();
                         DataCompositionSchema schema = (DataCompositionSchema) dcsEditor.getModel();
-                        IV8ProjectManager projectManager = (IV8ProjectManager) Reflect.getServiceByClass(IV8ProjectManager.class);
+                        IV8ProjectManager projectManager = (IV8ProjectManager) Global.getServiceByClass(IV8ProjectManager.class);
                         IV8Project v8Project = projectManager.getProject(project);
                         int convertMode = v8Project.getCompatibilityMode().compareTo(CompatibilityMode.VERSION8_323) <= 0 ? 0 : 1;
                         FileOutputStream fileStream = new FileOutputStream(file);
@@ -193,7 +193,7 @@ public class DataCompositionSchemaEditorHook implements IStartup
                     } 
                     catch (Exception e) 
                     {
-                        Reflect.log("Ошибка вызова ИР: " + e.getMessage());
+                        Global.log("Ошибка вызова ИР: " + e.getMessage());
                     }
                 });
                 

@@ -58,14 +58,14 @@ public class CompareConfigOpenObjectHandler extends AbstractHandler {
     public static ISelection getSelection(IEditorPart editor) {
         // Через comparisonView -> treeViewer -> selection
         ISelection sel = null;
-        Object view = Reflect.getField(editor, "comparisonView");
+        Object view = Global.getField(editor, "comparisonView");
         if (view instanceof DtComparisonView) {
             Object treeControl = ((DtComparisonView) view).getTreeControl();
             if (treeControl != null) {
-                Object viewer = Reflect.call(treeControl, "getTreeViewer");
+                Object viewer = Global.call(treeControl, "getTreeViewer");
                 if (viewer != null)
                 {
-                    sel = (ISelection) Reflect.call(viewer, "getSelection");
+                    sel = (ISelection) Global.call(viewer, "getSelection");
                 }
             }
         }

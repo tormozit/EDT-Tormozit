@@ -164,11 +164,11 @@ public class CompareConfigMenuHook implements IStartup
 
     private AbstractTreeViewer getTreeViewerFromEditor(IEditorPart editor)
     {
-        Object view = Reflect.getField(editor, "comparisonView"); //$NON-NLS-1$
+        Object view = Global.getField(editor, "comparisonView"); //$NON-NLS-1$
         if (!(view instanceof DtComparisonView)) return null;
         Object treeControl = ((DtComparisonView) view).getTreeControl();
         if (treeControl == null) return null;
-        Object viewer = Reflect.call(treeControl, "getTreeViewer"); //$NON-NLS-1$
+        Object viewer = Global.call(treeControl, "getTreeViewer"); //$NON-NLS-1$
         return (viewer instanceof AbstractTreeViewer) ? (AbstractTreeViewer) viewer : null;
     }
 
@@ -176,7 +176,7 @@ public class CompareConfigMenuHook implements IStartup
     {
         Display.getDefault().asyncExec(() ->
         {
-            Object tbm = Reflect.getField(editor, "toolBarManager"); //$NON-NLS-1$
+            Object tbm = Global.getField(editor, "toolBarManager"); //$NON-NLS-1$
             if (tbm instanceof IToolBarManager)
                 fillToolbar((IToolBarManager) tbm, editor);
         });
@@ -204,7 +204,7 @@ public class CompareConfigMenuHook implements IStartup
                     ? new ToolItem(bar, SWT.DROP_DOWN, index)
                     : new ToolItem(bar, SWT.DROP_DOWN);
                 item.setText("Развернуть");
-                item.setToolTipText("Развернуть дерево сравнения до нужного уровня");
+                item.setToolTipText("Развернуть дерево сравнения до нужного уровня (Tormozit)");
 
                 item.addSelectionListener(new SelectionAdapter()
                 {
@@ -354,13 +354,13 @@ public class CompareConfigMenuHook implements IStartup
 
     private Tree getCompareTree(IEditorPart editor)
     {
-        Object view = Reflect.getField(editor, "comparisonView"); //$NON-NLS-1$
+        Object view = Global.getField(editor, "comparisonView"); //$NON-NLS-1$
         if (!(view instanceof DtComparisonView)) return null;
         Object treeControl = ((DtComparisonView) view).getTreeControl();
         if (treeControl == null) return null;
-        Object viewer = Reflect.call(treeControl, "getTreeViewer"); //$NON-NLS-1$
+        Object viewer = Global.call(treeControl, "getTreeViewer"); //$NON-NLS-1$
         if (viewer == null) return null;
-        Object widget = Reflect.call(viewer, "getTree"); //$NON-NLS-1$
+        Object widget = Global.call(viewer, "getTree"); //$NON-NLS-1$
         return (widget instanceof Tree) ? (Tree) widget : null;
     }
 
@@ -368,19 +368,19 @@ public class CompareConfigMenuHook implements IStartup
 
     private MatchedObjectsComparisonNode getSelectedMatchedNode(IEditorPart editor)
     {
-        Object view = Reflect.getField(editor, "comparisonView"); //$NON-NLS-1$
+        Object view = Global.getField(editor, "comparisonView"); //$NON-NLS-1$
         if (!(view instanceof DtComparisonView)) return null;
         Object treeControl = ((DtComparisonView) view).getTreeControl();
         if (treeControl == null) return null;
-        Object viewer = Reflect.call(treeControl, "getTreeViewer"); //$NON-NLS-1$
+        Object viewer = Global.call(treeControl, "getTreeViewer"); //$NON-NLS-1$
         if (viewer == null) return null;
-        Object sel = Reflect.call(viewer, "getSelection"); //$NON-NLS-1$
+        Object sel = Global.call(viewer, "getSelection"); //$NON-NLS-1$
         if (!(sel instanceof IStructuredSelection)) return null;
         Object element = ((IStructuredSelection) sel).getFirstElement();
         if (element == null) return null;
         try
         {
-            Object node = Reflect.call(element, "retrieveComparisonNode"); //$NON-NLS-1$
+            Object node = Global.call(element, "retrieveComparisonNode"); //$NON-NLS-1$
             if (node instanceof MatchedObjectsComparisonNode)
                 return (MatchedObjectsComparisonNode) node;
         }

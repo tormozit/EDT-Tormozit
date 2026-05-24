@@ -114,24 +114,24 @@ public class ApplicationEditorHook implements IStartup
     {
         try
         {
-            Object managedForm = Reflect.getField(editor, "managedForm"); //$NON-NLS-1$
+            Object managedForm = Global.getField(editor, "managedForm"); //$NON-NLS-1$
             if (managedForm == null) return;
 
-            FormToolkit toolkit       = (FormToolkit)  Reflect.call(managedForm, "getToolkit"); //$NON-NLS-1$
-            ScrolledForm scrolledForm = (ScrolledForm) Reflect.call(managedForm, "getForm");    //$NON-NLS-1$
+            FormToolkit toolkit       = (FormToolkit)  Global.call(managedForm, "getToolkit"); //$NON-NLS-1$
+            ScrolledForm scrolledForm = (ScrolledForm) Global.call(managedForm, "getForm");    //$NON-NLS-1$
             if (toolkit == null || scrolledForm == null) return;
 
             addHyperlinkToHead(scrolledForm.getForm(), toolkit, editor);
         }
         catch (Exception e)
         {
-            Reflect.log("ApplicationEditorHook.hookEditor: " + e); //$NON-NLS-1$
+            Global.log("ApplicationEditorHook.hookEditor: " + e); //$NON-NLS-1$
         }
     }
 
     private static void addHyperlinkToHead(Form form, FormToolkit toolkit, IEditorPart editor)
     {
-        Composite existing = (Composite) Reflect.call(form, "getHeadClient"); //$NON-NLS-1$
+        Composite existing = (Composite) Global.call(form, "getHeadClient"); //$NON-NLS-1$
         if (existing != null)
         {
             for (var child : existing.getChildren())
@@ -165,8 +165,8 @@ public class ApplicationEditorHook implements IStartup
     {
         // 1. Извлекаем InfobaseReference из входных данных редактора
         Object input = editor.getEditorInput();
-        Object application = Reflect.call(input, "getApplication"); //$NON-NLS-1$
-        Object infobase = Reflect.call(application, "getInfobase"); //$NON-NLS-1$
+        Object application = Global.call(input, "getApplication"); //$NON-NLS-1$
+        Object infobase = Global.call(application, "getInfobase"); //$NON-NLS-1$
         IWorkbenchPage workbenchPage = PlatformUI.getWorkbench().getActiveWorkbenchWindow().getActivePage();
         IDtEditorInput<?> input2 = DtEditorInputFactory.create((EObject)infobase);
         try

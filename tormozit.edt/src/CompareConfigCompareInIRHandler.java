@@ -117,7 +117,7 @@ public class CompareConfigCompareInIRHandler extends AbstractHandler {
             } 
             catch (Exception e) 
             {
-                Reflect.log("Ошибка вызова ИР: " + e.getMessage());
+                Global.log("Ошибка вызова ИР: " + e.getMessage());
             }
         });
     }
@@ -143,10 +143,10 @@ public class CompareConfigCompareInIRHandler extends AbstractHandler {
         {
             return null;
         }
-        BundleContext ctx = Reflect.ourContext();
+        BundleContext ctx = Global.ourContext();
         ServiceReference<?> ref = ctx.getServiceReference(IComparisonManager.class);
         Object manager = ctx.getService(ref);
-        IQualifiedNameFilePathConverter filePathConverter = (IQualifiedNameFilePathConverter) Reflect.getField(manager, "qualifiedNameFilePathConverter");
+        IQualifiedNameFilePathConverter filePathConverter = (IQualifiedNameFilePathConverter) Global.getField(manager, "qualifiedNameFilePathConverter");
         InputStream stream = ExternalPropertyUtils.getContentStream(properyNode, session, side, filePathConverter);
         if (stream == null)
             return null;
@@ -163,7 +163,7 @@ public class CompareConfigCompareInIRHandler extends AbstractHandler {
             Files.copy(stream, tempFile, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             return tempFile;
         } catch (IOException e) {
-            Reflect.log("getSideFile: не удалось записать временный файл: " + e.getMessage()); //$NON-NLS-1$
+            Global.log("getSideFile: не удалось записать временный файл: " + e.getMessage()); //$NON-NLS-1$
             return null;
         } finally {
             try { stream.close(); } catch (IOException ignored) {}
@@ -172,7 +172,7 @@ public class CompareConfigCompareInIRHandler extends AbstractHandler {
 
     public static ISelection getSelection(IEditorPart editor) {
         ISelection sel = null;
-        DtComparisonView view = (DtComparisonView) Reflect.getField(editor, "comparisonView");
+        DtComparisonView view = (DtComparisonView) Global.getField(editor, "comparisonView");
         if (view != null) {
             ComparisonTreeControl treeControl = view.getTreeControl();
             if (treeControl != null) {

@@ -140,7 +140,7 @@ public final class DesignerSessionPoolAccessor
     {
         UUID uuid = extractInfobaseUuid(infobase);
         for (Object k : getActiveKeys())
-            if (Reflect.getField(k, "infobaseUuid") == uuid) 
+            if (Global.getField(k, "infobaseUuid") == uuid) 
                 return k;
         return null;
     }
@@ -151,7 +151,7 @@ public final class DesignerSessionPoolAccessor
      */
     private static UUID extractInfobaseUuid(InfobaseReference infobase)
     {
-        UUID uuid = (UUID) Reflect.call(infobase, "getUuid"); //$NON-NLS-1$
+        UUID uuid = (UUID) Global.call(infobase, "getUuid"); //$NON-NLS-1$
         if (uuid instanceof UUID)
             return uuid;
         return null;
@@ -164,7 +164,7 @@ public final class DesignerSessionPoolAccessor
         {
             if (k == infobase.getUuid())
             {
-                String version = (String)Reflect.getField(k, "installationVersionWithBuild");
+                String version = (String)Global.getField(k, "installationVersionWithBuild");
                 return version;
             }
         }
@@ -229,12 +229,12 @@ public final class DesignerSessionPoolAccessor
             try { 
                 Method m = connVal.getClass().getMethod("release", boolean.class, boolean.class);
                 m.invoke(connVal, true, true);
-                Map cachedConnections = (Map) Reflect.getField(pool, "cachedConnections");
+                Map cachedConnections = (Map) Global.getField(pool, "cachedConnections");
                 cachedConnections.remove(poolKey);
                 return; 
             }
             catch (Exception ignored) {
-                Reflect.log("DesignerAgentConnection.release() → fail");
+                Global.log("DesignerAgentConnection.release() → fail");
             }
     }
 
@@ -257,7 +257,7 @@ public final class DesignerSessionPoolAccessor
             added.forEach(k -> firstSeenTimes.put(k, now));
             removed.forEach(firstSeenTimes::remove);
             prevKeys = cur;
-            Reflect.log("Сессии: +" + added.size() + " -" + removed.size() //$NON-NLS-1$ //$NON-NLS-2$
+            Global.log("Сессии: +" + added.size() + " -" + removed.size() //$NON-NLS-1$ //$NON-NLS-2$
                 + " итого=" + firstSeenTimes.size() + " keys=" + cur); //$NON-NLS-1$ //$NON-NLS-2$
             notifyListeners();
         }
@@ -298,7 +298,7 @@ public final class DesignerSessionPoolAccessor
     private synchronized void ensurePool()
     {
         if (pool != null) return;
-        BundleContext ctx = Reflect.ourContext();
+        BundleContext ctx = Global.ourContext();
         if (ctx == null) return;
         ServiceReference<Object>[] refs = null;
         try
@@ -412,7 +412,7 @@ public final class DesignerSessionPoolAccessor
                     || n.contains("active") 
                     || n.contains("pool")
                         ? prio : rest).add(f);
-                Reflect.log("  Map field: " + f.getName()); //$NON-NLS-1$
+                Global.log("  Map field: " + f.getName()); //$NON-NLS-1$
             }
         mapFields.addAll(prio);
         mapFields.addAll(rest);
@@ -436,7 +436,7 @@ public final class DesignerSessionPoolAccessor
         if (obj == null) return ""; //$NON-NLS-1$
         for (String m : new String[]{ "getName", "getTitle", "getLocation" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         {
-            Object r = Reflect.call(obj, m);
+            Object r = Global.call(obj, m);
             if (r instanceof String && !((String) r).isEmpty()) return (String) r;
         }
         return obj.toString();
