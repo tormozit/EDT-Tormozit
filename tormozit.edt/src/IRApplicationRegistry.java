@@ -540,7 +540,7 @@ public final class IRApplicationRegistry
         }
         catch (Exception ignored) { ping = 0; } // ИР 8.06-
 
-        String connectedMsg = title + " подключено за " + duration + " сек"; //$NON-NLS-1$ //$NON-NLS-2$
+        String connectedMsg = "Приложение " + title + " подключено за " + duration + " сек"; //$NON-NLS-1$ //$NON-NLS-2$
         if (duration > 30 || ping > 5)
             connectedMsg += ". Задержка канала до сервера — " + ping + " сек"; //$NON-NLS-1$ //$NON-NLS-2$
 

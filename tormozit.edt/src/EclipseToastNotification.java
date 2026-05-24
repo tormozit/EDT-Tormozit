@@ -5,6 +5,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
 
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.FontData;
 import org.eclipse.swt.graphics.Point;
@@ -20,13 +21,16 @@ public final class EclipseToastNotification
     // =======================================================================
     private static final int SLIDE_IN_DURATION_MS = 500;
     private static final int FADE_OUT_DURATION_MS = 2000;
-    private static final int ANIMATION_STEP_MS    = 40;
+    private static final int ANIMATION_STEP_MS    = 30;
 
-    private static final int WIDTH          = 380;
-    private static final int PADDING        = 12;
-    private static final int GAP_BETWEEN    = 8;   // зазор между тостами
-    private static final int EDGE_GAP       = 16;  // отступ от правого края и от таскбара
-    private static final int MIN_TOP_MARGIN = 40;  // запас от верха экрана до начала нового слоя
+    private static final int WIDTH          = 400;
+    private static final int PADDING        = 10;
+    private static final int GAP_BETWEEN    = 2;  // зазор между тостами
+    private static final int EDGE_GAP       = 2;  // отступ от правого края и от таскбара
+    private static final int MIN_TOP_MARGIN = 10; // запас от верха экрана до начала нового слоя
+
+    /** Единая дельта размера шрифта относительно системного (pt). 0 = без изменений. */
+    private static final int FONT_SIZE_DELTA = 1;
 
     // =======================================================================
     // РЕЕСТР АКТИВНЫХ ТОСТОВ (читается/пишется только из display-потока)
@@ -61,16 +65,16 @@ public final class EclipseToastNotification
     /**
      * Показывает всплывающее уведомление.
      * <p>Тосты стекуются снизу вверх (от верхней границы таскбара).
-     * Когда места не хватает (новый тост не вписывается выше MIN_TOP_MARGIN),
-     * начинается новый слой — тосты снова идут от таскбара вверх,
-     * визуально перекрывая тосты предыдущего слоя.
+     * Новый тост выезжает снизу вверх в свою ячейку, не перекрывая таскбар
+     * и тосты текущего слоя. При нехватке места начинается новый слой —
+     * тосты снова идут от таскбара, перекрывая тосты предыдущего слоя.
      *
      * @param title       заголовок (null = не отображать)
      * @param message     основной текст
      * @param durationMs  время показа в мс до начала затухания
      * @param actionLabel текст гиперссылки «Выполнить» (null = не отображать)
-     * @param action      действие при клике на гиперссылку (null = не отображать);
-     *                    произвольные параметры передаются через замыкание лямбды
+     * @param action      действие при клике на гиперссылку; произвольные параметры
+     *                    передаются через замыкание лямбды (null = не отображать)
      */
     public static Shell show(String title, String message, int durationMs,
                               String actionLabel, Runnable action)
@@ -84,38 +88,97 @@ public final class EclipseToastNotification
             Shell shell = new Shell(display, SWT.NO_TRIM | SWT.ON_TOP);
             holder[0] = shell;
 
+            Color bgColor     = display.getSystemColor(SWT.COLOR_INFO_BACKGROUND);
+            Color fgColor     = display.getSystemColor(SWT.COLOR_INFO_FOREGROUND);
+            Color borderColor = new Color(display, 192, 192, 192);
+            shell.addDisposeListener(e -> borderColor.dispose());
+
             GridLayout layout      = new GridLayout(1, false);
             layout.marginWidth     = PADDING;
             layout.marginHeight    = PADDING;
-            layout.verticalSpacing = 4;
+            layout.verticalSpacing = 0;
             shell.setLayout(layout);
-            shell.setBackground(display.getSystemColor(SWT.COLOR_INFO_BACKGROUND));
+            shell.setBackground(bgColor);
 
-            // --- Заголовок ---
-            if (title != null && !title.isEmpty())
+            // --- Клик по фону → копируемый диалог ---
+            // Определяем заранее — нужен при создании виджетов
+            Listener clickListener = e ->
             {
-                Label lbl = new Label(shell, SWT.WRAP);
-                lbl.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
-                lbl.setText(title);
-                lbl.setBackground(display.getSystemColor(SWT.COLOR_INFO_BACKGROUND));
-                lbl.setForeground(display.getSystemColor(SWT.COLOR_INFO_FOREGROUND));
-                FontData[] fd = lbl.getFont().getFontData();
-                fd[0].setStyle(SWT.BOLD);
-                Font bold = new Font(display, fd);
-                lbl.setFont(bold);
-                lbl.addDisposeListener(e -> bold.dispose());
+                if (!shell.isDisposed())
+                {
+                    shell.dispose();
+                    display.asyncExec(() -> openCopyableDialog(title, message));
+                }
+            };
+
+            // --- Заголовок + кнопка × (всегда одна строка) ---
+            Composite header = new Composite(shell, SWT.NONE);
+            {
+                GridLayout hl    = new GridLayout(2, false);
+                hl.marginWidth   = 0;
+                hl.marginHeight  = 0;
+                hl.verticalSpacing = 0;
+                hl.horizontalSpacing = 4;
+                header.setLayout(hl);
+                header.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
+                header.setBackground(bgColor);
+                header.addListener(SWT.MouseDown, clickListener);
+
+                // Заголовок (левая ячейка — всё доступное пространство)
+                if (title != null && !title.isEmpty())
+                {
+                    Label titleLbl = new Label(header, SWT.WRAP);
+                    titleLbl.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+                    titleLbl.setText(title);
+                    titleLbl.setBackground(bgColor);
+                    titleLbl.setForeground(fgColor);
+                    titleLbl.setFont(makeBoldFont(titleLbl, display));
+                    titleLbl.addListener(SWT.MouseDown, clickListener);
+                }
+                else
+                {
+                    // Пустой разделитель, чтобы × остался в правом углу
+                    new Label(header, SWT.NONE).setLayoutData(
+                        new GridData(SWT.FILL, SWT.CENTER, true, false));
+                }
+
+                // Кнопка × (правая ячейка, фиксированная ширина)
+                ToolBar toolBar = new ToolBar(header, SWT.FLAT | SWT.RIGHT);
+                toolBar.setBackground(shell.getBackground());
+                GridData tbData = new GridData(SWT.RIGHT, SWT.TOP, false, false);
+                toolBar.setLayoutData(tbData);
+
+                ToolItem closeItem = new ToolItem(toolBar, SWT.PUSH);
+                // Можно использовать текст или системную картинку
+                closeItem.setText("✕");
+                closeItem.addListener(SWT.Selection, e ->
+                { if (!shell.isDisposed()) shell.dispose(); });
+                
+//                // Так у кнопки будет постоянная рамка
+//                Button closeBtn = new Button(header, SWT.PUSH);
+//                closeBtn.setLayoutData(new GridData(SWT.RIGHT, SWT.TOP, false, false));
+//                closeBtn.setText("\u00D7"); // ×  //$NON-NLS-1$
+//                closeBtn.setBackground(bgColor);
+//                closeBtn.setForeground(fgColor);
+//                closeBtn.setFont(makeBoldFont(closeBtn, display));
+////                closeBtn.setCursor(display.getSystemCursor(SWT.CURSOR_HAND));
+//                // Клик на ×: только закрыть, без диалога
+//                closeBtn.addListener(SWT.Selection, e ->
+//                    { if (!shell.isDisposed()) shell.dispose(); });
             }
 
             // --- Сообщение ---
             if (message != null && !message.isEmpty())
             {
-                Label lbl = new Label(shell, SWT.WRAP);
-                GridData gd   = new GridData(SWT.FILL, SWT.TOP, true, false);
-                gd.widthHint  = WIDTH - 2 * PADDING;
-                lbl.setLayoutData(gd);
-                lbl.setText(message);
-                lbl.setBackground(display.getSystemColor(SWT.COLOR_INFO_BACKGROUND));
-                lbl.setForeground(display.getSystemColor(SWT.COLOR_INFO_FOREGROUND));
+                Label msgLbl = new Label(shell, SWT.WRAP);
+                GridData gd  = new GridData(SWT.FILL, SWT.TOP, true, false);
+                gd.widthHint = WIDTH - 2 * PADDING;
+                msgLbl.setLayoutData(gd);
+                msgLbl.setText(message);
+                msgLbl.setBackground(bgColor);
+                msgLbl.setForeground(fgColor);
+                msgLbl.setFont(makeRegularFont(msgLbl, display));
+                msgLbl.addListener(SWT.MouseDown, clickListener);
             }
 
             // --- Гиперссылка «Выполнить» (опционально) ---
@@ -125,7 +188,7 @@ public final class EclipseToastNotification
                 actionLink = new Link(shell, SWT.NONE);
                 actionLink.setLayoutData(new GridData(SWT.LEFT, SWT.TOP, true, false));
                 actionLink.setText("<a>" + actionLabel + "</a>"); //$NON-NLS-1$ //$NON-NLS-2$
-                actionLink.setBackground(display.getSystemColor(SWT.COLOR_INFO_BACKGROUND));
+                actionLink.setBackground(bgColor);
                 actionLink.addListener(SWT.Selection, e ->
                 {
                     if (!shell.isDisposed()) shell.dispose();
@@ -136,6 +199,15 @@ public final class EclipseToastNotification
             {
                 actionLink = null;
             }
+
+            // --- Рамка (рисуется поверх содержимого) ---
+            shell.addPaintListener(e ->
+            {
+                Point sz = shell.getSize();
+                e.gc.setForeground(borderColor);
+                e.gc.setLineWidth(1);
+                e.gc.drawRectangle(0, 0, sz.x - 1, sz.y - 1);
+            });
 
             shell.pack();
             Point size = shell.getSize();
@@ -152,12 +224,15 @@ public final class EclipseToastNotification
             activeToasts.add(entry);
             shell.addDisposeListener(e -> activeToasts.remove(entry));
 
-            int startY = targetY + 30;
+            // Тост выезжает СНИЗУ ВВЕРХ: начинает в нижней границе своего слота (верхняя
+            // граница таскбара для первого тоста, верхняя граница нижнего тоста для последующих),
+            // поэтому не перекрывает таскбар и тосты текущего слоя в процессе анимации.
+            int startY = targetY + finalSize.y; // нижняя граница слота (для первого тоста = топ таскбара)
             shell.setLocation(targetX, startY);
             shell.setAlpha(0);
             shell.setVisible(true);
 
-            // --- 1. Анимация появления ---
+            // --- 1. Анимация появления (снизу вверх) ---
             int slideSteps = Math.max(1, SLIDE_IN_DURATION_MS / ANIMATION_STEP_MS);
             for (int i = 0; i <= slideSteps; i++)
             {
@@ -166,8 +241,9 @@ public final class EclipseToastNotification
                 {
                     if (!shell.isDisposed())
                     {
+                        // Y: startY → targetY (вниз)
                         shell.setLocation(targetX,
-                            startY - (startY - targetY) * step / slideSteps);
+                            startY + (targetY - startY) * step / slideSteps);
                         shell.setAlpha(255 * step / slideSteps);
                     }
                 });
@@ -186,24 +262,20 @@ public final class EclipseToastNotification
                          && !shell.getBounds().contains(display.getCursorLocation()))
                          { isHovered[0] = false; }
             };
-            addListenerToAll(shell, actionLink, SWT.MouseEnter, hoverListener);
-            addListenerToAll(shell, actionLink, SWT.MouseExit,  hoverListener);
-
-            // --- 3. Клик по фону → копируемый диалог ---
-            Listener clickListener = e ->
-            {
-                if (!shell.isDisposed())
-                {
-                    shell.dispose();
-                    display.asyncExec(() -> openCopyableDialog(title, message));
-                }
-            };
-            shell.addListener(SWT.MouseDown, clickListener);
+            shell.addListener(SWT.MouseEnter, hoverListener);
+            shell.addListener(SWT.MouseExit,  hoverListener);
             for (Control child : shell.getChildren())
-                if (!(child instanceof Link))
-                    child.addListener(SWT.MouseDown, clickListener);
+            {
+                child.addListener(SWT.MouseEnter, hoverListener);
+                child.addListener(SWT.MouseExit,  hoverListener);
+            }
+            if (actionLink != null)
+            {
+                actionLink.addListener(SWT.MouseEnter, hoverListener);
+                actionLink.addListener(SWT.MouseExit,  hoverListener);
+            }
 
-            // --- 4. Таймер удержания + затухание ---
+            // --- 3. Таймер удержания + затухание ---
             Runnable[] loop = new Runnable[1];
             loop[0] = () ->
             {
@@ -269,13 +341,11 @@ public final class EclipseToastNotification
      *
      * <p>Алгоритм:
      * <ol>
-     *   <li>Опорная точка — верхняя граница таскбара
-     *       ({@code clientArea.y + clientArea.height - EDGE_GAP}).</li>
+     *   <li>Опорная точка — верхняя граница таскбара.</li>
      *   <li>Для каждого активного тоста (от нижнего к верхнему): если кандидат
      *       перекрывает его — поднимаем кандидата выше этого тоста.</li>
-     *   <li>Если после обхода всех тостов кандидат выходит за {@code MIN_TOP_MARGIN}
-     *       от верха экрана — начинаем новый слой: возвращаемся к опорной точке
-     *       (тост ляжет поверх тостов предыдущего слоя).</li>
+     *   <li>Если после обхода кандидат выходит за {@code MIN_TOP_MARGIN} от верха
+     *       экрана — начинаем новый слой от таскбара (перекрываем прошлый слой).</li>
      * </ol>
      */
     private static int findSlotTopY(Rectangle clientArea, int toastHeight)
@@ -283,7 +353,7 @@ public final class EclipseToastNotification
         int clientBottom = clientArea.y + clientArea.height - EDGE_GAP;
         int minTopY      = clientArea.y + MIN_TOP_MARGIN;
 
-        // Активные тосты по убыванию нижней границы (самый нижний — первый)
+        // Активные тосты по убыванию нижней границы (нижний — первый)
         List<int[]> slots = activeToasts.stream()
             .filter(e -> !e.shell.isDisposed())
             .map(e -> new int[]{ e.y, e.y + e.height }) // [topY, bottomY]
@@ -309,21 +379,33 @@ public final class EclipseToastNotification
     }
 
     // =======================================================================
-    // ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
+    // ШРИФТЫ
     // =======================================================================
 
-    /**
-     * Добавляет listener ко всем дочерним виджетам.
-     * Для Link ховер нужен тоже, поэтому исключений нет.
-     * MouseDown на Link не добавляем — вызывающий код делает это явно.
-     */
-    private static void addListenerToAll(Shell shell, Link skipLink,
-                                          int eventType, Listener listener)
+    /** Жирный шрифт размера (системный + {@link #FONT_SIZE_DELTA}) для заголовка. */
+    private static Font makeBoldFont(Control control, Display display)
     {
-        shell.addListener(eventType, listener);
-        for (Control child : shell.getChildren())
-            child.addListener(eventType, listener);
+        FontData[] fd = control.getFont().getFontData();
+        fd[0].setStyle(SWT.BOLD);
+        fd[0].setHeight(fd[0].getHeight() + FONT_SIZE_DELTA);
+        Font f = new Font(display, fd);
+        control.addDisposeListener(e -> f.dispose());
+        return f;
     }
+
+    /** Обычный шрифт размера (системный + {@link #FONT_SIZE_DELTA}) для текста. */
+    private static Font makeRegularFont(Control control, Display display)
+    {
+        FontData[] fd = control.getFont().getFontData();
+        fd[0].setHeight(fd[0].getHeight() + FONT_SIZE_DELTA);
+        Font f = new Font(display, fd);
+        control.addDisposeListener(e -> f.dispose());
+        return f;
+    }
+
+    // =======================================================================
+    // ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
+    // =======================================================================
 
     private static void openCopyableDialog(String title, String message)
     {
