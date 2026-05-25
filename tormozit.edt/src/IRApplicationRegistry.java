@@ -97,6 +97,10 @@ public final class IRApplicationRegistry
     private static ServiceSupplier<IInfobaseAccessManager> infobaseAccessManagerSupplier = 
         ServiceAccess.supplier(IInfobaseAccessManager.class, Global.ourContext()); 
     public static IRApplicationRegistry getInstance() { return INSTANCE; }
+    /** Аналог ИмяФайлаБуфера — временный файл-канал между EDT и приложением ИР (ИР 7.03+) */
+    static public String bufferFileName = ""; // оперативный единый для всех приложений EDT и ИР буферный файл, не учитываем пересечения //$NON-NLS-1$
+    /** Аналог выхИспользуемоеИмяФайлаПортативногоИР — путь к .epf или .1cd портативного ИР */
+    static public String usedPortableFileName = ""; //$NON-NLS-1$
 
     private IRApplicationRegistry() {}
     public enum State { IDLE, CONNECTING, CONNECTED }
@@ -111,10 +115,6 @@ public final class IRApplicationRegistry
         public String appTitle;
         public IProject project;
         public final ExecutorService executor; // Выделенный поток для всех операций с этой COM-сессией
-        /** Аналог ИмяФайлаБуфера — временный файл-канал между EDT и приложением ИР (ИР 7.03+) */
-        public String bufferFileName = ""; //$NON-NLS-1$
-        /** Аналог выхИспользуемоеИмяФайлаПортативногоИР — путь к .epf или .1cd портативного ИР */
-        public String usedPortableFileName = ""; //$NON-NLS-1$
         /** Не null, если ИР подключён портативно (ирПортативный.epf), а не через расширение.
          *  В этом случае getModule() использует эту форму вместо root (COM-приложения). */
         public Object moduleRoot = null;
@@ -276,6 +276,17 @@ public final class IRApplicationRegistry
      */
     private void doConnectInternal(IProject project, InfobaseReference infobase)
     {
+        if (bufferFileName == "")
+        {
+            try
+            {
+                bufferFileName = File.createTempFile("tormozit.edt", ".tmp").getAbsolutePath(); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            catch (Exception e)
+            {
+                bufferFileName = System.getProperty("java.io.tmpdir") + "\\tormozit_ir_buffer.tmp"; //$NON-NLS-1$ //$NON-NLS-2$
+            } 
+        }       
         String key = sessionKey(infobase);
         String connectionString = buildConnectionString(infobase, true);
         RuntimeInstallation runtimeInstallation = ApplicationsViewHook.getRuntimeInstallation(project, infobase);
@@ -391,18 +402,6 @@ public final class IRApplicationRegistry
             try { ComBridge.invoke(irClient, "ОткрытьСправкуПоПодсистемеЛкс"); } //$NON-NLS-1$
             catch (Exception ignored) {}
         }
-
-        String bufferFileName;
-        try
-        {
-            bufferFileName = File.createTempFile("tormozit.edt", ".tmp").getAbsolutePath(); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        catch (Exception e)
-        {
-            bufferFileName = System.getProperty("java.io.tmpdir") + "\\tormozit_ir_buffer.tmp"; //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        irSession.bufferFileName = bufferFileName;
-
         long edtPid = ProcessHandle.current().pid(); // Конфигуратор.PID
         try
         {
@@ -589,7 +588,7 @@ public final class IRApplicationRegistry
                 try
                 {
                     Object fn = ComBridge.getProperty(result, "ИспользуемоеИмяФайла"); //$NON-NLS-1$
-                    session.usedPortableFileName = fn instanceof String ? (String) fn : ""; //$NON-NLS-1$
+                    usedPortableFileName = fn instanceof String ? (String) fn : ""; //$NON-NLS-1$
                 }
                 catch (Exception ignored) {}
                 // Если не открыта — открываем; если после открытия всё равно закрыта → ИР обновился

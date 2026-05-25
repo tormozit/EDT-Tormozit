@@ -187,7 +187,7 @@ public class DataCompositionSchemaEditorHook implements IStartup
                         serializer.serializeXML(schema, outputStream, PreferenceUtils.getLineSeparator(project.getWorkspaceProject()), project);
                         ComBridge.setProperty(irSession.root, "Visible", true);
                         Object irClient = irSession.getModule("ирКлиент");
-                        ComBridge.invoke(irClient, "РедактироватьСхемуКомпоновкиИзФайлаЛкс", file);
+                        ComBridge.invoke(irClient, "РедактироватьСхемуКомпоновкиИзФайлаЛкс", file, false, page.getModel().eResource().getURI().path());
                         new File(file).delete();
                         EclipseToastNotification.show("Редактор ИР", "Измененную схему нужно будет вручную загрузить в редактор EDT!");
                     } 

@@ -2,7 +2,18 @@
 
 import java.lang.reflect.Field;
 
+import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.Adapters;
+import org.eclipse.jface.viewers.ISelection;
+import org.eclipse.jface.viewers.IStructuredSelection;
+import org.eclipse.jface.viewers.TreeViewer;
+import org.eclipse.ui.IEditorInput;
+import org.eclipse.ui.IEditorPart;
+import org.eclipse.ui.IViewPart;
+import org.eclipse.ui.IWorkbenchPage;
+import org.eclipse.ui.PlatformUI;
+import org.eclipse.ui.navigator.CommonNavigator;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.FrameworkUtil;
@@ -10,7 +21,8 @@ import org.osgi.framework.FrameworkUtil;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.wiring.IManagedService;
-
+import com._1c.g5.v8.dt.navigator.AbstractDtNavigator;
+import com._1c.g5.v8.dt.md.ui.navigator.adapters.CommonNavigatorAdapter;
 /**
  * Утилиты Java-рефлексии — единый источник правды для всего плагина.
  *
@@ -98,7 +110,7 @@ public final class Global
 
     public static BundleContext ourContext()
     {
-        Bundle b = FrameworkUtil.getBundle(DesignerSessionPoolAccessor.class);
+        Bundle b = FrameworkUtil.getBundle(Global.class);
         return b != null ? b.getBundleContext() : null;
     }
     
@@ -126,5 +138,43 @@ public final class Global
     {
        String timestamp = java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
        System.out.println("[Tormozit " + timestamp + "] " + msg);
+    }
+    
+    public static IProject getActiveEditorProject(boolean showMessage) {
+        IEditorPart activeEditor = null;
+        IWorkbenchPage activePage = PlatformUI.getWorkbench().getActiveWorkbenchWindow().getActivePage();
+        if (activePage != null)
+        {
+            activeEditor = activePage.getActiveEditor();
+            if (activeEditor != null)
+            {
+                IEditorInput input = activeEditor.getEditorInput();
+                if (input != null)
+                {
+                    IFile file = input.getAdapter(IFile.class);
+                    if (file != null)
+                    {
+                        return file.getProject();
+                    }
+                }
+            }
+        }
+        if (activeEditor != null)
+        {
+            CommonNavigator navigator = (CommonNavigator) activePage.findView("com._1c.g5.v8.dt.ui2.navigator"); // ID Навигатора EDT com._1c.g5.v8.dt.internal.navigator.ui.Navigator
+            IStructuredSelection  selection = (IStructuredSelection ) navigator.getSite().getSelectionProvider().getSelection();
+            Object firstElement = selection.getFirstElement();
+            IProject project = (IProject) Adapters.adapt(firstElement, IProject.class);
+            if (project!=null)
+            {
+                return project;
+            }
+            String z = "";
+        }
+        if (showMessage)
+        {
+            EclipseToastNotification.show("Проект", "Отсутствует активный проект");
+        }
+        return null;
     }
 }
