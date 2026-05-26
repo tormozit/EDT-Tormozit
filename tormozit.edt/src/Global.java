@@ -1,6 +1,9 @@
 
 
+import java.io.File;
+import java.io.IOException;
 import java.lang.reflect.Field;
+import java.nio.file.Files;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
@@ -177,4 +180,15 @@ public final class Global
         }
         return null;
     }
-}
+
+    public static String readTextFromFile(File commandFile) throws IOException
+    {
+        String text;
+        text = Files.readString(commandFile.toPath());
+        if (text.startsWith("\uFEFF")) {
+           // Удаляем BOM 
+            text = text.substring(1); 
+        }
+        return text;
+    }
+ }

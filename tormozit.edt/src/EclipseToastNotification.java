@@ -154,22 +154,9 @@ public final class EclipseToastNotification
                 toolBar.setLayoutData(tbData);
 
                 ToolItem closeItem = new ToolItem(toolBar, SWT.PUSH);
-                // Можно использовать текст или системную картинку
                 closeItem.setText("✕");
                 closeItem.addListener(SWT.Selection, e ->
                 { if (!shell.isDisposed()) shell.dispose(); });
-                
-//                // Так у кнопки будет постоянная рамка
-//                Button closeBtn = new Button(header, SWT.PUSH);
-//                closeBtn.setLayoutData(new GridData(SWT.RIGHT, SWT.TOP, false, false));
-//                closeBtn.setText("\u00D7"); // ×  //$NON-NLS-1$
-//                closeBtn.setBackground(bgColor);
-//                closeBtn.setForeground(fgColor);
-//                closeBtn.setFont(makeBoldFont(closeBtn, display));
-////                closeBtn.setCursor(display.getSystemCursor(SWT.CURSOR_HAND));
-//                // Клик на ×: только закрыть, без диалога
-//                closeBtn.addListener(SWT.Selection, e ->
-//                    { if (!shell.isDisposed()) shell.dispose(); });
             }
 
             // --- Сообщение ---
@@ -229,10 +216,8 @@ public final class EclipseToastNotification
             activeToasts.add(entry);
             shell.addDisposeListener(e -> activeToasts.remove(entry));
 
-            // Тост выезжает СНИЗУ ВВЕРХ: начинает в нижней границе своего слота (верхняя
-            // граница таскбара для первого тоста, верхняя граница нижнего тоста для последующих),
-            // поэтому не перекрывает таскбар и тосты текущего слоя в процессе анимации.
-            int startY = targetY + finalSize.y; // нижняя граница слота (для первого тоста = топ таскбара)
+            // Тост выезжает СНИЗУ ВВЕРХ
+            int startY = targetY + finalSize.y;
             shell.setLocation(targetX, startY);
             shell.setAlpha(0);
             shell.setVisible(true);
@@ -246,7 +231,6 @@ public final class EclipseToastNotification
                 {
                     if (!shell.isDisposed())
                     {
-                        // Y: startY → targetY (вниз)
                         shell.setLocation(targetX,
                             startY + (targetY - startY) * step / slideSteps);
                         shell.setAlpha(255 * step / slideSteps);
@@ -341,27 +325,14 @@ public final class EclipseToastNotification
     // АЛГОРИТМ РАЗМЕЩЕНИЯ: стек снизу вверх, при переполнении — новый слой
     // =======================================================================
 
-    /**
-     * Возвращает Y-координату верхней границы нового тоста (в координатах экрана).
-     *
-     * <p>Алгоритм:
-     * <ol>
-     *   <li>Опорная точка — верхняя граница таскбара.</li>
-     *   <li>Для каждого активного тоста (от нижнего к верхнему): если кандидат
-     *       перекрывает его — поднимаем кандидата выше этого тоста.</li>
-     *   <li>Если после обхода кандидат выходит за {@code MIN_TOP_MARGIN} от верха
-     *       экрана — начинаем новый слой от таскбара (перекрываем прошлый слой).</li>
-     * </ol>
-     */
     private static int findSlotTopY(Rectangle clientArea, int toastHeight)
     {
         int clientBottom = clientArea.y + clientArea.height - EDGE_GAP;
         int minTopY      = clientArea.y + MIN_TOP_MARGIN;
 
-        // Активные тосты по убыванию нижней границы (нижний — первый)
         List<int[]> slots = activeToasts.stream()
             .filter(e -> !e.shell.isDisposed())
-            .map(e -> new int[]{ e.y, e.y + e.height }) // [topY, bottomY]
+            .map(e -> new int[]{ e.y, e.y + e.height })
             .sorted(Comparator.<int[], Integer>comparing(s -> s[1]).reversed())
             .collect(Collectors.toList());
 
@@ -369,14 +340,12 @@ public final class EclipseToastNotification
 
         for (int[] slot : slots)
         {
-            // Если кандидат [candidateBottom-toastHeight .. candidateBottom] задевает слот
             if (candidateBottom - toastHeight < slot[1] + GAP_BETWEEN)
-                candidateBottom = slot[0] - GAP_BETWEEN; // поднимаем выше этого тоста
+                candidateBottom = slot[0] - GAP_BETWEEN;
         }
 
         int candidateTop = candidateBottom - toastHeight;
 
-        // Нет места → новый слой: снова от таскбара (перекрываем тосты прошлого слоя)
         if (candidateTop < minTopY)
             candidateTop = clientBottom - toastHeight;
 
@@ -387,7 +356,6 @@ public final class EclipseToastNotification
     // ШРИФТЫ
     // =======================================================================
 
-    /** Жирный шрифт размера (системный + {@link #FONT_SIZE_DELTA}) для заголовка. */
     private static Font makeBoldFont(Control control, Display display)
     {
         FontData[] fd = control.getFont().getFontData();
@@ -398,7 +366,6 @@ public final class EclipseToastNotification
         return f;
     }
 
-    /** Обычный шрифт размера (системный + {@link #FONT_SIZE_DELTA}) для текста. */
     private static Font makeRegularFont(Control control, Display display)
     {
         FontData[] fd = control.getFont().getFontData();
@@ -409,7 +376,7 @@ public final class EclipseToastNotification
     }
 
     // =======================================================================
-    // ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
+    // ДИАЛОГ ПРОСМОТРА ТЕКСТА УВЕДОМЛЕНИЯ (открывается по клику на тост)
     // =======================================================================
 
     private static void openCopyableDialog(String title, String message)
@@ -419,8 +386,10 @@ public final class EclipseToastNotification
         dialog.setText(title != null && !title.isEmpty() ? title : "Текст уведомления"); //$NON-NLS-1$
         dialog.setLayout(new GridLayout(1, false));
 
+        // SWT.WRAP вместо SWT.H_SCROLL — текст переносится по словам,
+        // горизонтальная полоса прокрутки не нужна.
         Text textWidget = new Text(dialog,
-            SWT.MULTI | SWT.READ_ONLY | SWT.BORDER | SWT.V_SCROLL | SWT.H_SCROLL);
+            SWT.MULTI | SWT.READ_ONLY | SWT.BORDER | SWT.V_SCROLL | SWT.WRAP);
         textWidget.setText(message != null ? message : ""); //$NON-NLS-1$
         GridData gd   = new GridData(SWT.FILL, SWT.FILL, true, true);
         gd.widthHint  = 480;

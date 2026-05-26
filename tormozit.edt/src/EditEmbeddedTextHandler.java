@@ -1,31 +1,36 @@
 
+import org.eclipse.core.resources.IFile;
+import org.eclipse.core.resources.IProject;
 import org.eclipse.jface.text.BadLocationException;
 import org.eclipse.jface.text.IDocument;
 import org.eclipse.jface.text.IRegion;
 import org.eclipse.jface.text.ITextSelection;
 import org.eclipse.jface.text.source.ISourceViewer;
-import org.eclipse.jface.viewers.ISelection;
+import org.eclipse.ui.IEditorInput;
 
 import com._1c.g5.v8.dt.bsl.ui.editor.BslXtextEditor;
+import com._1c.g5.v8.dt.core.platform.IDtProject;
+import com._1c.g5.v8.dt.core.platform.IV8Project;
+import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 
 /**
- * Обработчик команды «Редактировать вложенный текст».
+ * Обработчик команды «Вложенный текст» в контекстном меню BSL-редактора.
  *
- * <p>Вызывается из {@link BSLEditorMenuHook} при выборе одноимённого пункта
- * контекстного меню BSL-редактора.
+ * <p>Извлекает строковый литерал BSL под курсором и передаёт его в приложение ИР
+ * через {@code ирКлиент.ОткрытьТекстЛкс(текст)}, аналогично тому, как
+ * {@code DataCompositionSchemaEditorHook} вызывает
+ * {@code ирКлиент.РедактироватьСхемуКомпоновкиИзФайлаЛкс()}.
  *
- * <h3>Контракт</h3>
+ * <h3>Поддерживаемые форматы BSL-строк</h3>
  * <ul>
- *   <li>{@link #isApplicable(BslXtextEditor)} — быстрая проверка,
- *       нужно ли вообще показывать пункт меню (курсор находится внутри
- *       строкового литерала или в ином «вложенном» контексте).</li>
- *   <li>{@link #editEmbeddedText(BslXtextEditor)} — собственно открытие
- *       вложенного текста на редактирование.</li>
+ *   <li>Однострочные: {@code "текст"}</li>
+ *   <li>Многострочные с продолжением через {@code |}:
+ *       <pre>
+ *       "первая строка
+ *       |вторая строка
+ *       |третья строка"
+ *       </pre></li>
  * </ul>
- *
- * <p><b>TODO:</b> Реализовать логику определения вложенного текста
- * (строковый литерал / шаблон запроса / HTML-шаблон) и открытие
- * соответствующего диалога / дополнительного редактора.
  */
 public final class EditEmbeddedTextHandler
 {
@@ -36,115 +41,285 @@ public final class EditEmbeddedTextHandler
     // =========================================================================
 
     /**
-     * Проверяет, применима ли команда в текущем состоянии редактора.
-     *
-     * <p>Возвращает {@code true}, если курсор находится в позиции, для которой
-     * имеет смысл редактировать вложенный текст (например, внутри строкового
-     * литерала). {@code false} приводит к тому, что пункт меню не отображается.
-     *
-     * @param editor активный BSL-редактор; не {@code null}
-     * @return {@code true} — команда применима
+     * Быстрая проверка применимости команды: курсор находится внутри
+     * строкового литерала BSL. Вызывается на UI-потоке при отображении меню.
      */
     public static boolean isApplicable(BslXtextEditor editor)
     {
-        // TODO: реализовать точную проверку контекста (лексический анализ позиции курсора)
-        // Пример заглушки — команда всегда видима, пока логика не реализована:
-        return true;
+        ISourceViewer viewer = editor.getInternalSourceViewer();
+        if (viewer == null) return false;
+
+        IDocument doc = viewer.getDocument();
+        if (doc == null) return false;
+
+        Object sel = viewer.getSelectionProvider().getSelection();
+        if (!(sel instanceof ITextSelection)) return false;
+
+        return extractStringLiteral(doc, ((ITextSelection) sel).getOffset()) != null;
     }
 
     /**
-     * Выполняет «Редактировать вложенный текст».
+     * Открывает редактор вложенного текста в приложении ИР.
      *
-     * <p>Определяет строковый литерал / шаблон, на котором стоит курсор,
-     * и открывает его содержимое для редактирования в отдельном виджете.
-     *
-     * @param editor активный BSL-редактор; не {@code null}
+     * <p>Алгоритм:
+     * <ol>
+     *   <li>Извлекает строковый литерал BSL под курсором.</li>
+     *   <li>Определяет {@link IDtProject} по файлу, открытому в редакторе.</li>
+     *   <li>Получает (или инициирует) сессию ИР для этого проекта.</li>
+     *   <li>В потоке COM-сессии вызывает {@code ирКлиент.ОткрытьТекстЛкс(текст)}.</li>
+     * </ol>
      */
     public static void editEmbeddedText(BslXtextEditor editor)
     {
+        // 1. Получаем viewer и документ
         ISourceViewer viewer = editor.getInternalSourceViewer();
-        if (viewer == null)
-            return;
+        if (viewer == null) return;
 
         IDocument doc = viewer.getDocument();
-        if (doc == null)
-            return;
+        if (doc == null) return;
 
-        ISelection selection = viewer.getSelectionProvider().getSelection();
-        if (!(selection instanceof ITextSelection))
-            return;
+        Object sel = viewer.getSelectionProvider().getSelection();
+        if (!(sel instanceof ITextSelection)) return;
 
-        int offset = ((ITextSelection) selection).getOffset();
+        int offset = ((ITextSelection) sel).getOffset();
 
-        String embeddedText = extractEmbeddedText(doc, offset);
+        // 2. Извлекаем строковый литерал под курсором
+        String embeddedText = extractStringLiteral(doc, offset);
         if (embeddedText == null)
         {
-            Global.log("EditEmbeddedTextHandler: курсор не находится во вложенном тексте"); //$NON-NLS-1$
+            EclipseToastNotification.show("Вложенный текст",
+                "Поместите курсор внутрь строкового литерала BSL");
             return;
         }
 
-        // TODO: открыть диалог / дополнительный редактор с embeddedText
-        // Пример: EmbeddedTextDialog.open(editor.getSite().getShell(), embeddedText, doc, offset);
-        Global.log("EditEmbeddedTextHandler: вложенный текст = " + embeddedText); //$NON-NLS-1$
+        // 3. Определяем проект
+        IDtProject dtProject = getProjectFromBslEditor(editor);
+        if (dtProject == null)
+        {
+            EclipseToastNotification.show("Вложенный текст",
+                "Не удалось определить проект редактора");
+            return;
+        }
+
+        // 4. Получаем или инициируем сессию ИР (аналог DataCompositionSchemaEditorHook)
+        IRApplicationRegistry.IrSession irSession =
+            IRApplicationRegistry.getSession(dtProject);
+        if (irSession == null || irSession.executor == null)
+        {
+            // getSession() уже запустил подключение — сообщаем пользователю
+            EclipseToastNotification.show("Вложенный текст",
+                "Ожидайте подключения к приложению ИР, затем повторите команду");
+            return;
+        }
+
+        final String textToOpen = embeddedText;
+
+        // 5. Вызываем ОткрытьТекстЛкс() строго в потоке COM-сессии
+        irSession.executor.submit(() ->
+        {
+            try
+            {
+                ComBridge.setProperty(irSession.root, "Visible", true); //$NON-NLS-1$
+                Object irClient = irSession.getModule("ирКлиент"); //$NON-NLS-1$
+                ComBridge.invoke(irClient, "ОткрытьТекстЛкс", textToOpen); //$NON-NLS-1$
+            }
+            catch (Exception e)
+            {
+                Global.log("EditEmbeddedTextHandler: ошибка вызова ИР: " + e.getMessage()); //$NON-NLS-1$
+                EclipseToastNotification.show("Вложенный текст",
+                    "Ошибка вызова ИР: " + e.getMessage(), 5_000);
+            }
+        });
     }
 
     // =========================================================================
-    // Внутренняя логика
+    // Извлечение строкового литерала BSL
     // =========================================================================
 
     /**
-     * Извлекает текст строкового литерала, в котором находится позиция {@code offset}.
+     * Возвращает содержимое строкового литерала BSL, в котором находится
+     * позиция {@code offset}, без кавычек и символов продолжения {@code |}.
      *
-     * <p>В BSL строковые литералы могут быть:
-     * <ul>
-     *   <li>однострочными: {@code "текст"}</li>
-     *   <li>многострочными (с продолжением через {@code |}).</li>
-     * </ul>
-     *
-     * @param doc    документ редактора
-     * @param offset смещение курсора
-     * @return содержимое строкового литерала без кавычек, или {@code null}
-     *         если курсор вне строкового литерала
+     * <p>Поддерживает однострочные и многострочные (через {@code |}) литералы.
+     * Возвращает {@code null}, если курсор не находится внутри литерала.
      */
-    private static String extractEmbeddedText(IDocument doc, int offset)
+    static String extractStringLiteral(IDocument doc, int offset)
     {
         try
         {
-            IRegion lineInfo = doc.getLineInformationOfOffset(offset);
-            String line = doc.get(lineInfo.getOffset(), lineInfo.getLength());
-            int posInLine = offset - lineInfo.getOffset();
+            int cursorLine = doc.getLineOfOffset(offset);
 
-            // Ищем ближайшую открывающую кавычку слева от курсора
-            int openQuote = -1;
-            for (int i = posInLine - 1; i >= 0; i--)
+            // ── Шаг 1: найти строку с открывающей кавычкой ─────────────────
+            // Курсор может быть на строке продолжения (начинается с |),
+            // поэтому идём назад до строки, которая НЕ является продолжением.
+
+            int openingLineNum = cursorLine;
+            for (int ln = cursorLine; ln >= 0; ln--)
             {
-                if (line.charAt(i) == '"')
+                IRegion li   = doc.getLineInformation(ln);
+                String  text = doc.get(li.getOffset(), li.getLength());
+
+                if (ln == cursorLine)
                 {
-                    openQuote = i;
-                    break;
+                    if (!text.stripLeading().startsWith("|")) //$NON-NLS-1$
+                    {
+                        openingLineNum = ln; // курсор уже на строке с "
+                        break;
+                    }
+                    // иначе — строка продолжения, идём выше
+                }
+                else
+                {
+                    // Строки выше курсора
+                    if (!text.stripLeading().startsWith("|")) //$NON-NLS-1$
+                    {
+                        openingLineNum = ln;
+                        break;
+                    }
                 }
             }
-            if (openQuote < 0)
-                return null;
 
-            // Ищем закрывающую кавычку справа от курсора
-            int closeQuote = -1;
-            for (int i = posInLine; i < line.length(); i++)
+            // ── Шаг 2: найти открывающую кавычку на openingLineNum ──────────
+            IRegion openLineInfo = doc.getLineInformation(openingLineNum);
+            String  openLineText = doc.get(openLineInfo.getOffset(), openLineInfo.getLength());
+
+            // Лимит поиска по X: если курсор на той же строке — до курсора;
+            // если курсор на строке продолжения — весь текст строки.
+            int scanLimit = (openingLineNum == cursorLine)
+                ? offset - openLineInfo.getOffset()
+                : openLineText.length();
+
+            // Ищем последнюю незакрытую кавычку (при нечётном счётчике)
+            int openQuoteIdx = -1;
+            int quoteCount   = 0;
+            for (int i = 0; i < scanLimit; i++)
             {
-                if (line.charAt(i) == '"')
+                if (openLineText.charAt(i) == '"')
                 {
-                    closeQuote = i;
-                    break;
+                    quoteCount++;
+                    if (quoteCount % 2 == 1)
+                        openQuoteIdx = i; // потенциальная открывающая
+                    else
+                        openQuoteIdx = -1; // закрылась
                 }
             }
-            if (closeQuote < 0)
-                return null;
 
-            return line.substring(openQuote + 1, closeQuote);
+            if (openQuoteIdx < 0)
+                return null; // курсор вне строки
+
+            // ── Шаг 3: собрать содержимое литерала ──────────────────────────
+            String afterOpenQuote = openLineText.substring(openQuoteIdx + 1);
+
+            // Однострочный вариант: закрывающая " на той же строке
+            int closeIdx = afterOpenQuote.indexOf('"');
+            if (closeIdx >= 0)
+                return afterOpenQuote.substring(0, closeIdx);
+
+            // Многострочный: собираем строки продолжения (начинаются с |)
+            StringBuilder sb = new StringBuilder(afterOpenQuote);
+
+            for (int ln = openingLineNum + 1; ln < doc.getNumberOfLines(); ln++)
+            {
+                IRegion li       = doc.getLineInformation(ln);
+                String  lineText = doc.get(li.getOffset(), li.getLength());
+                String  trimmed  = lineText.stripLeading();
+
+                if (!trimmed.startsWith("|")) //$NON-NLS-1$
+                    break; // не продолжение — литерал не закрыт корректно
+
+                String lineContent = trimmed.substring(1); // убираем |
+
+                int closeQuote = lineContent.indexOf('"');
+                if (closeQuote >= 0)
+                {
+                    // Нашли закрывающую кавычку
+                    sb.append('\n').append(lineContent, 0, closeQuote);
+                    return sb.toString();
+                }
+
+                sb.append('\n').append(lineContent);
+            }
+
+            return null; // закрывающая кавычка не найдена
         }
         catch (BadLocationException e)
         {
             return null;
         }
+    }
+
+    // =========================================================================
+    // Получение IDtProject из BslXtextEditor
+    // =========================================================================
+
+    /**
+     * Возвращает {@link IDtProject} для файла, открытого в BSL-редакторе.
+     *
+     * <p>Стратегии (в порядке убывания надёжности):
+     * <ol>
+     *   <li>Рефлексия по полю {@code project} — некоторые редакторы хранят его напрямую.</li>
+     *   <li>{@code IEditorInput → IFile → IProject → IV8ProjectManager.getDtProject()}.</li>
+     *   <li>Перебор всех известных проектов по {@code IProject.equals()}.</li>
+     * </ol>
+     */
+    private static IDtProject getProjectFromBslEditor(BslXtextEditor editor)
+    {
+        // Стратегия 1: прямое поле
+        Object p = Global.getField(editor, "project"); //$NON-NLS-1$
+        if (p instanceof IDtProject) return (IDtProject) p;
+
+        try
+        {
+            // Стратегия 2: через IFile
+            IEditorInput input = editor.getEditorInput();
+            if (input == null) return null;
+
+            IFile file = input.getAdapter(IFile.class);
+            if (file == null) return null;
+
+            IProject iProject = file.getProject();
+
+            IV8ProjectManager projectManager =
+                (IV8ProjectManager) Global.getServiceByClass(IV8ProjectManager.class);
+            if (projectManager == null) return null;
+
+            // Пробуем getDtProject(IProject) — наиболее вероятное имя метода
+            Object result = Global.invoke(projectManager, "getDtProject", iProject); //$NON-NLS-1$
+            if (result instanceof IDtProject) return (IDtProject) result;
+
+            // Стратегия 3: перебор всех проектов
+            Object allProjects = Global.call(projectManager, "getProjects"); //$NON-NLS-1$
+            if (allProjects instanceof Iterable<?>)
+            {
+                for (Object proj : (Iterable<?>) allProjects)
+                {
+                    IDtProject candidate = toDtProject(proj);
+                    if (candidate != null
+                        && iProject.equals(candidate.getWorkspaceProject()))
+                        return candidate;
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            Global.log("EditEmbeddedTextHandler.getProjectFromBslEditor: " + e); //$NON-NLS-1$
+        }
+
+        return null;
+    }
+
+    /**
+     * Приводит объект к {@link IDtProject}:
+     * напрямую или через {@link IV8Project#getDtProject()}.
+     */
+    private static IDtProject toDtProject(Object proj)
+    {
+        if (proj instanceof IDtProject) return (IDtProject) proj;
+        if (proj instanceof IV8Project)
+        {
+            Object dt = Global.call(proj, "getDtProject"); //$NON-NLS-1$
+            if (dt instanceof IDtProject) return (IDtProject) dt;
+        }
+        return null;
     }
 }

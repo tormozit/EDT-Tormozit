@@ -216,19 +216,21 @@ public class DataCompositionSchemaEditorHook implements IStartup
         IV8ProjectManager projectManager = (IV8ProjectManager) Global.getServiceByClass(IV8ProjectManager.class);
         IV8Project v8Project = projectManager.getProject(project);
         int convertMode = v8Project.getCompatibilityMode().compareTo(CompatibilityMode.VERSION8_323) <= 0 ? 0 : 1;
-        FileOutputStream fileStream = new FileOutputStream(file);
-        OutputStream outputStream = new ChangeAnyRefTypeOutputStream(fileStream, convertMode);
+        try (FileOutputStream fileStream = new FileOutputStream(file)) 
+        {
+            OutputStream outputStream = new ChangeAnyRefTypeOutputStream(fileStream, convertMode);
 //                        outputStream.write(BOM); // new byte[]{-17, -69, -65};
 //                        Version version = runtimeVersionSupport.getRuntimeVersion(schema);
-        Version version = v8Project.getVersion();
-        DcsV8Serializer serializer = new DcsV8Serializer(project, version, resourceLookup);
-        serializer.serializeXML(schema, outputStream, PreferenceUtils.getLineSeparator(project.getWorkspaceProject()), project);
-        return file;
+            Version version = v8Project.getVersion();
+            DcsV8Serializer serializer = new DcsV8Serializer(project, version, resourceLookup);
+            serializer.serializeXML(schema, outputStream, PreferenceUtils.getLineSeparator(project.getWorkspaceProject()), project);
+            return file;
+        }
     }
 
     public static boolean importFromFile(DtGranularEditorEmbeddedEditorPage<?> page, File file)
     {
-        // com._1c.g5.v8.dt.dcs.ui.datasets.DataSetsSaveHandler.DataSetsSaveHandler()
+     // com._1c.g5.v8.dt.dcs.ui.datasets.DataSetsLoadHandler.DataSetsLoadHandler()
         DataCompositionSchemaEditor dcsEditor = (DataCompositionSchemaEditor) page.getEmbeddedEditor();
         Object editor = Global.getField(page, "editor");
         Object BmModel = Global.getField(editor, "bmModel");
@@ -237,15 +239,14 @@ public class DataCompositionSchemaEditorHook implements IStartup
         IV8Project v8Project = projectManager.getProject(project);
         Version version = v8Project.getVersion();
         DcsV8Serializer serializer = new DcsV8Serializer(project, version, resourceLookup);
-        try
+        try (FileInputStream fis = new FileInputStream(file))
         {
-            DataCompositionSchema schema = serializer.deserializeXML(new FileInputStream(file));
+            DataCompositionSchema schema = serializer.deserializeXML(fis);
             dcsEditor.setModel(schema);
             return false;
         }
         catch (Exception e)
         {
-            // TODO Auto-generated catch block
             e.printStackTrace();
         }
         return true;

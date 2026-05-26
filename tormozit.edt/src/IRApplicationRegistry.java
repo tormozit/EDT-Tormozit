@@ -357,7 +357,7 @@ public final class IRApplicationRegistry
 
         long   duration = (System.currentTimeMillis() - momentStart) / 1000;
         String title    = "ИР - " + connectionStringNoPass.split(";")[0]; //$NON-NLS-1$ //$NON-NLS-2$
-
+        ComBridge.setProperty(comDispatch, "Visible", false);
         // УстановитьЗаголовок (8.3.10+) / УстановитьЗаголовокСистемы (8.3.9-)
         try
         {
@@ -1005,8 +1005,9 @@ public final class IRApplicationRegistry
         catch (Exception e)
         { return null; }
         IApplicationManager appManager = ctx.getService(ctx.getServiceReference(IApplicationManager.class));
-        List <IApplication> apps = appManager.getApplications(dtProject.getWorkspaceProject());
         IInfobaseApplication application = null;
+//      application = appManager.getDefaultApplication(dtProject.getWorkspaceProject());
+        List <IApplication> apps = appManager.getApplications(dtProject.getWorkspaceProject());
         for (IApplication elem : apps)
         {
             if (elem instanceof IInfobaseApplication)

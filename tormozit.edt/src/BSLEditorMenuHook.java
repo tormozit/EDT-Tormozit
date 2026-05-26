@@ -105,7 +105,7 @@ public class BSLEditorMenuHook implements IStartup
 
     private void hookWindow(IWorkbenchWindow window)
     {
-        // Уже открытые редакторы (восстановлённая сессия)
+        // Уже открытые редакторы (восстановленная сессия)
         IWorkbenchPage page = window.getActivePage();
         if (page != null)
         {

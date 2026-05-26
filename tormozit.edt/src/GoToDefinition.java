@@ -57,7 +57,9 @@ import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.dcs.ui.DataCompositionSchemaEditor;
 import com._1c.g5.v8.dt.export.ExportException;
+import com._1c.g5.v8.dt.md.ui.editor.base.DtGranularEditor;
 import com._1c.g5.v8.dt.md.ui.editor.base.DtGranularEditorEmbeddedEditorPage;
 import com.google.inject.Inject;
 
@@ -240,6 +242,8 @@ public class GoToDefinition extends AbstractHandler
         long PID = 0;
         String command = "";
         String transportFolder = IRApplicationRegistry.transportFolder;
+        Shell shell = HandlerUtil.getActiveShell(event);
+        IWorkbenchPage page = HandlerUtil.getActiveWorkbenchWindow(event).getActivePage();
         File commandFile = new File(transportFolder + "\\Команда.txt");
         if (true
             && commandFile.exists()
@@ -247,7 +251,7 @@ public class GoToDefinition extends AbstractHandler
         {
             try
             {
-                command = Files.readString(commandFile.toPath());
+                command = Global.readTextFromFile(commandFile);
                 Files.delete(commandFile.toPath());
                 ObjectMapper mapper = new ObjectMapper();
                 JsonNode commandObject = mapper.readTree(command);
@@ -271,32 +275,33 @@ public class GoToDefinition extends AbstractHandler
             newFile = new File(transportFolder.toString() + "\\НовыйТекст.txt");
             oldFile = new File(transportFolder.toString() + "\\СтарыйТекст.txt");
         }
-        Shell shell = HandlerUtil.getActiveShell(event);
-        IWorkbenchPage page = HandlerUtil.getActiveWorkbenchWindow(event).getActivePage();
-        String ref = getClipboardText(shell);
-        if (ref == null || ref.isBlank())
+        else
         {
-            EclipseToastNotification.show("Перейти к определению", //$NON-NLS-1$
-                "Буфер обмена пуст.", 4000); //$NON-NLS-1$
-            return null;
+            command = getClipboardText(shell);
+            if (command == null || command.isBlank())
+            {
+                EclipseToastNotification.show("Перейти к определению", //$NON-NLS-1$
+                    "Буфер обмена пуст.", 4000); //$NON-NLS-1$
+                return null;
+            }
+            command = command.strip();
         }
-        ref = ref.strip();
-        Global.log("GoToDefinition: ref = " + ref); //$NON-NLS-1$
-
-        if (!jump(ref, shell, page))
+        Global.log("GoToDefinition: ref = " + command); //$NON-NLS-1$
+        if (!jump(command, shell, page))
             EclipseToastNotification.show("Перейти к определению", //$NON-NLS-1$
-                "Не удалось перейти по ссылке:\n" + truncate(ref, 120), 5000); //$NON-NLS-1$
+                "Не удалось перейти по ссылке:\n" + truncate(command, 120), 5000); //$NON-NLS-1$
 
          if (newFile != null) {
-             if (command.contains("Макет.")) {
+             if (command.contains("Макет.")||command.contains("Template.")) {
                  // Мультиметка260525_210353
                  boolean allowImport = false;
                  String currentFilename = null;
-                 DtGranularEditorEmbeddedEditorPage dcsEditor = (DtGranularEditorEmbeddedEditorPage)page;
+                 DtGranularEditor templateEditor = (DtGranularEditor) page.getActiveEditor(); // TemplateEditor
+                 DtGranularEditorEmbeddedEditorPage dcsEditor = (DtGranularEditorEmbeddedEditorPage) templateEditor.findPage("editors.commontemplate.pages.dcs");
                  try
                 {
                      currentFilename = DataCompositionSchemaEditorHook.exportToFile(dcsEditor);
-                     allowImport = Files.readString(new File(currentFilename).toPath()) == Files.readString(oldFile.toPath());
+                     allowImport = Global.readTextFromFile(new File(currentFilename)).compareTo(Global.readTextFromFile(oldFile))==0;
                 }
                 catch (Exception e)
                 {
@@ -308,12 +313,13 @@ public class GoToDefinition extends AbstractHandler
                    DataCompositionSchemaEditorHook.importFromFile(dcsEditor, newFile);
                 }
                else {
-                   EclipseToastNotification.show(ref, "Объект был изменен в EDT после начала редактирования в приложении ИР. Загрузка не выполнена. Временный файл новой версии - " + newFile.toString(), 10000);
+                   EclipseToastNotification.show(command, "Объект был изменен в EDT после начала редактирования в приложении ИР. Загрузка не выполнена. Временный файл новой версии - " + newFile.toString(), 10000);
                }
              }
          }
         return null;
     }
+
 
     // =======================================================================
     // ГЛАВНЫЙ ДИСПЕТЧЕР (ПерейтиПоСсылкеМД — EDT-часть)
@@ -549,7 +555,13 @@ public class GoToDefinition extends AbstractHandler
                 "Сначала нужно активировать проект."); //$NON-NLS-1$
             return false;
         }
-
+        EObject eObject = resolveEObjectByQualifiedName(fullName, v8Project);
+        if (eObject != null)
+        {
+            openEObjectInEditor(eObject, page, shell);
+            return true;
+        }
+        
         String mdoPath = mdNameToMdoPath(fullName);
         if (mdoPath == null)
         {
@@ -565,7 +577,7 @@ public class GoToDefinition extends AbstractHandler
         }
 
         // ── Шаг 1: EObject через ResourceSet проекта ──
-        EObject eObject = resolveEObjectViaResourceSet(mdoFile, v8Project);
+        eObject = resolveEObjectViaResourceSet(mdoFile, v8Project);
         if (eObject != null)
         {
             openEObjectInEditor(eObject, page, shell);
@@ -591,21 +603,26 @@ public class GoToDefinition extends AbstractHandler
         URI fileUri = URI.createPlatformResourceURI(file.getFullPath().toString(), true);
         IResourceServiceProvider rsp = IResourceServiceProvider.Registry.INSTANCE.getResourceServiceProvider(fileUri);
         IQualifiedNameFilePathConverter filePathConverter = rsp.get(IQualifiedNameFilePathConverter.class);
-        IBmModelManager modelManager = (IBmModelManager)Global.getServiceByClass(IBmModelManager.class);
-        BmPlatform platform = modelManager.getBmPlatform();
-        IBmNamespace ns = modelManager.getBmNamespace(v8Project.getProject());
         QualifiedName fqn = filePathConverter.getFqn(file);
         if (fqn == null)
         {
             Global.log("GoToDefinition: getFqn вернул null для " + file.getFullPath()); //$NON-NLS-1$
             return null;
         }
+        EObject topObject = resolveEObjectByQualifiedName(fqn.toString(), v8Project);
+        return topObject;
+    }
 
+    public static EObject resolveEObjectByQualifiedName(String fqn, IV8Project v8Project)
+    {
+        IBmModelManager modelManager = (IBmModelManager)Global.getServiceByClass(IBmModelManager.class);
+        BmPlatform platform = modelManager.getBmPlatform();
         IBmPlatformTransaction transaction = platform.beginReadOnlyTransaction(true);
         EObject topObject = null;
+        IBmNamespace ns = modelManager.getBmNamespace(v8Project.getProject());
         try
         {
-            topObject = (EObject) transaction.getTopObjectByFqn(ns, fqn.toString());
+            topObject = (EObject) transaction.getTopObjectByFqn(ns, fqn);
         }
         catch (Exception e)
         {
