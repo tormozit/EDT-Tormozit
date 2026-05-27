@@ -19,6 +19,7 @@ import org.eclipse.jface.viewers.EditingSupport;
 import org.eclipse.jface.viewers.IBaseLabelProvider;
 import org.eclipse.jface.viewers.ILabelProvider;
 import org.eclipse.jface.dialogs.MessageDialog;
+import org.eclipse.jface.resource.JFaceResources;
 import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.jface.viewers.TreeViewer;
 import org.eclipse.jface.viewers.TreeViewerColumn;
@@ -467,7 +468,6 @@ public class ApplicationsViewHook implements IStartup
         IToolBarManager tb = bars.getToolBarManager();
         ToolItem[] connectionRef = { null };
         ToolItem[] launchRef     = { null };
-
         tb.add(new Separator());
 
         // Кнопка «Запустить конфигуратор» — дублирует одноимённый пункт контекстного меню
@@ -475,6 +475,9 @@ public class ApplicationsViewHook implements IStartup
         {
             @Override public void fill(ToolBar bar, int index)
             {
+                if (bar != null && !bar.isDisposed()) {
+                    bar.setFont(org.eclipse.jface.resource.JFaceResources.getDialogFont());
+                }
                 ToolItem item = index >= 0
                     ? new ToolItem(bar, SWT.PUSH, index)
                     : new ToolItem(bar, SWT.PUSH);
