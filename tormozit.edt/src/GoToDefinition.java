@@ -1,8 +1,6 @@
 
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.io.ObjectInputStream.GetField;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.util.ArrayList;
@@ -12,8 +10,6 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import javax.xml.stream.XMLStreamException;
-
 import org.eclipse.core.commands.AbstractHandler;
 import org.eclipse.core.commands.ExecutionEvent;
 import org.eclipse.core.commands.ExecutionException;
@@ -22,8 +18,6 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
-import org.eclipse.emf.ecore.resource.Resource;
-import org.eclipse.emf.ecore.resource.ResourceSet;
 import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.jface.text.BadLocationException;
 import org.eclipse.jface.text.IDocument;
@@ -40,159 +34,106 @@ import org.eclipse.ui.ide.IDE;
 import org.eclipse.ui.texteditor.ITextEditor;
 import org.eclipse.xtext.naming.QualifiedName;
 import org.eclipse.xtext.resource.IResourceServiceProvider;
-import org.eclipse.xtext.ui.label.GlobalDescriptionLabelProvider;
-import com.google.inject.Injector;
-
-import javafx.scene.shape.Path;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.core.JsonProcessingException;
 
 import com._1c.g5.v8.bm.core.BmPlatform;
 import com._1c.g5.v8.bm.core.IBmNamespace;
 import com._1c.g5.v8.bm.core.IBmPlatformTransaction;
 import com._1c.g5.v8.dt.core.filesystem.IQualifiedNameFilePathConverter;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
-import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
-import com._1c.g5.v8.dt.dcs.ui.DataCompositionSchemaEditor;
-import com._1c.g5.v8.dt.export.ExportException;
 import com._1c.g5.v8.dt.md.ui.editor.base.DtGranularEditor;
 import com._1c.g5.v8.dt.md.ui.editor.base.DtGranularEditorEmbeddedEditorPage;
-import com.google.inject.Inject;
-
-import tormozit.edt.assist.ContentAssistAutoOpenSettings;
 
 /**
  * Глобальная команда «Перейти к определению» — порт 1С-процедуры ПерейтиПоСсылкеМД из RDT.
  *
- * <p>Берёт ссылку из буфера обмена и открывает соответствующий редактор EDT.
- * Поддерживаемые форматы ссылок:
+ * <p>Берёт ссылку из буфера обмена (или из транспортного файла ИР) и открывает
+ * соответствующий редактор EDT.
+ *
+ * <h3>Поддерживаемые форматы ссылок</h3>
  * <ul>
  *   <li>{@code {Справочник.Справочник1.МодульОбъекта(41)}} — строка модуля платформы</li>
  *   <li>{@code {Справочник.Справочник1.МодульОбъекта(41:Метод,1)}} — строка метода модуля</li>
  *   <li>{@code src/cf/Catalogs/Name/Ext/ObjectModule.bsl:3} — Git-путь к BSL</li>
- *   <li>{@code Справочник.Валюты.Форма.ФормаЭлемента} — полное имя объекта МД</li>
- *   <li>{@code Справочник.Валюты.Форма.ФормаЭлемента.ЭлементыФормы.Клиент} — элемент формы</li>
+ *   <li>{@code Справочник.Валюты} / {@code Catalog.Валюты} — полное имя объекта МД</li>
+ *   <li>{@code Справочник.Валюты.Форма.ФормаЭлемента} — форма или элемент формы</li>
  *   <li>{@code СправочникСсылка.Валюты} — имя типа данных (суффикс отрезается)</li>
  *   <li>{@code СправочникСсылка.Валюты, ДокументСсылка.Накладная} — описание типов</li>
- *   <li>{@code БД.Справочник.Контрагенты.Поле} — имя колонки БД (префикс «БД.» отрезается)</li>
+ *   <li>{@code БД.Справочник.Контрагенты.Поле} — колонка БД (префикс «БД.» отрезается)</li>
  *   <li>{@code ПакетXDTO.FNS.АдрРФТип} — тип XDTO</li>
  *   <li>{@code https://...} — гиперссылка, открывается в браузере</li>
  *   <li>{@code Расширение1 Справочник.Валюты.МодульОбъекта} — объект расширения</li>
  * </ul>
- *
- * <p>Для открытия редакторов использует:
- * <ul>
- *   <li>{@link IDE#openEditor} для BSL-файлов (модули, формы)</li>
- *   <li>{@code com._1c.g5.v8.dt.ui.util.OpenHelper} (через рефлексию) для EObject EDT</li>
- *   <li>{@link CompareConfigOpenObjectHandler#openInEditor} как запасной вариант</li>
- * </ul>
  */
 public class GoToDefinition extends AbstractHandler
 {
-    // IQualifiedNameFilePathConverter получается через getQualifiedNameConverter(IFile),
-    // а не через @Inject — AbstractHandler создаётся Eclipse, а не Guice-инжектором.
     // =======================================================================
-    // МАППИНГИ: 1С-тип → папка EDT
+    // МАППИНГИ
     // =======================================================================
 
     /**
-     * Русское название типа МД → имя папки в EDT-проекте (src/cf/<folder>/<ObjectName>/…)
+     * RU ед.ч. → папка EDT. Данные хранятся в {@link MdTypeMapping};
+     * поле оставлено для обратной совместимости с кодом, читающим его напрямую.
+     *
+     * <p><b>Внутри этого класса</b> используйте {@link MdTypeMapping#anyToFolder}
+     * вместо {@code TYPE_TO_FOLDER.get()}: это позволяет принимать и русские,
+     * и английские ед.ч. имена типов.
      */
-    static final Map<String, String> TYPE_TO_FOLDER = new LinkedHashMap<>();
-    static {
-        TYPE_TO_FOLDER.put("Справочник",                     "Catalogs");
-        TYPE_TO_FOLDER.put("Документ",                       "Documents");
-        TYPE_TO_FOLDER.put("ОбщийМодуль",                    "CommonModules");
-        TYPE_TO_FOLDER.put("Перечисление",                   "Enums");
-        TYPE_TO_FOLDER.put("ПланОбмена",                     "ExchangePlans");
-        TYPE_TO_FOLDER.put("Обработка",                      "DataProcessors");
-        TYPE_TO_FOLDER.put("Отчет",                          "Reports");
-        TYPE_TO_FOLDER.put("ОбщаяФорма",                     "CommonForms");
-        TYPE_TO_FOLDER.put("ОбщийМакет",                     "CommonTemplates");
-        TYPE_TO_FOLDER.put("ОбщаяКартинка",                  "CommonPictures");
-        TYPE_TO_FOLDER.put("ОбщаяКоманда",                   "CommonCommands");
-        TYPE_TO_FOLDER.put("ПланВидовХарактеристик",         "ChartsOfCharacteristicTypes");
-        TYPE_TO_FOLDER.put("ПланСчетов",                     "ChartsOfAccounts");
-        TYPE_TO_FOLDER.put("ПланВидовРасчета",               "ChartsOfCalculationTypes");
-        TYPE_TO_FOLDER.put("РегистрСведений",                "InformationRegisters");
-        TYPE_TO_FOLDER.put("РегистрНакопления",              "AccumulationRegisters");
-        TYPE_TO_FOLDER.put("РегистрБухгалтерии",             "AccountingRegisters");
-        TYPE_TO_FOLDER.put("РегистрРасчета",                 "CalculationRegisters");
-        TYPE_TO_FOLDER.put("Последовательность",             "Sequences");
-        TYPE_TO_FOLDER.put("БизнесПроцесс",                  "BusinessProcesses");
-        TYPE_TO_FOLDER.put("Задача",                         "Tasks");
-        TYPE_TO_FOLDER.put("ВнешнийИсточникДанных",         "ExternalDataSources");
-        TYPE_TO_FOLDER.put("ОбщийАтрибут",                   "CommonAttributes");
-        TYPE_TO_FOLDER.put("Константа",                      "Constants");
-        TYPE_TO_FOLDER.put("ОпределяемыйТип",                "DefinedTypes");
-        TYPE_TO_FOLDER.put("ПодпискаНаСобытие",              "EventSubscriptions");
-        TYPE_TO_FOLDER.put("РегламентноеЗадание",            "ScheduledJobs");
-        TYPE_TO_FOLDER.put("Роль",                           "Roles");
-        TYPE_TO_FOLDER.put("ФункциональнаяОпция",            "FunctionalOptions");
-        TYPE_TO_FOLDER.put("ПараметрФункциональнойОпции",    "FunctionalOptionsParameters");
-        TYPE_TO_FOLDER.put("Подсистема",                     "Subsystems");
-        TYPE_TO_FOLDER.put("ЯзыкКонфигурации",              "Languages");
-        TYPE_TO_FOLDER.put("ОбщийМодульПовторногоИспользования", "CommonModules"); // псевдоним
-        TYPE_TO_FOLDER.put("ПакетXDTO",                      "XDTOPackages");
-        TYPE_TO_FOLDER.put("WebСервис",                      "WebServices");
-        TYPE_TO_FOLDER.put("HTTPСервис",                     "HTTPServices");
-        TYPE_TO_FOLDER.put("IntegrationService",             "IntegrationServices");
-        TYPE_TO_FOLDER.put("СтильОформления",                "StyleItems");
-        TYPE_TO_FOLDER.put("Интерфейс",                      "Interfaces");
-    }
+    static final Map<String, String> TYPE_TO_FOLDER = MdTypeMapping.getRuToFolderMap();
 
     /**
      * Суффикс модуля в ссылке платформы → имя BSL-файла в EDT.
-     * Используется для разбора {@code Тип.Объект.МодульОбъекта}.
+     * «Тип.Объект.МодульОбъекта» → «ObjectModule.bsl».
      */
     static final Map<String, String> MODULE_SUFFIX_TO_BSL = new LinkedHashMap<>();
     static {
-        MODULE_SUFFIX_TO_BSL.put("МодульОбъекта",            "ObjectModule.bsl");
-        MODULE_SUFFIX_TO_BSL.put("МодульМенеджера",          "ManagerModule.bsl");
-        MODULE_SUFFIX_TO_BSL.put("МодульНабораЗаписей",      "RecordSetModule.bsl");
-        MODULE_SUFFIX_TO_BSL.put("МодульФормы",              "Form.bsl"); // разворачивается контекстом
-        MODULE_SUFFIX_TO_BSL.put("МодульМодуля",             "Module.bsl"); // ОбщийМодуль
-        MODULE_SUFFIX_TO_BSL.put("МодульОбщийМодуль",        "Module.bsl"); // ОбщийМодуль альт.
+        MODULE_SUFFIX_TO_BSL.put("МодульОбъекта",               "ObjectModule.bsl");
+        MODULE_SUFFIX_TO_BSL.put("МодульМенеджера",             "ManagerModule.bsl");
+        MODULE_SUFFIX_TO_BSL.put("МодульНабораЗаписей",         "RecordSetModule.bsl");
+        MODULE_SUFFIX_TO_BSL.put("МодульФормы",                 "Form.bsl");
+        MODULE_SUFFIX_TO_BSL.put("МодульМодуля",                "Module.bsl");  // ОбщийМодуль
+        MODULE_SUFFIX_TO_BSL.put("МодульОбщийМодуль",           "Module.bsl");  // альт.
         MODULE_SUFFIX_TO_BSL.put("МодульОбъектаБизнесПроцесса", "ObjectModule.bsl");
-        MODULE_SUFFIX_TO_BSL.put("МодульЗадачи",             "ObjectModule.bsl");
+        MODULE_SUFFIX_TO_BSL.put("МодульЗадачи",                "ObjectModule.bsl");
     }
 
     /**
      * Тип+суффикс данных → базовый тип МД.
-     * Например: «СправочникСсылка» → «Справочник».
+     * «СправочникСсылка» → «Справочник».
      */
     static final Map<String, String> TYPE_SUFFIX_MAP = new LinkedHashMap<>();
     static {
-        addSuffix("Справочник",           "Ссылка", "Объект", "Менеджер", "Выборка",
-                                          "МенеджерТаблицы", "Список");
-        addSuffix("Документ",             "Ссылка", "Объект", "Менеджер", "Выборка",
-                                          "МенеджерТаблицы", "Список");
-        addSuffix("Перечисление",         "Ссылка", "Менеджер");
-        addSuffix("ПланОбмена",           "Ссылка", "Объект", "Менеджер");
-        addSuffix("ПланВидовХарактеристик","Ссылка","Объект", "Менеджер");
-        addSuffix("ПланСчетов",           "Ссылка", "Объект", "Менеджер");
-        addSuffix("ПланВидовРасчета",     "Ссылка", "Объект", "Менеджер");
-        addSuffix("БизнесПроцесс",        "Ссылка", "Объект", "Менеджер");
-        addSuffix("Задача",               "Ссылка", "Объект", "Менеджер");
-        addSuffix("РегистрСведений",      "НаборЗаписей", "Запись", "Менеджер",
-                                          "МенеджерТаблицы", "Ключ");
-        addSuffix("РегистрНакопления",    "НаборЗаписей", "Запись", "Менеджер",
-                                          "МенеджерТаблицы", "Ключ",
-                                          "ВыборкаДетальныеЗаписи", "ВыборкаОстатки",
-                                          "ВыборкаОстаткиИОбороты", "ВыборкаОбороты");
-        addSuffix("РегистрБухгалтерии",   "НаборЗаписей", "Запись", "Менеджер",
-                                          "МенеджерТаблицы", "Ключ");
-        addSuffix("РегистрРасчета",       "НаборЗаписей", "Запись", "Менеджер",
-                                          "МенеджерТаблицы", "Ключ");
-        addSuffix("ВнешняяОбработка",     "Объект");
-        addSuffix("ВнешнийОтчет",         "Объект");
+        addSuffix("Справочник",            "Ссылка", "Объект", "Менеджер", "Выборка",
+                                           "МенеджерТаблицы", "Список");
+        addSuffix("Документ",              "Ссылка", "Объект", "Менеджер", "Выборка",
+                                           "МенеджерТаблицы", "Список");
+        addSuffix("Перечисление",          "Ссылка", "Менеджер");
+        addSuffix("ПланОбмена",            "Ссылка", "Объект", "Менеджер");
+        addSuffix("ПланВидовХарактеристик","Ссылка", "Объект", "Менеджер");
+        addSuffix("ПланСчетов",            "Ссылка", "Объект", "Менеджер");
+        addSuffix("ПланВидовРасчета",      "Ссылка", "Объект", "Менеджер");
+        addSuffix("БизнесПроцесс",         "Ссылка", "Объект", "Менеджер");
+        addSuffix("Задача",                "Ссылка", "Объект", "Менеджер");
+        addSuffix("РегистрСведений",       "НаборЗаписей", "Запись", "Менеджер",
+                                           "МенеджерТаблицы", "Ключ");
+        addSuffix("РегистрНакопления",     "НаборЗаписей", "Запись", "Менеджер",
+                                           "МенеджерТаблицы", "Ключ",
+                                           "ВыборкаДетальныеЗаписи", "ВыборкаОстатки",
+                                           "ВыборкаОстаткиИОбороты", "ВыборкаОбороты");
+        addSuffix("РегистрБухгалтерии",    "НаборЗаписей", "Запись", "Менеджер",
+                                           "МенеджерТаблицы", "Ключ");
+        addSuffix("РегистрРасчета",        "НаборЗаписей", "Запись", "Менеджер",
+                                           "МенеджерТаблицы", "Ключ");
+        addSuffix("ВнешняяОбработка",      "Объект");
+        addSuffix("ВнешнийОтчет",          "Объект");
     }
 
-    private static void addSuffix(String base, String... suffixes) {
+    private static void addSuffix(String base, String... suffixes)
+    {
         for (String s : suffixes)
             TYPE_SUFFIX_MAP.put(base + s, base);
     }
@@ -209,17 +150,16 @@ public class GoToDefinition extends AbstractHandler
      */
     private static final Pattern MODULE_LINE_REF = Pattern.compile(
         "\\{" +
-        "(?:([А-ЯЁа-яёA-Za-z0-9]+)\\s)?" +  // g1: расширение (необязательно)
-        "([А-ЯЁа-яёA-Za-z0-9._/\\\\]+)" +    // g2: путь модуля
-        "\\((\\d+)" +                          // g3: номер строки
-        "(?::([А-ЯЁа-яёA-Za-z_][А-ЯЁа-яёA-Za-z0-9_]*)," + // g4: метод (необязательно)
-        "(\\d+))?" +                           // g5: смещение
+        "(?:([А-ЯЁа-яёA-Za-z0-9]+)\\s)?" +
+        "([А-ЯЁа-яёA-Za-z0-9._/\\\\]+)" +
+        "\\((\\d+)" +
+        "(?::([А-ЯЁа-яёA-Za-z_][А-ЯЁа-яёA-Za-z0-9_]*)," +
+        "(\\d+))?" +
         "\\)\\}");
 
     /**
      * Git-путь к BSL-файлу с номером строки.
-     * Примеры: {@code src/cf/Catalogs/Name/Ext/ObjectModule.bsl:3}
-     *           {@code Catalogs/Name/Ext/ObjectModule.bsl:3}
+     * Пример: {@code src/cf/Catalogs/Name/Ext/ObjectModule.bsl:3}
      *
      * <p>Группы: 1=путь, 2=строка
      */
@@ -238,15 +178,13 @@ public class GoToDefinition extends AbstractHandler
     {
         File newFile = null, oldFile = null;
         IRApplicationRegistry.IrSession irSession = null;
-        IProject project = null;
-        long PID = 0;
         String command = "";
         String transportFolder = IRApplicationRegistry.transportFolder;
         Shell shell = HandlerUtil.getActiveShell(event);
         IWorkbenchPage page = HandlerUtil.getActiveWorkbenchWindow(event).getActivePage();
         File commandFile = new File(transportFolder + "\\Команда.txt");
-        if (true
-            && commandFile.exists()
+
+        if (commandFile.exists()
             && System.currentTimeMillis() - commandFile.lastModified() < 5000)
         {
             try
@@ -256,79 +194,75 @@ public class GoToDefinition extends AbstractHandler
                 ObjectMapper mapper = new ObjectMapper();
                 JsonNode commandObject = mapper.readTree(command);
                 command = commandObject.get("Команда").asText();
-                PID = commandObject.get("ИДПроцесса").asLong();
+                long PID = commandObject.get("ИДПроцесса").asLong();
                 irSession = IRApplicationRegistry.getSession(PID);
-                project = irSession.project;
             }
             catch (IOException e)
             {
-                // TODO Auto-generated catch block
                 e.printStackTrace();
             }
-//            МаркерВыводаСообщения = "<ВывестиСообщение> ";
-//            Если СтрНачинаетсяС(ЗначениеИзБуфера, МаркерВыводаСообщения) Тогда
-//                Текст = ПоследнийФрагментЛкс(ЗначениеИзБуфера, МаркерВыводаСообщения);
-//                ТурбоКонф.ПоказатьВсплывающееУведомление(НазваниеСкрипта(), Текст,, ЭтотОбъект, "ПоказатьПриложениеИР",, "Показать приложение ИР"); 
-//                ТурбоКонф.ОтжатьМодификаторыПослеЗавершенияСкрипта = Истина;
-//                Возврат Истина;
-//            КонецЕсли;
-            newFile = new File(transportFolder.toString() + "\\НовыйТекст.txt");
-            oldFile = new File(transportFolder.toString() + "\\СтарыйТекст.txt");
+            newFile = new File(transportFolder + "\\НовыйТекст.txt");
+            oldFile = new File(transportFolder + "\\СтарыйТекст.txt");
         }
         else
         {
             command = getClipboardText(shell);
             if (command == null || command.isBlank())
             {
-                ToastNotification.show("Перейти к определению", //$NON-NLS-1$
-                    "Буфер обмена пуст.", 4000); //$NON-NLS-1$
+                ToastNotification.show("Перейти к определению",
+                    "Буфер обмена пуст.", 4000);
                 return null;
             }
             command = command.strip();
         }
-        Global.log("GoToDefinition: ref = " + command); //$NON-NLS-1$
-        if (!jump(command, shell, page))
-            ToastNotification.show("Перейти к определению", //$NON-NLS-1$
-                "Не удалось перейти по ссылке:\n" + truncate(command, 120), 5000); //$NON-NLS-1$
 
-         if (newFile != null) {
-             if (command.contains("Макет.")||command.contains("Template.")) {
-                 // Мультиметка260525_210353
-                 boolean allowImport = false;
-                 String currentFilename = null;
-                 DtGranularEditor templateEditor = (DtGranularEditor) page.getActiveEditor(); // TemplateEditor
-                 DtGranularEditorEmbeddedEditorPage dcsEditor = (DtGranularEditorEmbeddedEditorPage) templateEditor.findPage("editors.commontemplate.pages.dcs");
-                 try
+        Global.log("GoToDefinition: ref = " + command); //$NON-NLS-1$
+
+        if (!jump(command, shell, page))
+            ToastNotification.show("Перейти к определению",
+                "Не удалось перейти по ссылке:\n" + truncate(command, 120), 5000);
+
+        if (newFile != null)
+        {
+            if (command.contains("Макет.") || command.contains("Template.")) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                boolean allowImport = false;
+                String currentFilename = null;
+                DtGranularEditor templateEditor = (DtGranularEditor) page.getActiveEditor();
+                DtGranularEditorEmbeddedEditorPage dcsEditor =
+                    (DtGranularEditorEmbeddedEditorPage) templateEditor.findPage(
+                        "editors.commontemplate.pages.dcs"); //$NON-NLS-1$
+                try
                 {
-                     currentFilename = DataCompositionSchemaEditorHook.exportToFile(dcsEditor);
-                     allowImport = Global.readTextFromFile(new File(currentFilename)).compareTo(Global.readTextFromFile(oldFile))==0;
+                    currentFilename = DataCompositionSchemaEditorHook.exportToFile(dcsEditor);
+                    allowImport = Global.readTextFromFile(new File(currentFilename))
+                        .compareTo(Global.readTextFromFile(oldFile)) == 0;
                 }
                 catch (Exception e)
                 {
-                    // TODO Auto-generated catch block
                     e.printStackTrace();
                 }
-               if (allowImport)
-                {
-                   DataCompositionSchemaEditorHook.importFromFile(dcsEditor, newFile);
-                }
-               else {
-                   ToastNotification.show(command, "Объект был изменен в EDT после начала редактирования в приложении ИР. Загрузка не выполнена. Временный файл новой версии - " + newFile.toString(), 10000);
-               }
-             }
-         }
+                if (allowImport)
+                    DataCompositionSchemaEditorHook.importFromFile(dcsEditor, newFile);
+                else
+                    ToastNotification.show(command,
+                        "Объект был изменён в EDT после начала редактирования в ИР. "
+                        + "Загрузка не выполнена. Временный файл: " + newFile, 10000);
+            }
+        }
         return null;
     }
 
-
     // =======================================================================
-    // ГЛАВНЫЙ ДИСПЕТЧЕР (ПерейтиПоСсылкеМД — EDT-часть)
+    // ГЛАВНЫЙ ДИСПЕТЧЕР
     // =======================================================================
 
     /**
      * Пытается перейти по ссылке в EDT.
-     * Порт EDТ-применимых частей 1С-функций {@code ПерейтиКОпределению} и
-     * {@code ПерейтиПоСсылкеМД} из RDT.os.
+     * Порт EDT-применимых частей {@code ПерейтиКОпределению} / {@code ПерейтиПоСсылкеМД}.
+     *
+     * <p>Принимает как русские имена типов («Справочник.Валюты»),
+     * так и английские ед.ч. («Catalog.Валюты»).
      *
      * @return {@code true} если переход выполнен
      */
@@ -338,51 +272,47 @@ public class GoToDefinition extends AbstractHandler
         String ref = raw.strip();
         if (ref.isEmpty()) return false;
 
-        // 1. Гиперссылка → открываем в браузере (ГиперСсылка в 1С → ЗапуститьПриложение)
+        // 1. Гиперссылка
         if (ref.startsWith("http://") || ref.startsWith("https://")) //$NON-NLS-1$ //$NON-NLS-2$
         {
             openUrl(ref);
             return true;
         }
 
-        // 2. Ссылки строк модулей: {[Расш ]Тип.Объект.МодульОбъекта(строка[:Метод,смещ])}
-        //    Аналог СтруктураСсылкиСтрокиМодуляЛкс + открытие через список точек останова
+        // 2. Ссылки строк модулей: {[Расш ]Тип.Объект.МодульОбъекта(N[:Метод,смещ])}
         if (ref.contains("{") && ref.contains("}")) //$NON-NLS-1$ //$NON-NLS-2$
-        {
             return handleModuleLineRefs(ref, shell, page);
-        }
 
-        // 3. Git-путь к BSL-файлу: [src/[cf/|ext/Ext/]]Type/Name/Ext/Module.bsl:N
+        // 3. Git-путь к BSL: [src/[cf/|ext/Ext/]]Type/Name/Ext/Module.bsl:N
         Matcher gitM = GIT_FILE_REF.matcher(ref);
         if (gitM.matches())
             return openGitFileRef(gitM.group(1), parseInt(gitM.group(2)), page, shell);
 
-        // 4. ИмяКолонкиБД → убираем префикс «БД.» (ОткрытьКолонкуБДЛкс в 1С)
+        // 4. Колонка БД: убираем префикс «БД.»
         if (ref.startsWith("БД.")) //$NON-NLS-1$
             ref = ref.substring(3);
 
-        // 5. ПакетXDTO.ИмяПакета[.ИмяТипа] → ищем как объект МД
+        // 5. ПакетXDTO.ИмяПакета[.ИмяТипа]
         if (ref.startsWith("ПакетXDTO.")) //$NON-NLS-1$
             return openXdtoRef(ref, shell, page);
 
-        // 6. ОписаниеТипов: несколько типов через запятую (ИменаМетаданныхИзОписанияТиповЛкс)
+        // 6. Описание типов через запятую: «СправочникСсылка.А, ДокументСсылка.Б»
         if (ref.contains(",")) //$NON-NLS-1$
         {
             List<String> names = extractMdNamesFromTypeDescription(ref);
             if (!names.isEmpty())
             {
                 if (names.size() == 1) return openByFullName(names.get(0), shell, page);
-                return pickAndOpen(names, shell, page); // выбор из нескольких (ВыбратьЭлементСпискаЗначений)
+                return pickAndOpen(names, shell, page);
             }
         }
 
-        // 7. ИмяТипа: суффикс типа данных → базовый тип МД
-        //    Например «СправочникСсылка.Валюты» → «Справочник.Валюты»
+        // 7. Суффикс типа данных: «СправочникСсылка.Валюты» → «Справочник.Валюты»
         String stripped = stripTypeSuffix(ref);
         if (stripped != null)
             return openByFullName(stripped, shell, page);
 
-        // 8. Полное имя МД: «Справочник.Валюты.Форма.ФормаЭлемента» и т.п.
+        // 8. Полное имя МД (рус. или англ. ед.ч.)
         return openByFullName(ref, shell, page);
     }
 
@@ -395,8 +325,6 @@ public class GoToDefinition extends AbstractHandler
         List<ModuleLineRef> refs = parseAllModuleLineRefs(text);
         if (refs.isEmpty()) return false;
 
-        // Несколько ссылок (стек вызовов) → показываем выбор,
-        // аналог ОткрытьВыборСтрокиСтекаЛкс в 1С
         ModuleLineRef chosen;
         if (refs.size() == 1)
         {
@@ -404,9 +332,7 @@ public class GoToDefinition extends AbstractHandler
         }
         else
         {
-            String[] labels = refs.stream()
-                .map(r -> r.displayLabel())
-                .toArray(String[]::new);
+            String[] labels = refs.stream().map(ModuleLineRef::displayLabel).toArray(String[]::new);
             MessageDialog dlg = new MessageDialog(shell,
                 "Выберите строку стека", null, //$NON-NLS-1$
                 "Найдено несколько ссылок. Выберите строку для перехода:", //$NON-NLS-1$
@@ -420,11 +346,9 @@ public class GoToDefinition extends AbstractHandler
 
     private static boolean openModuleLineRef(ModuleLineRef r, IWorkbenchPage page, Shell shell)
     {
-        // Внешний файл (расширение или внешняя обработка): путь уже в r.file
         if (r.file != null)
             return openGitFileRef(r.file, r.line, page, shell);
 
-        // Строим путь к BSL-файлу по имени модуля
         String bslPath = moduleToBslPath(r.modulePath, r.extension);
         if (bslPath == null)
         {
@@ -435,20 +359,15 @@ public class GoToDefinition extends AbstractHandler
     }
 
     // =======================================================================
-    // GIT-ССЫЛКА НА ФАЙЛ  src/cf/Catalogs/Name/Ext/ObjectModule.bsl:3
+    // GIT-ССЫЛКА  src/cf/Catalogs/Name/Ext/ObjectModule.bsl:3
     // =======================================================================
 
     private static boolean openGitFileRef(String filePath, int line, IWorkbenchPage page, Shell shell)
     {
         IFile file = findFileInWorkspace(filePath, page);
-        if (file == null)
-        {
-            // Добавляем src/cf/ если ещё не было
-            if (!filePath.startsWith("src/")) //$NON-NLS-1$
-            {
-                file = findFileInWorkspace("src/cf/" + filePath, page); //$NON-NLS-1$
-            }
-        }
+        if (file == null && !filePath.startsWith("src/")) //$NON-NLS-1$
+            file = findFileInWorkspace("src/cf/" + filePath, page); //$NON-NLS-1$
+
         if (file == null)
         {
             Global.log("GoToDefinition: файл не найден: " + filePath); //$NON-NLS-1$
@@ -463,28 +382,24 @@ public class GoToDefinition extends AbstractHandler
 
     private static boolean openXdtoRef(String ref, Shell shell, IWorkbenchPage page)
     {
-        // ПакетXDTO.ИмяПакета[.ИмяТипа]
-        // В EDT XDTOPackages хранятся в XDTOPackages/<PackageName>/
-        // Пробуем открыть объект пакета (без имени типа)
-        String[] parts = ref.split("\\.", 3); // ["ПакетXDTO","PkgName","TypeName"]
+        String[] parts = ref.split("\\.", 3); //$NON-NLS-1$
         if (parts.length < 2) return false;
-        String packageMdName = "ПакетXDTO." + parts[1]; //$NON-NLS-1$
-        return openMdObjectByFullName(packageMdName, shell, page);
+        return openMdObjectByFullName("ПакетXDTO." + parts[1], shell, page); //$NON-NLS-1$
     }
 
     // =======================================================================
-    // ПОЛНОЕ ИМЯ МД  Справочник.Валюты.Форма.ФормаЭлемента[.Элементы.Клиент]
+    // ПОЛНОЕ ИМЯ МД  — русское или английское ед.ч.
     // =======================================================================
 
     /**
-     * Открывает объект МД по его полному имени (ЭтоПолноеИмяМД в 1С).
+     * Открывает объект МД по полному имени.
+     * Принимает как «Справочник.Валюты», так и «Catalog.Валюты».
      *
      * <p>Порядок попыток:
      * <ol>
-     *   <li>Если имя — путь модуля (оканчивается на известный суффикс) → BSL-файл</li>
-     *   <li>Если содержит «.Форма.» → открываем BSL модуля формы и/или форму</li>
-     *   <li>Открываем через EDT OpenHelper (рефлексия)</li>
-     *   <li>Ищем .mdo-файл в воркспейсе и открываем через IDE</li>
+     *   <li>Суффикс модуля → BSL-файл</li>
+     *   <li>«.Форма.» → модуль формы или объект-владелец</li>
+     *   <li>EDT OpenHelper / .mdo в воркспейсе</li>
      * </ol>
      */
     public static boolean openByFullName(String fullName, Shell shell, IWorkbenchPage page)
@@ -501,28 +416,23 @@ public class GoToDefinition extends AbstractHandler
             fullName  = fullName.substring(spaceIdx + 1);
         }
 
-        // a) Путь к модулю (заканчивается на МодульОбъекта и т.п.) → BSL
+        // а) Путь к модулю → BSL
         if (isModuleSuffixPath(fullName))
         {
             String bslPath = moduleToBslPath(fullName, extension);
             if (bslPath != null) return openBslFileAt(bslPath, 0, page, shell);
         }
 
-        // б) Содержит .Форма. → форма или элемент формы
-        //    ЧастиПолногоИмениЭлементаФормы в 1С
+        // б) Содержит «.Форма.» → форма или её модуль
         int formPos = indexOfFormPart(fullName);
         if (formPos >= 0)
         {
-            // Извлекаем имя формы и пробуем открыть её модуль
             String formBsl = formNameToBslPath(fullName, formPos, extension);
-            if (formBsl != null && openBslFileAt(formBsl, 0, page, shell))
-                return true;
-            // Если не вышло — открываем объект-владелец формы
-            String ownerName = fullName.substring(0, formPos);
-            return openMdObjectByFullName(ownerName, shell, page);
+            if (formBsl != null && openBslFileAt(formBsl, 0, page, shell)) return true;
+            return openMdObjectByFullName(fullName.substring(0, formPos), shell, page);
         }
 
-        // в) Открываем через OpenHelper / .mdo в воркспейсе
+        // в) Объект МД через OpenHelper / .mdo
         return openMdObjectByFullName(fullName, shell, page);
     }
 
@@ -530,20 +440,6 @@ public class GoToDefinition extends AbstractHandler
     // EDT: ОТКРЫТИЕ ОБЪЕКТА МД
     // =======================================================================
 
-    /**
-     * Открывает объект МД через EDT OpenHelper.
-     *
-     * <p>Алгоритм (аналог ПерейтиПоСсылкеМД → ЭтоПолноеИмяМД → открыть редактор):
-     * <ol>
-     *   <li>Строим путь к .mdo-файлу объекта в EDT-проекте.</li>
-     *   <li>Получаем EMF {@link ResourceSet} проекта через цепочки рефлексивных вызовов
-     *       ({@code getBmModel()} → {@code getResourceSet()} и т.п.).</li>
-     *   <li>Загружаем {@link EObject} из .mdo — корневой объект ресурса.</li>
-     *   <li>Открываем через {@code OpenHelper.openEditor(EObject)} —
-     *       аналогично {@link CompareConfigOpenObjectHandler#openInEditor}.</li>
-     *   <li>Запасной вариант: {@link IDE#openEditor} с .mdo-файлом напрямую.</li>
-     * </ol>
-     */
     private static boolean openMdObjectByFullName(String fullName, Shell shell, IWorkbenchPage page)
     {
         IV8ProjectManager projectManager =
@@ -551,17 +447,20 @@ public class GoToDefinition extends AbstractHandler
         IV8Project v8Project = projectManager.getProject(Global.getActiveEditorProject(true));
         if (v8Project == null)
         {
-            ToastNotification.show("Переход к определению", //$NON-NLS-1$
-                "Сначала нужно активировать проект."); //$NON-NLS-1$
+            ToastNotification.show("Переход к определению",
+                "Сначала нужно активировать проект.");
             return false;
         }
+
+        // Пробуем через FQN (EDT понимает как русские, так и английские имена типов)
         EObject eObject = resolveEObjectByQualifiedName(fullName, v8Project);
         if (eObject != null)
         {
             openEObjectInEditor(eObject, page, shell);
             return true;
         }
-        
+
+        // Строим .mdo-путь (anyToFolder принимает RU / EN ед.ч. / EN мн.ч.)
         String mdoPath = mdNameToMdoPath(fullName);
         if (mdoPath == null)
         {
@@ -576,7 +475,6 @@ public class GoToDefinition extends AbstractHandler
             return false;
         }
 
-        // ── Шаг 1: EObject через ResourceSet проекта ──
         eObject = resolveEObjectViaResourceSet(mdoFile, v8Project);
         if (eObject != null)
         {
@@ -584,7 +482,7 @@ public class GoToDefinition extends AbstractHandler
             return true;
         }
 
-        // ── Запасной вариант: IDE.openEditor — EDT сам выберет нужный редактор ──
+        // Запасной вариант: IDE открывает .mdo напрямую
         Global.log("GoToDefinition: EObject не получен, открываем .mdo напрямую"); //$NON-NLS-1$
         try
         {
@@ -597,49 +495,43 @@ public class GoToDefinition extends AbstractHandler
             return false;
         }
     }
-    
+
     public static EObject resolveEObjectViaResourceSet(IFile file, IV8Project v8Project)
     {
         URI fileUri = URI.createPlatformResourceURI(file.getFullPath().toString(), true);
-        IResourceServiceProvider rsp = IResourceServiceProvider.Registry.INSTANCE.getResourceServiceProvider(fileUri);
-        IQualifiedNameFilePathConverter filePathConverter = rsp.get(IQualifiedNameFilePathConverter.class);
-        QualifiedName fqn = filePathConverter.getFqn(file);
+        IResourceServiceProvider rsp =
+            IResourceServiceProvider.Registry.INSTANCE.getResourceServiceProvider(fileUri);
+        IQualifiedNameFilePathConverter conv = rsp.get(IQualifiedNameFilePathConverter.class);
+        QualifiedName fqn = conv.getFqn(file);
         if (fqn == null)
         {
             Global.log("GoToDefinition: getFqn вернул null для " + file.getFullPath()); //$NON-NLS-1$
             return null;
         }
-        EObject topObject = resolveEObjectByQualifiedName(fqn.toString(), v8Project);
-        return topObject;
+        return resolveEObjectByQualifiedName(fqn.toString(), v8Project);
     }
 
     public static EObject resolveEObjectByQualifiedName(String fqn, IV8Project v8Project)
     {
-        IBmModelManager modelManager = (IBmModelManager)Global.getServiceByClass(IBmModelManager.class);
+        IBmModelManager modelManager =
+            (IBmModelManager) Global.getServiceByClass(IBmModelManager.class);
         BmPlatform platform = modelManager.getBmPlatform();
         IBmPlatformTransaction transaction = platform.beginReadOnlyTransaction(true);
-        EObject topObject = null;
         IBmNamespace ns = modelManager.getBmNamespace(v8Project.getProject());
         try
         {
-            topObject = (EObject) transaction.getTopObjectByFqn(ns, fqn);
+            return (EObject) transaction.getTopObjectByFqn(ns, fqn);
         }
         catch (Exception e)
         {
-            // TODO Auto-generated catch block
-            e.printStackTrace();
+            return null;
         }
-        finally {
+        finally
+        {
             transaction.commit();
         }
-        return topObject;
     }
 
-    /**
-     * Открывает EDT-редактор для {@link EObject} через {@code OpenHelper.openEditor}.
-     * Аналог {@link CompareConfigOpenObjectHandler#openInEditor}, но принимает
-     * {@link IWorkbenchPage} вместо {@link IEditorPart}.
-     */
     private static void openEObjectInEditor(EObject eObject, IWorkbenchPage page, Shell shell)
     {
         try
@@ -647,21 +539,20 @@ public class GoToDefinition extends AbstractHandler
             Class<?> cls = Class.forName("com._1c.g5.v8.dt.ui.util.OpenHelper"); //$NON-NLS-1$
             Object   helper = cls.getConstructor().newInstance();
 
-            // Приоритет 1: openEditor(EObject)
             for (Method m : cls.getMethods())
             {
-                if (!"openEditor".equals(m.getName()) || m.getParameterCount() != 1) continue; //$NON-NLS-1$
-                if (m.getParameterTypes()[0].isAssignableFrom(eObject.getClass()))
+                if (!"openEditor".equals(m.getName())) continue; //$NON-NLS-1$
+                if (m.getParameterCount() == 1
+                    && m.getParameterTypes()[0].isAssignableFrom(eObject.getClass()))
                 {
-                    Object result = m.invoke(helper, eObject);
-                    if (result != null) return;
+                    if (m.invoke(helper, eObject) != null) return;
                 }
             }
-            // Приоритет 2: openEditor(EObject, IWorkbenchPage)
             for (Method m : cls.getMethods())
             {
-                if (!"openEditor".equals(m.getName()) || m.getParameterCount() != 2) continue; //$NON-NLS-1$
-                if (m.getParameterTypes()[0].isAssignableFrom(eObject.getClass()))
+                if (!"openEditor".equals(m.getName())) continue; //$NON-NLS-1$
+                if (m.getParameterCount() == 2
+                    && m.getParameterTypes()[0].isAssignableFrom(eObject.getClass()))
                 {
                     try { m.invoke(helper, eObject, page); return; }
                     catch (Exception ignored) {}
@@ -711,10 +602,6 @@ public class GoToDefinition extends AbstractHandler
         }
     }
 
-    /**
-     * Переводит курсор в открытом редакторе на указанную строку.
-     * Аналог «перейти в позицию» в 1С.
-     */
     private static void revealLine(IEditorPart editor, int lineNumber)
     {
         if (lineNumber <= 0 || !(editor instanceof ITextEditor)) return;
@@ -732,14 +619,9 @@ public class GoToDefinition extends AbstractHandler
         }
     }
 
-    /**
-     * Ищет IFile в проекте активного редактора, затем во всех открытых проектах.
-     * Поддерживает пути без src/cf/ и с ним.
-     */
     private static IFile findFileInWorkspace(String relPath, IWorkbenchPage page)
     {
         String path = relPath.replace('\\', '/');
-
         IProject active = getActiveProject(page);
         if (active != null)
         {
@@ -757,119 +639,108 @@ public class GoToDefinition extends AbstractHandler
 
     private static IFile findInProject(IProject project, String path)
     {
-        // Прямой путь
         IFile f = project.getFile(path);
-        if (f.exists()) return f;
-        return null;
+        return f.exists() ? f : null;
     }
 
     // =======================================================================
     // КОНВЕРТАЦИЯ ИМЁН МОДУЛЕЙ → ПУТИ BSL
+    // Все методы принимают тип в любой форме (RU / EN ед.ч.),
+    // нормализуя его через MdTypeMapping.anyToFolder().
     // =======================================================================
 
     /**
      * Конвертирует путь модуля из формата ссылки платформы в путь к BSL-файлу EDT.
      *
-     * <p>Примеры:
      * <pre>
-     *   ОбщийМодуль.МойМодуль              → src/cf/CommonModules/МойМодуль/Ext/Module.bsl
-     *   ОбщаяФорма.МояФорма                → src/cf/CommonForms/МояФорма/Ext/Form.bsl
-     *   Справочник.Валюты.МодульОбъекта    → src/cf/Catalogs/Валюты/Ext/ObjectModule.bsl
-     *   Справочник.Валюты.МодульМенеджера  → src/cf/Catalogs/Валюты/Ext/ManagerModule.bsl
-     *   Справочник.Валюты.Форма.ФормаЭлемента → src/cf/Catalogs/Валюты/Forms/ФормаЭлемента/Ext/Form.bsl
-     *   Обработка.МояОбр.МодульОбъекта     → src/cf/DataProcessors/МояОбр/Ext/ObjectModule.bsl
+     *   ОбщийМодуль.МойМодуль           → src/cf/CommonModules/МойМодуль/Ext/Module.bsl
+     *   CommonModule.МойМодуль          → src/cf/CommonModules/МойМодуль/Ext/Module.bsl
+     *   Справочник.Валюты.МодульОбъекта → src/cf/Catalogs/Валюты/Ext/ObjectModule.bsl
+     *   Catalog.Валюты.МодульОбъекта    → src/cf/Catalogs/Валюты/Ext/ObjectModule.bsl
      * </pre>
      *
-     * @param modulePath путь вида «Тип.Объект.МодульXxx» или «Тип.Объект.Форма.ИмяФормы»
-     * @param extension  имя расширения (если не null, используется src/ext/<extension>/ вместо src/cf/)
+     * @param modulePath путь вида «Тип.Объект.МодульXxx»
+     * @param extension  имя расширения или {@code null} для основной конфигурации
      */
     static String moduleToBslPath(String modulePath, String extension)
     {
         String[] parts = modulePath.split("\\.", -1); //$NON-NLS-1$
         if (parts.length == 0) return null;
 
-        String typeRu = parts[0];
-        String folder = TYPE_TO_FOLDER.get(typeRu);
+        // anyToFolder принимает RU, EN ед.ч. или EN мн.ч.
+        String folder = MdTypeMapping.anyToFolder(parts[0]);
         if (folder == null) return null;
 
         String prefix = extension != null
             ? "src/ext/" + extension + "/" + folder //$NON-NLS-1$ //$NON-NLS-2$
             : "src/cf/" + folder; //$NON-NLS-1$
 
-        // ОбщийМодуль.МойМодуль → .../МойМодуль/Ext/Module.bsl
         if ("CommonModules".equals(folder) && parts.length >= 2) //$NON-NLS-1$
             return prefix + "/" + parts[1] + "/Ext/Module.bsl"; //$NON-NLS-1$ //$NON-NLS-2$
 
-        // ОбщаяФорма.МояФорма → .../МояФорма/Ext/Form.bsl
         if ("CommonForms".equals(folder) && parts.length >= 2) //$NON-NLS-1$
             return prefix + "/" + parts[1] + "/Ext/Form.bsl"; //$NON-NLS-1$ //$NON-NLS-2$
 
         if (parts.length < 2) return null;
         String objectName = parts[1];
 
-        // Тип.Объект.Форма.ИмяФормы[.МодульФормы] → .../Forms/ИмяФормы/Ext/Form.bsl
+        // Тип.Объект.Форма.ИмяФормы → .../Forms/ИмяФормы/Ext/Form.bsl
         for (int i = 2; i < parts.length - 1; i++)
         {
             if ("Форма".equals(parts[i]) && i + 1 < parts.length) //$NON-NLS-1$
-            {
-                String formName = parts[i + 1];
-                return prefix + "/" + objectName + "/Forms/" + formName + "/Ext/Form.bsl"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            }
+                return prefix + "/" + objectName + "/Forms/" + parts[i + 1] + "/Ext/Form.bsl"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         }
 
-        // Тип.Объект.МодульОбъекта / МодульМенеджера / ...
+        // Тип.Объект.МодульXxx
         if (parts.length >= 3)
         {
-            String suffix  = parts[parts.length - 1];
-            String bslFile = MODULE_SUFFIX_TO_BSL.get(suffix);
+            String bslFile = MODULE_SUFFIX_TO_BSL.get(parts[parts.length - 1]);
             if (bslFile != null)
                 return prefix + "/" + objectName + "/Ext/" + bslFile; //$NON-NLS-1$ //$NON-NLS-2$
         }
 
-        return null; // только Тип.Объект — не достаточно для BSL
+        return null;
     }
 
     /**
      * Полное имя МД → путь к .mdo-файлу объекта.
-     * Например: «Справочник.Валюты» → «src/cf/Catalogs/Валюты/Валюты.mdo»
+     *
+     * <pre>
+     *   "Справочник.Валюты"  → "src/cf/Catalogs/Валюты/Валюты.mdo"
+     *   "Catalog.Валюты"     → "src/cf/Catalogs/Валюты/Валюты.mdo"
+     * </pre>
      */
     private static String mdNameToMdoPath(String fullName)
     {
         String[] parts = fullName.split("\\.", 3); //$NON-NLS-1$
         if (parts.length < 2) return null;
 
-        String folder = TYPE_TO_FOLDER.get(parts[0]);
+        String folder = MdTypeMapping.anyToFolder(parts[0]);
         if (folder == null) return null;
 
         String objectName = parts[1];
-        // EDT хранит .mdo рядом с папкой объекта: ObjectName/ObjectName.mdo
-        return "src/" + folder + "/" + objectName + "/" + objectName + ".mdo"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        return "src/cf/" + folder + "/" + objectName + "/" + objectName + ".mdo"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
     }
 
     /**
      * Извлекает BSL-путь модуля формы из имени вида
-     * {@code Справочник.Валюты.Форма.ФормаЭлемента[.ЭлементыФормы.Клиент]}.
+     * «Справочник.Валюты.Форма.ФормаЭлемента» или «Catalog.Валюты.Форма.ФормаЭлемента».
      */
     private static String formNameToBslPath(String fullName, int formIdx, String extension)
     {
         String[] parts = fullName.split("\\."); //$NON-NLS-1$
-        // Находим позицию «Форма» в массиве
         for (int i = 0; i < parts.length - 1; i++)
         {
             if ("Форма".equals(parts[i]) || "Forms".equals(parts[i])) //$NON-NLS-1$ //$NON-NLS-2$
             {
-                // parts[0]=Тип, parts[1]=Объект, parts[i]=Форма, parts[i+1]=ИмяФормы
                 if (i >= 1 && i + 1 < parts.length)
                 {
-                    String typeRu    = parts[0];
-                    String objName   = parts[1];
-                    String formName  = parts[i + 1];
-                    String folder    = TYPE_TO_FOLDER.get(typeRu);
+                    String folder = MdTypeMapping.anyToFolder(parts[0]);
                     if (folder == null) return null;
                     String prefix = extension != null
                         ? "src/ext/" + extension + "/" + folder //$NON-NLS-1$ //$NON-NLS-2$
                         : "src/cf/" + folder; //$NON-NLS-1$
-                    return prefix + "/" + objName + "/Forms/" + formName + "/Ext/Form.bsl"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    return prefix + "/" + parts[1] + "/Forms/" + parts[i + 1] + "/Ext/Form.bsl"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 }
             }
         }
@@ -877,10 +748,9 @@ public class GoToDefinition extends AbstractHandler
     }
 
     // =======================================================================
-    // ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ (аналог утилит 1С)
+    // ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
     // =======================================================================
 
-    /** Убирает суффикс типа: «СправочникСсылка.Валюты» → «Справочник.Валюты» */
     private static String stripTypeSuffix(String ref)
     {
         int dot = ref.indexOf('.');
@@ -889,10 +759,6 @@ public class GoToDefinition extends AbstractHandler
         return base != null ? base + ref.substring(dot) : null;
     }
 
-    /**
-     * Извлекает имена объектов МД из описания типов (ИменаМетаданныхИзОписанияТиповЛкс в 1С).
-     * «СправочникСсылка.Валюты, ДокументСсылка.Накладная» → [Справочник.Валюты, Документ.Накладная]
-     */
     private static List<String> extractMdNamesFromTypeDescription(String types)
     {
         List<String> result = new ArrayList<>();
@@ -901,20 +767,18 @@ public class GoToDefinition extends AbstractHandler
             String t = part.strip();
             if (t.isEmpty()) continue;
             String stripped = stripTypeSuffix(t);
-            if (stripped != null)          result.add(stripped);
-            else if (t.contains("."))      result.add(t); //$NON-NLS-1$
+            if (stripped != null)     result.add(stripped);
+            else if (t.contains(".")) result.add(t); //$NON-NLS-1$
         }
         return result;
     }
 
-    /** Показывает диалог выбора из нескольких МД-объектов и открывает выбранный. */
     private static boolean pickAndOpen(List<String> names, Shell shell, IWorkbenchPage page)
     {
-        String[] buttons = names.toArray(new String[0]);
         MessageDialog dlg = new MessageDialog(shell,
             "Выберите объект", null, //$NON-NLS-1$
             "Найдено несколько объектов. Выберите для перехода:", //$NON-NLS-1$
-            MessageDialog.QUESTION, buttons, 0);
+            MessageDialog.QUESTION, names.toArray(new String[0]), 0);
         int idx = dlg.open();
         if (idx < 0 || idx >= names.size()) return false;
         return openByFullName(names.get(idx), shell, page);
@@ -927,10 +791,6 @@ public class GoToDefinition extends AbstractHandler
         return false;
     }
 
-    /**
-     * Возвращает позицию токена «.Форма.» / «.ЭлементыФормы.» / «.Элементы.» в имени,
-     * или -1 если не найдено.
-     */
     private static int indexOfFormPart(String fullName)
     {
         for (String marker : new String[]{ ".Форма.", ".Forms.", ".ЭлементыФормы.", ".Элементы." }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
@@ -952,12 +812,11 @@ public class GoToDefinition extends AbstractHandler
         while (m.find())
         {
             ModuleLineRef r = new ModuleLineRef();
-            r.extension  = m.group(1);  // может быть null
+            r.extension  = m.group(1);
             r.modulePath = m.group(2);
             r.line       = parseInt(m.group(3));
-            r.method     = m.group(4);  // может быть null
+            r.method     = m.group(4);
             r.offset     = parseInt(m.group(5));
-            // Путь с «/» или «\» — внешний файл
             if (r.modulePath.contains("/") || r.modulePath.contains("\\")) //$NON-NLS-1$ //$NON-NLS-2$
             {
                 r.file       = r.modulePath;
@@ -970,18 +829,18 @@ public class GoToDefinition extends AbstractHandler
 
     private static final class ModuleLineRef
     {
-        String extension;  // имя расширения (null = основная конфигурация)
-        String modulePath; // Тип.Объект.МодульXxx (null если file != null)
-        String file;       // путь к файлу (для внешних обработок)
-        int    line;       // номер строки (1-based)
-        String method;     // имя метода (необязательно)
-        int    offset;     // смещение внутри метода (необязательно, не используется в EDT)
+        String extension;
+        String modulePath;
+        String file;
+        int    line;
+        String method;
+        int    offset;
 
         String displayLabel()
         {
             String base = modulePath != null ? modulePath : file;
             String s = (base != null ? base : "") + " (" + line + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            if (method != null) s += " : " + method; //$NON-NLS-1$
+            if (method != null)    s += " : " + method;    //$NON-NLS-1$
             if (extension != null) s += " [" + extension + "]"; //$NON-NLS-1$ //$NON-NLS-2$
             return s;
         }

@@ -189,8 +189,8 @@ public class DataCompositionSchemaEditorHook implements IStartup
                     {
                         // Здесь мы находимся в родном потоке для этого COM-объекта. 
                         String file = exportToFile(page);
-                        ComBridge.setProperty(irSession.root, "Visible", true);
                         Object irClient = irSession.getModule("ирКлиент");
+                        ComBridge.setProperty(irSession.root, "Visible", true);
                         URI fileUri = page.getModel().eResource().getURI();
                         String fullObjectName = fileUri.path().substring(1);
                         // Мультиметка260525_210353

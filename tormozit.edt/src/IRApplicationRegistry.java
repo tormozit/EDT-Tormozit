@@ -18,8 +18,10 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
@@ -119,9 +121,10 @@ public final class IRApplicationRegistry
         /** Не null, если ИР подключён портативно (ирПортативный.epf), а не через расширение.
          *  В этом случае getModule() использует эту форму вместо root (COM-приложения). */
         public Object moduleRoot = null;
+        public InfobaseReference infobase;
 
         IrSession(State state, LocalDateTime startTime, long pid, String platformVersion,
-                  Object root, Object processObj, String appTitle, IProject project, ExecutorService executor)
+                  Object root, Object processObj, String appTitle, IProject project, ExecutorService executor, InfobaseReference infobase)
         {
             this.state = state;
             this.startTime = startTime;
@@ -132,6 +135,7 @@ public final class IRApplicationRegistry
             this.appTitle = appTitle;
             this.project = project;
             this.executor = executor;
+            this.infobase = infobase;
         }
 
         public Object getModule(String name)
@@ -141,7 +145,7 @@ public final class IRApplicationRegistry
     }
     IrSession newSession(ExecutorService executor)
     {
-        return new IrSession(State.CONNECTING, LocalDateTime.now(), 0, "", null, null, "", null, executor);
+        return new IrSession(State.CONNECTING, LocalDateTime.now(), 0, "", null, null, "", null, executor, null);
     }
     
     static private final Map<String, IrSession>  sessions           = new ConcurrentHashMap<>();
@@ -213,8 +217,11 @@ public final class IRApplicationRegistry
         String key = sessionKey(infobase);
 
         IrSession existing = sessions.get(key);
-        if (existing != null && (existing.state == State.CONNECTING
-                || existing.state == State.CONNECTED)) return;
+        if (existing != null && existing.state == State.CONNECTED) {
+            doDisconnect(key, existing);
+        }
+        else if (existing != null && existing.state == State.CONNECTING)
+            return;
         IProject activeProject = (IProject) Global.getField(element, "project");
 
         // Создаем поток-одиночку для этой сессии. Поток будет жить, пока сессия активна.
@@ -249,7 +256,7 @@ public final class IRApplicationRegistry
     {
         String appLabel = DesignerSessionPoolAccessor.nameOf(infobase);
         Shell connectingToast = ToastNotification.show(toastTitle(),
-            "Подключается приложение ИР «" + appLabel + "». Закрыть командой «Отключить приложение ИР».", 60_000);
+            "Подключается приложение ИР \"" + appLabel + "\". Закрыть командой \"Отключить приложение ИР\"", 60_000);
         try
         {
             doConnectInternal(project, infobase);
@@ -375,7 +382,7 @@ public final class IRApplicationRegistry
 
         IrSession irSession = new IrSession(
             State.CONNECTED, LocalDateTime.now(), pid, platformVersion,
-            comDispatch, processObj, title, project, currentExecutor);
+            comDispatch, processObj, title, project, currentExecutor, infobase);
         sessions.put(key, irSession);
         notifyListeners();
 
@@ -733,7 +740,7 @@ public final class IRApplicationRegistry
     // Отключение (аналог ЗакрытьПриложениеИР)
     // -----------------------------------------------------------------------
 
-    public void disconnect(InfobaseReference infobase)
+    static public void disconnect(InfobaseReference infobase)
     {
         String key = sessionKey(infobase);
         IrSession session = sessions.get(key);
@@ -743,7 +750,7 @@ public final class IRApplicationRegistry
         session.executor.submit(() -> doDisconnect(key, session));
     }
 
-    private void doDisconnect(String key, IrSession session)
+    static private void doDisconnect(String key, IrSession session)
     {
         boolean killed = false;
         if (session.root != null)
@@ -974,7 +981,7 @@ public final class IRApplicationRegistry
         ToastNotification.show(toastTitle(), "Ошибка подключения: " + msg, 6_000); //$NON-NLS-1$
     }
 
-    private void notifyListeners()
+    static private void notifyListeners()
     {
         changeListeners.forEach(r -> { try { r.run(); } catch (Exception ignored) {} });
     }
@@ -992,7 +999,7 @@ public final class IRApplicationRegistry
         {
             String key = entry.getKey();
             IrSession session = entry.getValue();
-            if (session.project == dtProject.getWorkspaceProject())
+            if (session.project == dtProject.getWorkspaceProject() && checkAlive(session))
                 return session;
         }
         // Ищем любое приложение этого проекта, отдавая предпочтение основному приложению
@@ -1021,13 +1028,41 @@ public final class IRApplicationRegistry
         getInstance().connectInfobaseApplication(application);
         return null;
     }
+    
+    private static boolean checkAlive(IRApplicationRegistry.IrSession session)
+    {
+        Future<Boolean> future = session.executor.submit(() -> {
+           try {
+                ComBridge.getProperty(session.root, "Visible"); 
+            }
+            catch (Exception e) {
+                return false;
+            }
+            return true;
+        });
+
+        try {
+            // Ждем завершения максимум 1 секунд (так как база может отвечать до 20 сек)
+            return future.get(1, TimeUnit.SECONDS); 
+        }
+        catch (TimeoutException e) {
+            // Если вышло время ожидания — принудительно прерываем задачу в экзекьюторе
+            future.cancel(true); 
+            return true;
+        }
+        catch (Exception e) {
+            // Для всех остальных ошибок (InterruptedException, ExecutionException)
+            return false;
+        }
+    }
+
     public static IrSession getSession(long pid)
     {
         for (Map.Entry<String, IrSession> entry : sessions.entrySet())
         {
             String key = entry.getKey();
             IrSession session = entry.getValue();
-            if (session.pid == pid)
+            if (session.pid == pid && checkAlive(session))
                 return session;
         }
         return null;

@@ -36,6 +36,12 @@
           schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
           sequence="M1+F12">
     </key>
+    <key
+          commandId="tormozit.edt.CopyRef"
+          contextId="org.eclipse.ui.contexts.window"
+          schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+          sequence="M1+F11">
+    </key>
   </extension>
 
   <extension point="org.eclipse.ui.commands">
@@ -51,6 +57,10 @@
             id="tormozit.edt.JumpToRef"
             name="Перейти"
             description="Перейти по ссылке из буфера обмена (Tormozit)"/>
+    <command
+            id="tormozit.edt.CopyRef"
+            name="Ссылка"
+            description="Копировать ссылку на текущий объект или строку модуля (Tormozit)"/>
   </extension>
 
   <extension point="org.eclipse.ui.handlers">
@@ -76,6 +86,10 @@
         class="GoToDefinition"
         commandId="tormozit.edt.JumpToRef">
      </handler>
+    <handler
+        class="GetRef"
+        commandId="tormozit.edt.CopyRef">
+     </handler>
   </extension>
 
   <extension point="org.eclipse.ui.menus">
@@ -84,6 +98,11 @@
             <command
               commandId="tormozit.edt.JumpToRef"
               tooltip="Перейти по ссылке из буфера обмена (Tormozit)"
+              style="push">
+            </command>
+            <command
+              commandId="tormozit.edt.CopyRef"
+              tooltip="Копировать ссылку на текущий объект или строку модуля (Tormozit)"
               style="push">
             </command>
          </toolbar>
