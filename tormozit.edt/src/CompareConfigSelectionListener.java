@@ -52,7 +52,7 @@ public class CompareConfigSelectionListener implements ISelectionChangedListener
 
     public void showObjectInNavigator(ISelection selection, boolean ifForced)
     {
-        EObject eObject = resolveEObject(selection, null);
+        EObject eObject = resolveEObject(selection, null, true);
         
         if (eObject != null && editor != null) {
             
@@ -108,7 +108,7 @@ public class CompareConfigSelectionListener implements ISelectionChangedListener
         return result instanceof Boolean && (Boolean) result;
     }
     
-    public EObject resolveEObject(ISelection selection, @Nullable ComparisonSide side)
+    public EObject resolveEObject(ISelection selection, @Nullable ComparisonSide side, boolean allowNearestParent)
     {
         if (!(selection instanceof IStructuredSelection))
             return null;
@@ -117,24 +117,57 @@ public class CompareConfigSelectionListener implements ISelectionChangedListener
         if (element == null)
             return null;
 
-        MatchedObjectsComparisonNode matchedNode = resolveMatchedNode(element);
-        if (matchedNode == null)
-            return null;
-
         IComparisonSession session = getSession(editor);
         if (session == null)
             return null;
 
-        Long bmId = null;
-        if (side == null || side == ComparisonSide.MAIN)
-            bmId = matchedNode.getMainObjectId();
-        if (bmId == null || bmId == -1L)
-            if (side == null || side == ComparisonSide.OTHER)
-                bmId = matchedNode.getOtherObjectId();
-        if (bmId == null || bmId == -1L)
-            return null;
+        Object currentElement = element;
+        
+        while (currentElement != null)
+        {
+            MatchedObjectsComparisonNode matchedNode = resolveMatchedNode(currentElement);
+            if (matchedNode != null)
+            {
+                Long bmId = null;
+                if (side == null || side == ComparisonSide.MAIN)
+                    bmId = matchedNode.getMainObjectId();
+                if (bmId == null || bmId == -1L)
+                {
+                    if (side == null || side == ComparisonSide.OTHER)
+                        bmId = matchedNode.getOtherObjectId();
+                }
 
-        return CompareConfigOpenObjectHandler.getEObject(session, bmId, matchedNode);
+                if (bmId != null && bmId != -1L)
+                {
+                    EObject eObject = CompareConfigOpenObjectHandler.getEObject(session, bmId, matchedNode);
+                    if (eObject != null)
+                    {
+                        return eObject;
+                    }
+                }
+            }
+
+            // Если флаг не установлен, сразу прерываем поиск
+            if (!allowNearestParent)
+            {
+                break;
+            }
+
+            // Поднимаемся на уровень выше
+            currentElement = getParentElement(currentElement);
+        }
+
+        return null;
+    }
+
+    private Object getParentElement(Object element)
+    {
+        Object parentViaReflection = Global.call(element, "getParent");
+        if (parentViaReflection != null) 
+        {
+            return parentViaReflection;
+        }
+        return null;
     }
     
     public static IComparisonSession getSession(IEditorPart editor)
