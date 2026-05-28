@@ -24,10 +24,8 @@ import org.eclipse.ui.IStartup;
 public class SmartOutlineHook implements IStartup {
 
     @Override
-    public void earlyStartup()
-    {
-        Display.getDefault().asyncExec(() ->
-        {
+    public void earlyStartup() {
+        Display.getDefault().asyncExec(() -> {
             install(Display.getDefault());
         });
     }
@@ -78,7 +76,6 @@ public class SmartOutlineHook implements IStartup {
         if (!isOutline) return;
 
         shell.setData(PATCHED_KEY, Boolean.TRUE);
-
         applySmartSearch(viewer, filterText);
     }
 
@@ -134,6 +131,7 @@ public class SmartOutlineHook implements IStartup {
         IBaseLabelProvider rawLp = viewer.getLabelProvider();
         ILabelProvider baseLp = createLabelProviderAdapter(rawLp);
         
+        SmartMatcher initialMatcher = new SmartMatcher(filterText.getText());
         SmartOutlineFilter smartFilter = new SmartOutlineFilter(baseLp);
         smartFilter.setPattern(filterText.getText());
         
@@ -144,6 +142,7 @@ public class SmartOutlineHook implements IStartup {
             innerStyledLp = (IStyledLabelProvider) rawLp;
         }
 
+        // ВОЗВРАЩЕНО: Сохраняем ссылку на наш умный провайдер стилей
         final SmartOutlineLabelProvider finalSmartLabelProvider;
 
         if (innerStyledLp != null) {
@@ -161,78 +160,104 @@ public class SmartOutlineHook implements IStartup {
         }
 
         viewer.addFilter(smartFilter);
-         viewer.setComparator(new SmartOutlineComparator(
-             smartFilter.getNamePremiumCache(), 
-             smartFilter.getParamPremiumCache(), 
-             baseLp
-         ));
-        // Модификация текста (живой фильтр)
+        viewer.setComparator(new SmartOutlineComparator(initialMatcher, baseLp));
+
         filterText.addModifyListener(new ModifyListener() {
             @Override
             public void modifyText(ModifyEvent e) {            
                 String pattern = filterText.getText();
-
+                
+                // Обновляем фильтр и кэши
                 smartFilter.refreshPattern(pattern);
-
+                
+                // ВОЗВРАЩЕНО: Передаем новый текст в провайдер стилей (ЭТО ВКЛЮЧАЕТ ПОДСВЕТКУ!)
                 if (finalSmartLabelProvider != null) {
                     finalSmartLabelProvider.setPattern(pattern);
                 }
 
+                viewer.setComparator(new SmartOutlineComparator(smartFilter.getNamePremiumCache(), smartFilter.getParamPremiumCache(), baseLp));
                 viewer.refresh();
-
-                if (!pattern.trim().isEmpty()) {
-                    TreeItem firstMatch = findFirstMatchingItem(viewer.getTree().getItems(), pattern);
-                    if (firstMatch != null && !firstMatch.isDisposed()) {
-                        viewer.getTree().setSelection(firstMatch);
-                        
-                        Event selectionEvent = new Event();
-                        selectionEvent.item = firstMatch;
-                        viewer.getTree().notifyListeners(SWT.Selection, selectionEvent);
-                    }
-                }
             }
         });
 
-        // Внедряем обработку клавиш Down и Up для мгновенной навигации
-        filterText.addListener(SWT.KeyDown, new Listener() {
+        // МОДЕРНИЗИРОВАННЫЙ ФИЛЬТР СОБЫТИЙ: Добавлена поддержка SWT.PAGE_DOWN и SWT.PAGE_UP
+        Display display = filterText.getDisplay();
+        Listener arrowFilter = new Listener() {
             @Override
             public void handleEvent(Event event) {
-                if (event.keyCode == SWT.ARROW_DOWN || event.keyCode == SWT.ARROW_UP) {
-                    Tree tree = viewer.getTree();
-                    TreeItem[] selection = tree.getSelection();
-                    TreeItem targetItem = null;
-
-                    if (selection.length == 0) {
-                        if (tree.getItemCount() > 0) {
-                            targetItem = tree.getItem(0);
-                        }
-                    } else {
-                        TreeItem current = selection[0];
-                        if (event.keyCode == SWT.ARROW_DOWN) {
-                            targetItem = getNextVisibleItem(tree, current);
-                        } else {
-                            targetItem = getPreviousVisibleItem(tree, current);
-                        }
-                    }
-
-                    if (targetItem != null && !targetItem.isDisposed()) {
-                        tree.setSelection(targetItem);
-                        tree.showItem(targetItem);
-                        
-                        // Посылаем сигнал выбора строки в 1C:EDT
-                        Event selectionEvent = new Event();
-                        selectionEvent.item = targetItem;
-                        tree.notifyListeners(SWT.Selection, selectionEvent);
-                        
-                        // doIt = false останавливает дефолтную SWT-передачу фокуса
-                        event.doit = false;
-                    }
+                if (event.widget == filterText && 
+                    (event.keyCode == SWT.ARROW_DOWN || event.keyCode == SWT.ARROW_UP || 
+                     event.keyCode == SWT.PAGE_DOWN || event.keyCode == SWT.PAGE_UP)) {
+                    
+                    navigateTree(viewer.getTree(), event.keyCode);
+                    event.type = SWT.None;
                 }
+            }
+        };
+        
+        display.addFilter(SWT.KeyDown, arrowFilter);
+
+        filterText.addDisposeListener(e -> {
+            if (!display.isDisposed()) {
+                display.removeFilter(SWT.KeyDown, arrowFilter);
             }
         });
     }
+    
+    private static void navigateTree(Tree tree, int keyCode) {
+        if (tree == null || tree.isDisposed() || tree.getItemCount() == 0) return;
 
-    // --- Методы точного расчета следующего/предыдущего видимого элемента в Tree ---
+        TreeItem[] selection = tree.getSelection();
+        TreeItem targetItem = null;
+
+        // Вычисляем высоту "страницы" динамически на основе размеров виджета на экране
+        int itemHeight = tree.getItemHeight();
+        int pageSteps = (itemHeight > 0) ? (tree.getClientArea().height / itemHeight) : 10;
+        if (pageSteps <= 0) pageSteps = 10; // На всякий случай дефолтное значение
+
+        if (selection.length == 0) {
+            // Если ничего не выбрано
+            if (keyCode == SWT.ARROW_DOWN || keyCode == SWT.PAGE_DOWN) {
+                targetItem = tree.getItem(0);
+            } else {
+                targetItem = getLastVisibleItem(tree);
+            }
+        } else {
+            TreeItem current = selection[0];
+            
+            if (keyCode == SWT.ARROW_DOWN) {
+                targetItem = getNextVisibleItem(tree, current);
+            } else if (keyCode == SWT.ARROW_UP) {
+                targetItem = getPreviousVisibleItem(tree, current);
+            } else if (keyCode == SWT.PAGE_DOWN) {
+                // Шагаем вниз на размер одной видимой страницы
+                targetItem = current;
+                for (int i = 0; i < pageSteps; i++) {
+                    TreeItem next = getNextVisibleItem(tree, targetItem);
+                    if (next == null) break; // Уперлись в самый низ списка
+                    targetItem = next;
+                }
+            } else if (keyCode == SWT.PAGE_UP) {
+                // Шагаем вверх на размер одной видимой страницы
+                targetItem = current;
+                for (int i = 0; i < pageSteps; i++) {
+                    TreeItem prev = getPreviousVisibleItem(tree, targetItem);
+                    if (prev == null) break; // Уперлись в самый верх списка
+                    targetItem = prev;
+                }
+            }
+        }
+
+        if (targetItem != null && !targetItem.isDisposed()) {
+            tree.setSelection(targetItem);
+            tree.showItem(targetItem);
+            
+            Event selectionEvent = new Event();
+            selectionEvent.widget = tree;
+            selectionEvent.item = targetItem;
+            tree.notifyListeners(SWT.Selection, selectionEvent);
+        }
+    }
 
     private static TreeItem getNextVisibleItem(Tree tree, TreeItem item) {
         if (item.getExpanded() && item.getItemCount() > 0) {
@@ -263,16 +288,22 @@ public class SmartOutlineHook implements IStartup {
         int index = indexOfItem(siblings, item);
         if (index > 0) {
             TreeItem prevSibling = siblings[index - 1];
-            return getLastVisibleLeaf(prevSibling);
+            return getLastVisibleDescendant(prevSibling);
         }
-        return parent; // Если брать выше первого ребенка — попадем на родителя
+        return parent;
     }
 
-    private static TreeItem getLastVisibleLeaf(TreeItem item) {
+    private static TreeItem getLastVisibleDescendant(TreeItem item) {
         if (item.getExpanded() && item.getItemCount() > 0) {
-            return getLastVisibleLeaf(item.getItem(item.getItemCount() - 1));
+            return getLastVisibleDescendant(item.getItem(item.getItemCount() - 1));
         }
         return item;
+    }
+
+    private static TreeItem getLastVisibleItem(Tree tree) {
+        if (tree.getItemCount() == 0) return null;
+        TreeItem lastRoot = tree.getItem(tree.getItemCount() - 1);
+        return getLastVisibleDescendant(lastRoot);
     }
 
     private static int indexOfItem(TreeItem[] items, TreeItem item) {
@@ -280,28 +311,6 @@ public class SmartOutlineHook implements IStartup {
             if (items[i] == item) return i;
         }
         return -1;
-    }
-
-    private static TreeItem findFirstMatchingItem(TreeItem[] items, String pattern) {
-        if (items == null || items.length == 0) return null;
-        if (pattern == null || pattern.isEmpty()) return items[0];
-
-        String lowerPattern = pattern.toLowerCase();
-        for (TreeItem item : items) {
-            String text = item.getText() != null ? item.getText().toLowerCase() : "";
-            
-            if (text.contains(lowerPattern) || item.getItemCount() == 0) {
-                return item;
-            }
-            
-            if (item.getItemCount() > 0) {
-                TreeItem childMatch = findFirstMatchingItem(item.getItems(), pattern);
-                if (childMatch != null) {
-                    return childMatch;
-                }
-            }
-        }
-        return items[0];
     }
     
     private static ILabelProvider createLabelProviderAdapter(IBaseLabelProvider rawLp) {
