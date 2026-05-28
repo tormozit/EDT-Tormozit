@@ -91,17 +91,6 @@ public class CompareConfigCompareInIRHandler extends AbstractHandler {
         }
         Path pathOther = getPropertySideFile(editor, element, ComparisonSide.OTHER); // mxlx
         Path pathAncestor = getPropertySideFile(editor, element, ComparisonSide.COMMON_ANCESTOR); // mxlx
-        Path exportDirectory;
-        try
-        {
-            exportDirectory = Files.createTempDirectory("tormozit_");
-        }
-        catch (IOException e)
-        {
-            // TODO Auto-generated catch block
-            e.printStackTrace();
-            return;
-        }
         IComparisonSession compSession = CompareConfigSelectionListener.getSession(editor);
         IRApplicationRegistry.IrSession irSession = IRApplicationRegistry.getSession(compSession.getDataSource(ComparisonSide.MAIN).getDtProject());
         if (irSession == null || irSession.executor == null) {
@@ -185,11 +174,5 @@ public class CompareConfigCompareInIRHandler extends AbstractHandler {
             }
         }
         return sel;
-    }
-
-    private static void showError(Shell shell, String msg) {
-        try {
-            MessageDialog.openInformation(shell, "Открыть объект", msg);
-        } catch (Exception ignored) {}
     }
 }

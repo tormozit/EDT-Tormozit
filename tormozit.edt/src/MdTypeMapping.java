@@ -26,7 +26,7 @@ import java.util.Map;
  *
  * <h3>Нормализация в любую форму из любой</h3>
  * <pre>
- *   anyToRu("Catalog")     = anyToRu("Catalogs")     = "Справочник"
+ *   anyToRu("Catalog")      = anyToRu("Catalogs")      = "Справочник"
  *   anyToEnSing("Catalogs") = anyToEnSing("Справочник") = "Catalog"
  *   anyToFolder("Справочник") = anyToFolder("Catalog")  = "Catalogs"
  * </pre>
@@ -40,6 +40,12 @@ import java.util.Map;
  *   pathToRuFullName("Catalogs/Валюты")   = "Справочник.Валюты"
  *   pathToEnSingFullName("Catalogs/Валюты") = "Catalog.Валюты"
  * </pre>
+ *
+ * <h3>BM URI → полное русское имя (используется в GetRef)</h3>
+ * <pre>
+ *   bmFqnToRuFullName("Catalog.Валюты")                         = "Справочник.Валюты"
+ *   bmFqnToRuFullName("Catalog.Валюты.Template.Классификатор")  = "Справочник.Валюты.Макет.Классификатор"
+ * </pre>
  */
 public final class MdTypeMapping
 {
@@ -48,9 +54,6 @@ public final class MdTypeMapping
     // =========================================================================
     // Шесть производных маппингов — заполняются через add() / addAlias()
     // =========================================================================
-
-    // Карты намеренно не делаем unmodifiable: это internal-класс плагина,
-    // а не публичная библиотека. Readonly-вид при необходимости — getRuToFolderMap().
 
     /** RU ед.ч. → EN ед.ч.  «Справочник» → «Catalog» */
     static final Map<String, String> RU_TO_EN_SING        = new LinkedHashMap<>();
@@ -121,10 +124,11 @@ public final class MdTypeMapping
         add("СтильОформления",              "StyleItem",                    "StyleItems");
         add("Интерфейс",                    "Interface",                    "Interfaces");
 
-        // ── Алиасы (только RU → папка, canonical-ключ EN не перезаписывается) ─
+        // ── Псевдонимы ───────────────────────────────────────────────────────
         addAlias("ОбщийМодульПовторногоИспользования", "ОбщийМодуль");
 
         // ── Вложенные типы без самостоятельной папки в EDT ───────────────────
+        // Модули конфигурации/приложения
         add("Конфигурация",                     "Configuration",                null);
         add("МодульУправляемогоПриложения",     "ManagedApplicationModule",     null);
         add("МодульОбычногоПриложения",         "OrdinaryApplicationModule",    null);
@@ -138,6 +142,17 @@ public final class MdTypeMapping
         add("Модуль",                           "Module",                       null);
         add("Форма",                            "Form",                         null);
         add("Команда",                          "Command",                      null);
+
+        // ── Под-объекты объектов метаданных (используются в BM FQN) ─────────
+        // Эти типы встречаются как сегменты BM URI вида
+        // "Catalog.Валюты.Template.Классификатор" и нужны для GetRef.eObjectToFullName.
+        add("Макет",               "Template",        null);
+        add("ТабличнаяЧасть",      "TabularSection",  null);
+        add("Реквизит",            "Attribute",       null);
+        add("Измерение",           "Dimension",       null);
+        add("Ресурс",              "Resource",        null);
+        add("Перерасчет",          "Recalculation",   null);
+        add("ПризнакУчета",        "AccountingFlag",  null);
     }
 
     // =========================================================================
@@ -203,7 +218,7 @@ public final class MdTypeMapping
     }
 
     // =========================================================================
-    // Операции с полным именем объекта
+    // Операции с полным именем объекта  («Тип.Имя»  или «Папка/Имя»)
     // =========================================================================
 
     /**
@@ -305,6 +320,54 @@ public final class MdTypeMapping
     }
 
     // =========================================================================
+    // BM URI FQN → полное русское имя (для GetRef.eObjectToFullName)
+    // =========================================================================
+
+    /**
+     * Конвертирует FQN из BM URI (или от {@code IQualifiedNameProvider}) в полное русское имя.
+     *
+     * <p>BM URI в EDT имеет вид {@code bm://Конфигурация/Catalog.Валюты}, где часть пути
+     * ({@code uri.path().substring(1)}) — это FQN объекта в EN-форме.
+     * Аналогично {@code IQualifiedNameProvider} возвращает FQN вида
+     * {@code "Catalog.Валюты.Template.Классификатор"}.
+     *
+     * <p>Алгоритм: разбивает FQN по «.», каждую пару сегментов (ТипEN, Имя) конвертирует
+     * через {@link #anyToRu(String)}.
+     *
+     * <pre>
+     *   "Catalog.Валюты"                         → "Справочник.Валюты"
+     *   "Catalog.Валюты.Template.Классификатор"  → "Справочник.Валюты.Макет.Классификатор"
+     *   "CommonModule.МойМодуль"                 → "ОбщийМодуль.МойМодуль"
+     * </pre>
+     *
+     * @param fqn FQN в EN-форме; может быть {@code null}
+     * @return полное русское имя, или {@code null} если первый тип не распознан
+     */
+    public static String bmFqnToRuFullName(String fqn)
+    {
+        if (fqn == null || fqn.isBlank()) return null;
+
+        String[] parts = fqn.split("\\.", -1); //$NON-NLS-1$
+        if (parts.length < 2) return null;
+
+        // Первая пара: тип и имя объекта верхнего уровня
+        String typeRu = anyToRu(parts[0]);
+        if (typeRu == null) return null;
+
+        StringBuilder sb = new StringBuilder(typeRu).append('.').append(parts[1]);
+
+        // Дополнительные пары: тип и имя под-объекта (макет, форма, команда …)
+        for (int i = 2; i + 1 < parts.length; i += 2)
+        {
+            String subTypeRu = anyToRu(parts[i]);
+            if (subTypeRu != null)
+                sb.append('.').append(subTypeRu).append('.').append(parts[i + 1]);
+        }
+
+        return sb.toString();
+    }
+
+    // =========================================================================
     // Совместимость: замена TYPE_TO_FOLDER в GoToDefinition
     // =========================================================================
 
@@ -347,14 +410,7 @@ public final class MdTypeMapping
     /**
      * Регистрирует альтернативное RU-имя для уже существующего типа.
      * Псевдоним участвует в RU → EN1 и RU → папка, но не перезаписывает
-     * обратные маппинги (EN → RU, папка → RU), которые продолжают указывать
-     * на каноническое имя.
-     *
-     * <pre>
-     *   addAlias("ОбщийМодульПовторногоИспользования", "ОбщийМодуль")
-     *   // ruToFolder("ОбщийМодульПовторногоИспользования") = "CommonModules"
-     *   // folderToRu("CommonModules")                      = "ОбщийМодуль"  ← канонический
-     * </pre>
+     * обратные маппинги (EN → RU, папка → RU).
      */
     private static void addAlias(String ruAlias, String ruCanonical)
     {
@@ -362,8 +418,6 @@ public final class MdTypeMapping
         String folder = RU_TO_FOLDER.get(ruCanonical);
         if (enSing != null) RU_TO_EN_SING.put(ruAlias, enSing);
         if (folder != null) RU_TO_FOLDER.put(ruAlias, folder);
-        // EN_SING_TO_FOLDER, FOLDER_TO_RU, FOLDER_TO_EN_SING — не трогаем:
-        // каноническое имя остаётся приоритетным при обратном маппинге.
     }
 
     // =========================================================================
@@ -372,15 +426,11 @@ public final class MdTypeMapping
 
     private static final class Parsed
     {
-        final String type; // первая часть: «Справочник», «Catalog» или «Catalogs»
-        final String name; // остаток: «Валюты» или «Валюты.Форма.ФормаЭлемента»
+        final String type;
+        final String name;
         Parsed(String type, String name) { this.type = type; this.name = name; }
     }
 
-    /**
-     * Разбирает строку на тип и имя объекта по первому вхождению «.», «/» или «\».
-     * Возвращает {@code null} если разделитель не найден или одна из частей пустая.
-     */
     private static Parsed parse(String s)
     {
         if (s == null || s.isBlank()) return null;

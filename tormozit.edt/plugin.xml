@@ -7,7 +7,9 @@
     <startup class="ApplicationsViewHook"/>
     <startup class="ApplicationEditorHook"/>
     <startup class="DataCompositionSchemaEditorHook"/> 
-    <startup class="BSLEditorMenuHook"/>  
+    <startup class="BSLEditorMenuHook"/> 
+    <startup class="SmartOutlineHook"/> 
+    <startup class="MenuTooltipStatusLineHook"/>  
   </extension>
 
   <extension point="org.eclipse.ui.contexts">

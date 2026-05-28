@@ -1,5 +1,4 @@
 
-import java.io.File;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -12,10 +11,10 @@ import org.eclipse.core.commands.ExecutionException;
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.runtime.Adapters;
-import org.eclipse.core.runtime.Path;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.resource.Resource;
+import org.eclipse.jface.viewers.ISelection;
 import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.swt.dnd.Clipboard;
 import org.eclipse.swt.dnd.TextTransfer;
@@ -23,17 +22,15 @@ import org.eclipse.swt.dnd.Transfer;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.ui.IEditorInput;
 import org.eclipse.ui.IEditorPart;
-import org.eclipse.ui.IViewPart;
 import org.eclipse.ui.IWorkbenchPage;
 import org.eclipse.ui.IWorkbenchPart;
-import org.eclipse.ui.IWorkbenchSite;
 import org.eclipse.ui.handlers.HandlerUtil;
-import org.eclipse.ui.internal.PartSite;
 import org.eclipse.ui.navigator.CommonNavigator;
 import org.eclipse.ui.forms.editor.IFormPage;
-import org.eclipse.emf.workspace.util.WorkspaceSynchronizer;
+import org.eclipse.xtext.resource.IResourceServiceProvider;
 
-import com._1c.g5.v8.dt.bsl.ui.editor.BslXtextEditor;
+import com._1c.g5.v8.dt.compare.core.IComparisonSession;
+import com._1c.g5.v8.dt.compare.model.MatchedObjectsComparisonNode;
 import com._1c.g5.v8.dt.md.ui.editor.base.DtGranularEditor;
 import com._1c.g5.v8.dt.md.ui.editor.base.DtGranularEditorXtextEditorPage;
 
@@ -43,39 +40,32 @@ import com._1c.g5.v8.dt.md.ui.editor.base.DtGranularEditorXtextEditorPage;
  *
  * <h3>Поддерживаемые источники</h3>
  * <ol>
- *   <li><b>Активный BSL-редактор</b> (автономный или страница DtGranularEditor) —
- *       из пути {@code .bsl}-файла строится полное имя вплоть до суффикса модуля:
- *       {@code Справочник.Валюты.МодульОбъекта}</li>
- *   <li><b>Активный DtGranularEditor</b> (редактор объекта/формы EDT) —
- *       из пути {@code .mdo}-файла: {@code Справочник.Валюты}</li>
- *   <li><b>Выделение в навигаторе EDT</b> — из {@link IFile}, {@link IResource},
- *       или {@link EObject} выбранного узла:
- *       {@code Справочник.Валюты.Макет.Классификатор}</li>
+ *   <li><b>Дерево сравнения конфигураций</b> — из выбранного узла через EObject.</li>
+ *   <li><b>Активный DtGranularEditor</b> — BSL-страница даёт суффикс модуля,
+ *       иные страницы — имя объекта без суффикса.</li>
+ *   <li><b>Любой редактор с IFile-вводом</b> — BSL / .mdo / .xml файл.</li>
+ *   <li><b>Навигатор EDT</b> — EObject, IFile или IResource выбранного узла.</li>
  * </ol>
  *
- * <h3>Формат пути EDT → полное имя</h3>
- * <pre>
- *   src/Catalogs/Валюты/Валюты.mdo            → Справочник.Валюты
- *   src/Catalogs/Валюты/Ext/ObjectModule.bsl  → Справочник.Валюты.МодульОбъекта
- *   src/Catalogs/Валюты/Ext/ManagerModule.bsl → Справочник.Валюты.МодульМенеджера
- *   src/Catalogs/Валюты/Forms/ФормаЭл/...     → Справочник.Валюты.Форма.ФормаЭл
- *   src/Catalogs/Валюты/Templates/Кл/Кл.mdo   → Справочник.Валюты.Макет.Кл
- *   src/Catalogs/Валюты/Commands/Кнопка/...   → Справочник.Валюты.Команда.Кнопка
- *   src/CommonModules/МойМодуль/Ext/Module.bsl → ОбщийМодуль.МойМодуль
- *   src/CommonForms/МояФорма/Ext/Form.bsl      → ОбщаяФорма.МояФорма
- *   src/ext/Расш1/Catalogs/Валюты/Валюты.mdo     → Расш1 Справочник.Валюты
- * </pre>
+ * <h3>Два пути к полному имени</h3>
+ * <ul>
+ *   <li><b>BM URI</b> (EObject из навигатора / дерева сравнения):
+ *       {@code bm://Конфигурация/Catalog.Валюты} → FQN {@code "Catalog.Валюты"}
+ *       → {@link MdTypeMapping#bmFqnToRuFullName} → {@code "Справочник.Валюты"}.
+ *       Для под-объектов используется {@code IQualifiedNameProvider}:
+ *       {@code "Catalog.Валюты.Template.Классификатор"} → {@code "Справочник.Валюты.Макет.Классификатор"}.</li>
+ *   <li><b>Файловый путь</b> (редакторы, IFile из навигатора):
+ *       {@code src/Catalogs/Валюты/Templates/Кл/Кл.mdo} → {@link #pathToFullName}
+ *       → {@code "Справочник.Валюты.Макет.Кл"}.</li>
+ * </ul>
  */
 public class GetRef extends AbstractHandler
 {
     // =========================================================================
-    // Вспомогательные маппинги (локальные для этого класса)
+    // Маппинги (локальные для этого класса)
     // =========================================================================
 
-    /**
-     * Имя вложенной папки EDT → русское название раздела в полном имени МД.
-     * Пример: «Templates» → «Макет».
-     */
+    /** Папка вложенного объекта EDT → русское название раздела. */
     private static final Map<String, String> SUBFOLDER_TO_RU = new LinkedHashMap<>();
     static
     {
@@ -85,10 +75,7 @@ public class GetRef extends AbstractHandler
         SUBFOLDER_TO_RU.put("Recalculations", "Перерасчет");
     }
 
-    /**
-     * Имя BSL-файла → русский суффикс модуля в полном имени МД.
-     * Пример: «ObjectModule.bsl» → «МодульОбъекта».
-     */
+    /** Имя BSL-файла в Ext/ → русский суффикс модуля. */
     private static final Map<String, String> BSL_TO_MODULE_RU = new LinkedHashMap<>();
     static
     {
@@ -96,17 +83,15 @@ public class GetRef extends AbstractHandler
         BSL_TO_MODULE_RU.put("ManagerModule.bsl",   "МодульМенеджера");
         BSL_TO_MODULE_RU.put("RecordSetModule.bsl", "МодульНабораЗаписей");
         BSL_TO_MODULE_RU.put("Module.bsl",          "Модуль");
-        // Form.bsl под Forms/<Name>/Ext/ — не добавляет суффикс: имя уже в пути Forms/<Name>
+        // Form.bsl под Forms/<Name>/Ext/ — суффикс не нужен, имя формы уже в пути
     }
 
     /**
-     * Папки верхнего уровня, где файл в {@code Ext/} является самим объектом,
-     * а не его подмодулем: {@code CommonModules}, {@code CommonForms} и т.д.
-     * Для них суффикс модуля в полное имя не добавляется.
+     * Папки верхнего уровня, где Ext-файл является самим объектом, а не его модулем.
+     * Суффикс из BSL_TO_MODULE_RU для них не добавляется.
      */
     private static final Set<String> TOP_LEVEL_CONTAINERS = new HashSet<>(Arrays.asList(
-        "CommonModules", "CommonForms", "CommonTemplates",
-        "CommonPictures", "CommonCommands"
+        "CommonModules", "CommonForms", "CommonTemplates", "CommonPictures", "CommonCommands"
     ));
 
     // =========================================================================
@@ -118,69 +103,95 @@ public class GetRef extends AbstractHandler
     {
         IWorkbenchPart part = HandlerUtil.getActivePart(event);
         IWorkbenchPage page = part.getSite().getPage();
-        String ref="";
-        if (part == page.findView("com._1c.g5.v8.dt.ui2.navigator"))
-            ref = refFromNavigator(page);
-        else 
-            ref = getRefFromEditor(page);
+        Shell           shell = HandlerUtil.getActiveShell(event);
+
+        String ref = resolveRef(part, page);
+
         if (ref == null || ref.isBlank())
         {
             ToastNotification.show("Ссылка",
                 "Не удалось определить имя объекта метаданных.\n"
-                + "Откройте редактор объекта или активируйте его узел в навигаторе.", 5000);
+                + "Выберите узел в навигаторе, дереве сравнения или откройте редактор объекта.",
+                5000);
             return null;
         }
-        setClipboardText(ref, HandlerUtil.getActiveShell(event));
+
+        Global.log("GetRef: " + ref); //$NON-NLS-1$
+        setClipboardText(ref, shell);
         ToastNotification.show("Скопирована ссылка", ref, 6000);
         return null;
     }
 
     // =========================================================================
-    // Публичный API (используется другими классами плагина)
+    // Диспетчер источников
     // =========================================================================
 
-    /**
-     * Возвращает полное русское имя МД-объекта, связанного с текущим состоянием UI.
-     * Пробует последовательно: активный редактор → навигатор.
-     *
-     * @return строка вида «Справочник.Валюты.Макет.Классификатор», или {@code null}
-     */
+    private static String resolveRef(IWorkbenchPart part, IWorkbenchPage page)
+    {
+        // 1. Дерево сравнения конфигураций
+        if (part instanceof IEditorPart
+                && Global.COMPARE_EDITOR_ID.equals(part.getSite().getId()))
+            return refFromCompareEditor((IEditorPart) part);
+
+        // 2. Навигатор
+        if (part == page.findView(Global.NAVIGATOR_VIEW_ID))
+            return refFromNavigator(page);
+
+        // 3. Редактор
+        String ref = getRefFromEditor(page);
+        if (ref != null) return ref;
+
+        // 4. Fallback: навигатор
+        return refFromNavigator(page);
+    }
+
+    // =========================================================================
+    // Источник 1: дерево сравнения конфигураций
+    // =========================================================================
+
+    private static String refFromCompareEditor(IEditorPart editor)
+    {
+        ISelection sel = CompareConfigOpenObjectHandler.getSelection(editor);
+        if (!(sel instanceof IStructuredSelection)) return null;
+
+        Object element = ((IStructuredSelection) sel).getFirstElement();
+        if (element == null) return null;
+
+        MatchedObjectsComparisonNode node =
+            CompareConfigSelectionListener.resolveMatchedNode(element);
+        if (node == null) return null;
+
+        IComparisonSession session = CompareConfigSelectionListener.getSession(editor);
+        if (session == null) return null;
+
+        Long bmId = node.getMainObjectId();
+        if (bmId == null || bmId == -1L) bmId = node.getOtherObjectId();
+        if (bmId == null || bmId == -1L) return null;
+
+        EObject eObject = CompareConfigOpenObjectHandler.getEObject(session, bmId, node);
+        return eObjectToFullName(eObject);
+    }
+
+    // =========================================================================
+    // Источник 2: редактор
+    // =========================================================================
+
     public static String getRefFromEditor(IWorkbenchPage page)
     {
         IEditorPart editor = (page != null) ? page.getActiveEditor() : null;
+        if (editor == null) return null;
 
-        // 1. Многостраничный редактор EDT (форма, модуль, макет …)
         if (editor instanceof DtGranularEditor<?>)
         {
             String ref = refFromGranularEditor((DtGranularEditor<?>) editor);
             if (ref != null) return ref;
         }
 
-        // 2. Любой редактор с IFile-вводом (BSL, .mdo, .xml …)
-        if (editor != null)
-        {
-            String ref = refFromEditorInput(editor.getEditorInput());
-            if (ref != null) return ref;
-        }
-        return null;
+        return refFromEditorInput(editor.getEditorInput());
     }
 
-    // =========================================================================
-    // Источник 1: DtGranularEditor
-    // =========================================================================
-
-    /**
-     * Для DtGranularEditor сначала проверяем активную страницу:
-     * <ul>
-     *   <li>Если это страница BSL-модуля → берём файл встроенного редактора
-     *       → получаем полный путь с суффиксом модуля.</li>
-     *   <li>Иначе → берём основной ввод редактора (.mdo объекта)
-     *       → получаем имя без суффикса.</li>
-     * </ul>
-     */
     private static String refFromGranularEditor(DtGranularEditor<?> editor)
     {
-        // Активная BSL-страница (МодульОбъекта, МодульМенеджера …)
         IFormPage activePage = editor.getActivePageInstance();
         if (activePage instanceof DtGranularEditorXtextEditorPage<?>)
         {
@@ -192,14 +203,8 @@ public class GetRef extends AbstractHandler
                 if (ref != null) return ref;
             }
         }
-
-        // Основной ввод (обычно .mdo файл объекта)
         return refFromEditorInput(editor.getEditorInput());
     }
-
-    // =========================================================================
-    // Источник 2: IEditorInput
-    // =========================================================================
 
     private static String refFromEditorInput(IEditorInput input)
     {
@@ -218,70 +223,162 @@ public class GetRef extends AbstractHandler
         if (page == null) return null;
         try
         {
-            CommonNavigator nav = (CommonNavigator)
-                page.findView("com._1c.g5.v8.dt.ui2.navigator"); //$NON-NLS-1$
+            CommonNavigator nav = (CommonNavigator) page.findView(Global.NAVIGATOR_VIEW_ID);
             if (nav == null) return null;
 
             IStructuredSelection sel = (IStructuredSelection)
                 nav.getSite().getSelectionProvider().getSelection();
             if (sel == null || sel.isEmpty()) return null;
 
-            Object element = sel.getFirstElement();
-//
-//            // Стратегия 1: элемент адаптируется к IFile
-//            IFile file = Adapters.adapt(element, IFile.class);
-//            if (file != null)
-//            {
-//                String ref = pathToFullName(file.getProjectRelativePath().toString());
-//                if (ref != null) return ref;
-//            }
-//
-//            // Стратегия 2: элемент адаптируется к IResource (IFolder)
-//            IResource resource = Adapters.adapt(element, IResource.class);
-//            if (resource != null && resource.getType() != IResource.PROJECT)
-//            {
-//                String ref = pathToFullName(resource.getProjectRelativePath().toString());
-//                if (ref != null) return ref;
-//            }
-
-            // Стратегия 3: EMF EObject → URI ресурса → IFile
-            if (element instanceof EObject)
-            {
-                String ref = eObjectToFullName((EObject) element);
-                if (ref != null) return ref;
-            }
-
-            // Стратегия 4: рефлексия (некоторые EDT-обёртки имеют getFile() / getResource())
-            for (String getter : new String[]{ "getFile", "getResource", "getMdObject" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            {
-                Object result = Global.call(element, getter);
-                if (result instanceof IFile)
-                {
-                    String ref = pathToFullName(((IFile) result).getProjectRelativePath().toString());
-                    if (ref != null) return ref;
-                }
-                if (result instanceof EObject)
-                {
-                    String ref = eObjectToFullName((EObject) result);
-                    if (ref != null) return ref;
-                }
-            }
+            return refFromElement(sel.getFirstElement());
         }
         catch (Exception e)
         {
             Global.log("GetRef.refFromNavigator: " + e); //$NON-NLS-1$
+            return null;
         }
+    }
+
+    private static String refFromElement(Object element)
+    {
+        if (element == null) return null;
+
+        // EObject → BM URI
+        if (element instanceof EObject)
+        {
+            String ref = eObjectToFullName((EObject) element);
+            if (ref != null) return ref;
+        }
+
+        // IFile
+        IFile file = Adapters.adapt(element, IFile.class);
+        if (file != null)
+        {
+            String ref = pathToFullName(file.getProjectRelativePath().toString());
+            if (ref != null) return ref;
+        }
+
+        // IResource (IFolder)
+        IResource resource = Adapters.adapt(element, IResource.class);
+        if (resource != null && resource.getType() != IResource.PROJECT)
+        {
+            String ref = pathToFullName(resource.getProjectRelativePath().toString());
+            if (ref != null) return ref;
+        }
+
+        // Рефлексия: EDT-обёртки узлов навигатора
+        for (String getter : new String[]{ "getFile", "getResource", "getMdObject" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            Object result = Global.call(element, getter);
+            if (result instanceof EObject)
+            {
+                String ref = eObjectToFullName((EObject) result);
+                if (ref != null) return ref;
+            }
+            if (result instanceof IFile)
+            {
+                String ref = pathToFullName(((IFile) result).getProjectRelativePath().toString());
+                if (ref != null) return ref;
+            }
+        }
+
         return null;
     }
 
-    /** EObject → путь его EMF-ресурса → полное имя МД. */
-    private static String eObjectToFullName(EObject obj)
+    // =========================================================================
+    // EObject → полное имя МД
+    // =========================================================================
+
+    /**
+     * Извлекает полное русское имя МД из EMF EObject.
+     *
+     * <h3>BM URI (основной случай в EDT)</h3>
+     * URI имеет вид {@code bm://Конфигурация/Catalog.Валюты}.
+     * <ul>
+     *   <li><b>Стратегия 1а — IQualifiedNameProvider</b>: самый точный способ,
+     *       возвращает полный FQN включая под-объекты, например
+     *       {@code "Catalog.Валюты.Template.Классификатор"}.</li>
+     *   <li><b>Стратегия 1б — путь URI</b>: {@code uri.path().substring(1)} даёт FQN
+     *       корневого объекта — {@code "Catalog.Валюты"}. Работает всегда,
+     *       но не различает под-объекты одного родителя.</li>
+     * </ul>
+     * Оба варианта конвертируются через {@link MdTypeMapping#bmFqnToRuFullName}.
+     *
+     * <h3>Platform resource URI (запасной случай)</h3>
+     * Если URI вдруг окажется {@code platform:/resource/...}, путь парсится через
+     * {@link #pathToFullName}.
+     */
+    static String eObjectToFullName(EObject obj)
     {
+        if (obj == null) return null;
         Resource emfResource = obj.eResource();
         if (emfResource == null) return null;
         URI uri = emfResource.getURI();
-        return uri.path().substring(1);
-//        return pathToFullName(uri);
+
+        // ── BM URI: bm://Конфигурация/Catalog.Валюты ─────────────────────────
+        if ("bm".equals(uri.scheme())) //$NON-NLS-1$
+        {
+            // Стратегия 1а: IQualifiedNameProvider — даёт FQN с под-объектами
+            String fqnQnp = getFqnViaQnp(obj, uri);
+            if (fqnQnp != null)
+            {
+                String result = MdTypeMapping.bmFqnToRuFullName(fqnQnp);
+                if (result != null) return result;
+            }
+
+            // Стратегия 1б: FQN из пути URI (только корневой объект)
+            String uriPath = uri.path();
+            if (uriPath != null)
+            {
+                if (uriPath.startsWith("/")) uriPath = uriPath.substring(1); //$NON-NLS-1$
+                String result = MdTypeMapping.bmFqnToRuFullName(uriPath);
+                if (result != null) return result;
+            }
+
+            return null;
+        }
+
+        // ── Platform resource URI (запасной случай) ───────────────────────────
+        if (uri.isPlatformResource())
+        {
+            String platformPath = uri.toPlatformString(true); // "/Проект/src/..."
+            if (platformPath == null) return null;
+            int secondSlash = platformPath.indexOf('/', 1);
+            if (secondSlash < 0) return null;
+            return pathToFullName(platformPath.substring(secondSlash + 1));
+        }
+
+        return null;
+    }
+
+    /**
+     * Получает FQN EObject через {@link IResourceServiceProvider} →
+     * {@code IQualifiedNameProvider}.
+     *
+     * <p>Для корневых объектов возвращает {@code "Catalog.Валюты"},
+     * для под-объектов — {@code "Catalog.Валюты.Template.Классификатор"}.
+     * Возвращает {@code null} при любой ошибке или если провайдер недоступен.
+     */
+    private static String getFqnViaQnp(EObject obj, URI uri)
+    {
+        try
+        {
+            IResourceServiceProvider rsp =
+                IResourceServiceProvider.Registry.INSTANCE.getResourceServiceProvider(uri);
+            if (rsp == null) return null;
+
+            org.eclipse.xtext.naming.IQualifiedNameProvider qnp =
+                rsp.get(org.eclipse.xtext.naming.IQualifiedNameProvider.class);
+            if (qnp == null) return null;
+
+            org.eclipse.xtext.naming.QualifiedName fqn = qnp.getFullyQualifiedName(obj);
+            return fqn != null ? fqn.toString() : null;
+        }
+        catch (Exception e)
+        {
+            Global.log("GetRef.getFqnViaQnp: " + e); //$NON-NLS-1$
+            return null;
+        }
     }
 
     // =========================================================================
@@ -289,37 +386,27 @@ public class GetRef extends AbstractHandler
     // =========================================================================
 
     /**
-     * Преобразует путь файла (или папки) внутри EDT-проекта в полное русское имя МД.
+     * Преобразует project-relative путь файла или папки в EDT-проекте в полное русское имя МД.
      *
-     * <p>Поддерживаемые входные форматы (project-relative, '/' или '\'):
      * <pre>
-     *   src/&lt;Folder&gt;/&lt;Object&gt;/&lt;Object&gt;.mdo
-     *   src/&lt;Folder&gt;/&lt;Object&gt;/Ext/ObjectModule.bsl
-     *   src/&lt;Folder&gt;/&lt;Object&gt;/Forms/&lt;Form&gt;/Ext/Form.bsl
-     *   src/&lt;Folder&gt;/&lt;Object&gt;/Templates/&lt;Tpl&gt;/&lt;Tpl&gt;.mdo
-     *   src/&lt;Folder&gt;/&lt;Object&gt;/Commands/&lt;Cmd&gt;/&lt;Cmd&gt;.mdo
-     *   src/ext/&lt;ExtName&gt;/&lt;Folder&gt;/&lt;Object&gt;/...   (расширение)
-     *   &lt;IFolder&gt; пути (без файла) — обрабатываются так же
+     *   src/Catalogs/Валюты/Валюты.mdo               → Справочник.Валюты
+     *   src/Catalogs/Валюты/Ext/ObjectModule.bsl      → Справочник.Валюты.МодульОбъекта
+     *   src/Catalogs/Валюты/Forms/ФЭ/Ext/Form.bsl     → Справочник.Валюты.Форма.ФЭ
+     *   src/Catalogs/Валюты/Templates/Кл/Кл.mdo       → Справочник.Валюты.Макет.Кл
+     *   src/CommonModules/МойМод/Ext/Module.bsl        → ОбщийМодуль.МойМод
+     *   src/ext/Расш/Catalogs/Валюты/Валюты.mdo        → Расш Справочник.Валюты
      * </pre>
-     *
-     * @param projectRelativePath путь относительно корня EDT-проекта
-     * @return полное имя, например {@code "Справочник.Валюты.Макет.Классификатор"},
-     *         или {@code null} если путь не распознан
      */
     static String pathToFullName(String projectRelativePath)
     {
         if (projectRelativePath == null) return null;
         String path = projectRelativePath.replace('\\', '/');
 
-        // ── Разбор префикса: src/ или src/ext/<ExtName>/ ─────────────────
-        String extensionName = null; // имя расширения, если путь в src/ext/
-        String relative;            // путь после src/ или src/ext/<ext>/
+        // Разбор префикса: src/ext/<ExtName>/ или src/
+        String extensionName = null;
+        String relative;
 
-        if (path.startsWith("src/")) //$NON-NLS-1$
-        {
-            relative = path.substring("src/".length()); //$NON-NLS-1$
-        }
-        else if (path.startsWith("src/ext/")) //$NON-NLS-1$
+        if (path.startsWith("src/ext/")) //$NON-NLS-1$
         {
             String rest = path.substring("src/ext/".length()); //$NON-NLS-1$
             int slash = rest.indexOf('/');
@@ -327,77 +414,62 @@ public class GetRef extends AbstractHandler
             extensionName = rest.substring(0, slash);
             relative = rest.substring(slash + 1);
         }
+        else if (path.startsWith("src/")) //$NON-NLS-1$
+        {
+            relative = path.substring("src/".length()); //$NON-NLS-1$
+        }
         else
         {
-            return null; // не EDT-путь
+            return null;
         }
 
-        // ── Разбор сегментов: Folder / Object / [SubKind / SubName / ...] ───
-        // Пример: "Catalogs/Валюты/Templates/Классификатор/Классификатор.mdo"
-        //          [0]       [1]    [2]        [3]           [4]
+        // Разбор: Folder/Object/[SubKind/SubName/...]
         String[] p = relative.split("/", -1); //$NON-NLS-1$
         if (p.length < 1 || p[0].isEmpty()) return null;
 
-        // p[0] — папка типа (EN мн.ч.), например "Catalogs"
-        String folder = p[0];
-        String typeRu = MdTypeMapping.folderToRu(folder);
+        String typeRu = MdTypeMapping.folderToRu(p[0]);
         if (typeRu == null) return null;
 
-        // Только папка типа — без конкретного объекта
         if (p.length < 2 || p[1].isEmpty())
             return withExt(extensionName, typeRu);
 
-        // p[1] — имя объекта (или ObjectName.mdo на уровне папки типа — EDT так не делает,
-        //         но обработаем на всякий случай)
         String objectName = stripFileExt(p[1]);
         String base = withExt(extensionName, typeRu + "." + objectName); //$NON-NLS-1$
 
-        if (p.length == 2) return base; // папка объекта выбрана без вложений
+        if (p.length == 2) return base;
 
-        // p[2] — либо "ObjectName.mdo" (самого объекта), либо "Ext", "Forms", "Templates"…
         String seg2 = p[2];
 
-        // ── Файл .mdo самого объекта: Catalogs/Валюты/Валюты.mdo ────────────
+        // ObjectName.mdo самого объекта
         if (seg2.endsWith(".mdo") && stripFileExt(seg2).equals(objectName)) //$NON-NLS-1$
             return base;
 
-        // ── Ext/ — модули ────────────────────────────────────────────────────
+        // Ext/ — модули
         if ("Ext".equals(seg2)) //$NON-NLS-1$
         {
             if (p.length < 4) return base;
-            String bslFile = p[3];
-
-            // Для CommonModules/CommonForms и т.п. Ext-файл — это сам объект
-            if (TOP_LEVEL_CONTAINERS.contains(folder)) return base;
-
-            // Добавляем суффикс модуля
-            String moduleSuffix = BSL_TO_MODULE_RU.get(bslFile);
-            return base + (moduleSuffix != null ? "." + moduleSuffix : ""); //$NON-NLS-1$
+            if (TOP_LEVEL_CONTAINERS.contains(p[0])) return base;
+            String moduleSuffix = BSL_TO_MODULE_RU.get(p[3]);
+            return moduleSuffix != null ? base + "." + moduleSuffix : base; //$NON-NLS-1$
         }
 
-        // ── Forms / Templates / Commands / Recalculations ────────────────────
+        // Forms / Templates / Commands / Recalculations
         String sectionRu = SUBFOLDER_TO_RU.get(seg2);
         if (sectionRu != null)
         {
             if (p.length < 4 || p[3].isEmpty())
-                return base + "." + sectionRu; // только папка раздела выбрана //$NON-NLS-1$
-
-            String subName = stripFileExt(p[3]);
-            // p[4..] — Ext/Form.bsl и т.п.; имя мы уже получили из p[3]
-            return base + "." + sectionRu + "." + subName; //$NON-NLS-1$ //$NON-NLS-2$
+                return base + "." + sectionRu; //$NON-NLS-1$
+            return base + "." + sectionRu + "." + stripFileExt(p[3]); //$NON-NLS-1$ //$NON-NLS-2$
         }
 
-        // Прочие вложенные папки — возвращаем имя базового объекта
         return base;
     }
 
-    /** Добавляет имя расширения в качестве префикса, если оно задано. */
     private static String withExt(String extensionName, String name)
     {
         return extensionName != null ? extensionName + " " + name : name; //$NON-NLS-1$
     }
 
-    /** Убирает расширение .mdo или .bsl (и только их). */
     private static String stripFileExt(String name)
     {
         if (name.endsWith(".mdo")) return name.substring(0, name.length() - 4); //$NON-NLS-1$
@@ -418,9 +490,6 @@ public class GetRef extends AbstractHandler
                 new Object[]   { text },
                 new Transfer[] { TextTransfer.getInstance() });
         }
-        finally
-        {
-            cb.dispose();
-        }
+        finally { cb.dispose(); }
     }
 }
