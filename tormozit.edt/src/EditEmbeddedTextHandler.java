@@ -121,7 +121,7 @@ public final class EditEmbeddedTextHandler
             {
                 ComBridge.setProperty(irSession.root, "Visible", true); //$NON-NLS-1$
                 Object irClient = irSession.getModule("ирКлиент"); //$NON-NLS-1$
-                String ref = GetRef.getRef(editor);
+                String ref = GetRef.getRefFromEditor(editor.getSite().getPage());
                 ComBridge.invoke(irClient, "ОткрытьТекстЛкс", textToOpen, ref, null, false, ref); //$NON-NLS-1$
                 ToastNotification.show("Редактор ИР", "Измененный вложенный текст вернется в EDT, если не будет изменяться там во время редактирования в приложении ИР!");
             }
