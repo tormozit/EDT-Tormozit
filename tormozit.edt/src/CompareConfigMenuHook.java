@@ -64,6 +64,7 @@ public class CompareConfigMenuHook implements IStartup
     {
         Display.getDefault().asyncExec(() ->
         {
+            Activator.getDefault().getInjector().injectMembers(this);
             CompareConfigSearchDialogHook.install(Display.getDefault());
 
             IWorkbench wb = PlatformUI.getWorkbench();

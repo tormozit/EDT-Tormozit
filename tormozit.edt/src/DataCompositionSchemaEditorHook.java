@@ -87,6 +87,7 @@ public class DataCompositionSchemaEditorHook implements IStartup
     @Override
     public void earlyStartup()
     {
+        Activator.getDefault().getInjector().injectMembers(this);
         Display.getDefault().asyncExec(() ->
         {
             for (IWorkbenchWindow w : PlatformUI.getWorkbench().getWorkbenchWindows())

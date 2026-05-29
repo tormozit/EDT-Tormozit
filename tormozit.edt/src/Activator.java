@@ -1,8 +1,24 @@
 
 
+import org.eclipse.core.runtime.Plugin;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.plugin.AbstractUIPlugin;
+import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
+
+import com._1c.g5.v8.dt.bm.index.emf.IBmEmfIndexManager;
+import com._1c.g5.v8.dt.bm.index.emf.IBmEmfIndexProvider;
+import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+import com._1c.g5.v8.dt.core.platform.IConfigurationProjectManager;
+import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
+import com._1c.g5.v8.dt.core.platform.IResourceLookup;
+import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.export.IExportOperationFactory;
+import com._1c.g5.v8.dt.platform.version.IRuntimeVersionSupport;
+import com._1c.g5.wiring.AbstractGuiceAwareExecutableExtensionFactory;
+import com._1c.g5.wiring.AbstractServiceAwareModule;
+import com.google.inject.Guice;
+import com.google.inject.Injector;
 
 import tormozit.edt.assist.ContentAssistAutoOpenManager;
 import tormozit.edt.assist.ContentAssistAutoOpenSettings;
@@ -51,5 +67,38 @@ public class Activator extends AbstractUIPlugin
     public static Activator getDefault()
     {
         return instance;
+    }
+
+    public class ExternalDependenciesModule extends AbstractServiceAwareModule
+    {
+        public ExternalDependenciesModule(Plugin bundle)
+        {
+            super(bundle);
+        }
+        @Override
+        protected void configure()
+        {
+            bind(IConfigurationProjectManager.class).toService();
+            bind(IV8ProjectManager.class).toService();
+            bind(IBmModelManager.class).toService();
+            bind(IResourceLookup.class).toService();
+            bind(IRuntimeVersionSupport.class).toService();
+            bind(IExportOperationFactory.class).toService();
+        }
+        @Override
+        protected void doConfigure()
+        {
+            // TODO Auto-generated method stub
+        }
+    }
+
+    private Injector injector;
+    public synchronized Injector getInjector() {
+        if (injector == null)
+            injector = createInjector();
+        return injector;
+    }
+    private Injector createInjector() {
+        return Guice.createInjector(new ExternalDependenciesModule(this));
     }
 }

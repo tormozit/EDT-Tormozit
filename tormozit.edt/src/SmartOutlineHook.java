@@ -25,6 +25,7 @@ public class SmartOutlineHook implements IStartup {
 
     @Override
     public void earlyStartup() {
+        Activator.getDefault().getInjector().injectMembers(this);
         Display.getDefault().asyncExec(() -> {
             install(Display.getDefault());
         });
@@ -123,7 +124,7 @@ public class SmartOutlineHook implements IStartup {
         return null;
     }
 
-    private static void applySmartSearch(TreeViewer viewer, Text filterText) {
+private static void applySmartSearch(TreeViewer viewer, Text filterText) {
         for (ViewerFilter filter : viewer.getFilters()) {
             viewer.removeFilter(filter);
         }
@@ -131,7 +132,6 @@ public class SmartOutlineHook implements IStartup {
         IBaseLabelProvider rawLp = viewer.getLabelProvider();
         ILabelProvider baseLp = createLabelProviderAdapter(rawLp);
         
-        SmartMatcher initialMatcher = new SmartMatcher(filterText.getText());
         SmartOutlineFilter smartFilter = new SmartOutlineFilter(baseLp);
         smartFilter.setPattern(filterText.getText());
         
@@ -142,9 +142,7 @@ public class SmartOutlineHook implements IStartup {
             innerStyledLp = (IStyledLabelProvider) rawLp;
         }
 
-        // ВОЗВРАЩЕНО: Сохраняем ссылку на наш умный провайдер стилей
         final SmartOutlineLabelProvider finalSmartLabelProvider;
-
         if (innerStyledLp != null) {
             SmartOutlineLabelProvider smartLabelProvider = new SmartOutlineLabelProvider(innerStyledLp);
             smartLabelProvider.setPattern(filterText.getText());
@@ -160,24 +158,60 @@ public class SmartOutlineHook implements IStartup {
         }
 
         viewer.addFilter(smartFilter);
-        viewer.setComparator(new SmartOutlineComparator(initialMatcher, baseLp));
+        
+        // ОПТИМИЗАЦИЯ 1: Устанавливаем компаратор ОДИН раз при инициализации.
+        // Переданные кэш-карты обновляются внутри smartFilter, компаратор увидит изменения автоматически.
+        viewer.setComparator(new SmartOutlineComparator(smartFilter.getNamePremiumCache(), smartFilter.getParamPremiumCache(), baseLp));
+
+        // Контейнер для хранения ссылки на текущую отложенную задачу (дебаунс)
+        final Runnable[] pendingFilterTask = new Runnable[1];
 
         filterText.addModifyListener(new ModifyListener() {
             @Override
             public void modifyText(ModifyEvent e) {            
                 String pattern = filterText.getText();
+                Display display = filterText.getDisplay();
                 
-                // Обновляем фильтр и кэши
-                smartFilter.refreshPattern(pattern);
-                
-                // ВОЗВРАЩЕНО: Передаем новый текст в провайдер стилей (ЭТО ВКЛЮЧАЕТ ПОДСВЕТКУ!)
-                if (finalSmartLabelProvider != null) {
-                    finalSmartLabelProvider.setPattern(pattern);
+                // ОПТИМИЗАЦИЯ 2: Дебаунс. Отменяем прошлый таймер, если пользователь продолжает быстро печатать
+                if (pendingFilterTask[0] != null) {
+                    display.timerExec(-1, pendingFilterTask[0]);
                 }
-
-                viewer.setComparator(new SmartOutlineComparator(smartFilter.getNamePremiumCache(), smartFilter.getParamPremiumCache(), baseLp));
-                viewer.refresh();
-                selectFirstVisibleItem(viewer.getControl());
+                
+                pendingFilterTask[0] = new Runnable() {
+                    @Override
+                    public void run() {
+                        Control control = viewer.getControl();
+                        if (control == null || control.isDisposed()) return;
+                        
+                        Tree tree = viewer.getTree();
+                        if (tree == null || tree.isDisposed()) return;
+                        
+                        // ОПТИМИЗАЦИЯ 3: Полностью блокируем перерисовку дерева на уровне ОС.
+                        // Никаких промежуточных прыжков скроллбара и старых выделений пользователь не увидит.
+                        tree.setRedraw(false);
+                        try {
+                            // 1. Очищаем кэши и задаем новый текст поиска
+                            smartFilter.refreshPattern(pattern);
+                            
+                            // 2. Обновляем паттерн для подсветки совпадений жирным цветом
+                            if (finalSmartLabelProvider != null) {
+                                finalSmartLabelProvider.setPattern(pattern);
+                            }
+                            
+                            // 3. Выполняем ровно ОДИН refresh дерева
+                            viewer.refresh();
+                            
+                            // 4. Железно активируем первую видимую строку в уже отфильтрованном списке
+                            selectFirstVisibleItem(tree);
+                        } finally {
+                            // Включаем отрисовку обратно. ОС мгновенно отобразит финальный готовый результат
+                            tree.setRedraw(true);
+                        }
+                    }
+                };
+                
+                // Запуск фильтрации с микрозадержкой в 150 мс для плавности ввода
+                display.timerExec(150, pendingFilterTask[0]);
             }
         });
 
@@ -199,28 +233,38 @@ public class SmartOutlineHook implements IStartup {
         display.addFilter(SWT.KeyDown, arrowFilter);
 
         filterText.addDisposeListener(e -> {
+            if (pendingFilterTask[0] != null && !display.isDisposed()) {
+                display.timerExec(-1, pendingFilterTask[0]);
+            }
             if (!display.isDisposed()) {
                 display.removeFilter(SWT.KeyDown, arrowFilter);
             }
         });
     }
-    
     private static void selectFirstVisibleItem(Control control) {
         if (control == null || control.isDisposed()) return;
-
         if (control instanceof Tree) {
             Tree tree = (Tree) control;
             if (tree.getItemCount() > 0) {
                 TreeItem first = tree.getItem(0);
-                tree.setSelection(first);
-                tree.showItem(first);
-                
-                Event selectionEvent = new Event();
-                selectionEvent.widget = tree;
-                selectionEvent.item = first;
-                tree.notifyListeners(SWT.Selection, selectionEvent);
+                TreeItem terminal = getFirstTerminalItem(first);
+                if (terminal != null) {
+                    tree.setSelection(terminal);
+                    tree.showItem(terminal);
+                    Event selectionEvent = new Event();
+                    selectionEvent.widget = tree;
+                    selectionEvent.item = terminal;
+                    tree.notifyListeners(SWT.Selection, selectionEvent);
+                }
             }
         }
+    }
+    
+    private static TreeItem getFirstTerminalItem(TreeItem item) {
+        if (item == null) return null;
+        TreeItem[] children = item.getItems();
+        if (children.length == 0) return item;
+        return getFirstTerminalItem(children[0]);
     }
     
     private static void navigateTree(Tree tree, int keyCode) {

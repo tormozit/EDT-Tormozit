@@ -91,19 +91,19 @@ public class SmartMatcher {
             }
         }
 
-        // --- ГРУППА 2: СОВПАДЕНИЕ ПО ОТДЕЛЬНЫМ ТОКЕНАМ ВНУТРИ ЧАСТИ ---
-        List<String> localFragments = new ArrayList<>();
+        // --- ГРУППА 2: СОВПАДЕНИЕ ПО ОТДЕЛЬНЫМ ТОКЕНАМ ---
+        // Собираем фрагменты, которые присутствуют в тексте
+        List<String> presentFragments = new ArrayList<>();
         for (String frag : fragments) {
             if (lowerText.contains(frag)) {
-                localFragments.add(frag);
+                presentFragments.add(frag);
             }
         }
-
-        // Если ни один из фрагментов поиска не попал в эту часть строки
-        if (localFragments.isEmpty()) {
-            return 0;
+        // Если не все фрагменты запроса присутствуют — дефолтная премия 1
+        if (presentFragments.size() != fragments.length) {
+            return 1;
         }
-
+        // Все фрагменты присутствуют. Теперь проверяем, совпадают ли они с началами слов.
         List<Integer> wordBoundaries = new ArrayList<>();
         wordBoundaries.add(0);
         for (int i = 1; i < partText.length(); i++) {
@@ -111,12 +111,10 @@ public class SmartMatcher {
                 wordBoundaries.add(i);
             }
         }
-
         int firstMatchedWordIdx = -1;
         int lastMatchedWordIdx = -1;
         int matchedWordsCount = 0;
-
-        for (String frag : localFragments) {
+        for (String frag : fragments) {  // проходим по всем фрагментам запроса
             for (int w = 0; w < wordBoundaries.size(); w++) {
                 int boundaryPos = wordBoundaries.get(w);
                 if (lowerText.startsWith(frag, boundaryPos)) {
@@ -129,21 +127,19 @@ public class SmartMatcher {
                 }
             }
         }
-
-        if (matchedWordsCount == localFragments.size()) {
+        if (matchedWordsCount == fragments.length) {
             int wordsDiff = lastMatchedWordIdx - firstMatchedWordIdx + 1;
-            boolean noGaps = (wordsDiff == localFragments.size());
-
-            if (noGaps) {
-                return 3; // совпадение по началам слов без пропусков слов
-            } else if (firstMatchedWordIdx == 0) {
-                return 2; // совпадение по началам слов, начиная с первого, с пропусками слов
+            boolean noGaps = (wordsDiff == fragments.length);
+            if (firstMatchedWordIdx == 0) {
+                if (noGaps) return 3;      // с первого слова, без пропусков
+                else return 2;             // с первого слова, с пропусками
             } else {
-                return 1; // совпадение по началам слов, начиная с непервого, с пропусками слов
+                return 1;                  // не с первого слова
             }
+        } else {
+            // Все фрагменты есть, но не все совпали с началами слов
+            return 1;
         }
-
-        return 1; // Дефолтное вхождение подстроки
     }
 
     public List<HighlightRange> getHighlightRanges(String text) {

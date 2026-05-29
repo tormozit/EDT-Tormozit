@@ -1,6 +1,7 @@
 import java.util.HashMap;
 import java.util.Map;
 import org.eclipse.jface.viewers.ILabelProvider;
+import org.eclipse.jface.viewers.TreeViewer;
 import org.eclipse.jface.viewers.Viewer;
 import org.eclipse.jface.viewers.ViewerFilter;
 
@@ -38,13 +39,23 @@ public class SmartOutlineFilter extends ViewerFilter {
 
     @Override
     public boolean select(Viewer viewer, Object parentElement, Object element) {
+        // Проверяем, является ли элемент родительским (имеет ли вложенные узлы)
+        boolean hasChildren = false;
+        if (viewer instanceof TreeViewer) {
+            Object cp = ((TreeViewer) viewer).getContentProvider();
+            if (cp instanceof org.eclipse.jface.viewers.ITreeContentProvider) {
+                hasChildren = ((org.eclipse.jface.viewers.ITreeContentProvider) cp).hasChildren(element);
+            }
+        }
+
         String text = labelProvider.getText(element);
         
-        if (!matcher.matches(text)) {
+        // Если это терминальный (конечный) элемент и он не подходит под паттерн — скрываем его
+        if (!hasChildren && !matcher.matches(text)) {
             return false;
         }
 
-        // Вычисляем и сохраняем обе метрики за один проход фильтрации
+        // Вычисляем и сохраняем метрики для правильной сортировки компаратором (как для листьев, так и для родителей)
         int namePremium = matcher.computeNamePremium(text);
         int paramPremium = matcher.computeParamPremium(text);
         

@@ -10,6 +10,9 @@ import org.eclipse.core.runtime.Adapters;
 import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.ui.IEditorInput;
 import org.eclipse.ui.IEditorPart;
+import org.eclipse.ui.IViewPart;
+import org.eclipse.ui.IViewReference;
+import org.eclipse.ui.IWorkbench;
 import org.eclipse.ui.IWorkbenchPage;
 import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.PlatformUI;
@@ -146,45 +149,41 @@ public final class Global
      * @param page рабочая страница; если {@code null} — берётся активная страница IDE
      * @return проект или {@code null}
      */
-    public static IProject getActiveProject(IWorkbenchPage page)
+    public static IProject getActiveProject(IWorkbenchPage page, boolean showMessage)
     {
-        if (page == null) page = getActivePage();
-        if (page == null) return null;
-
+        if (page == null) 
+            page = getActivePage();
+        if (page == null) 
+            return null;
         IEditorPart editor = page.getActiveEditor();
-
-        // 1. Из файла активного редактора
         if (editor != null)
         {
             IFile file = editorToFile(editor);
-            if (file != null) return file.getProject();
+            if (file != null)
+                return file.getProject();
         }
 
         // 2. Из редактора сравнения конфигураций
         if (editor != null && COMPARE_EDITOR_ID.equals(editor.getSite().getId()))
         {
             IProject p = CompareConfigOpenObjectHandler.getProjectFromEditor(editor);
-            if (p != null) return p;
+            if (p != null) 
+                return p;
         }
 
         // 3. Из навигатора EDT
-        IProject navProject = getProjectFromNavigator(page);
-        if (navProject != null) return navProject;
+        IProject navProject = getProjectFromNavigator();
+        if (navProject != null) 
+            return navProject;
 
+        if (navProject == null && showMessage)
+            ToastNotification.show("Проект", "Отсутствует активный проект");
         return null;
     }
 
-    /**
-     * Устаревший метод — делегирует к {@link #getActiveProject(IWorkbenchPage)}.
-     * Оставлен для обратной совместимости.
-     *
-     * @param showMessage если {@code true} и проект не найден, показывает уведомление
-     */
     public static IProject getActiveEditorProject(boolean showMessage)
     {
-        IProject project = getActiveProject(null);
-        if (project == null && showMessage)
-            ToastNotification.show("Проект", "Отсутствует активный проект");
+        IProject project = getActiveProject(null, showMessage);
         return project;
     }
 
@@ -236,17 +235,39 @@ public final class Global
         return input != null ? input.getAdapter(IFile.class) : null;
     }
 
-    private static IProject getProjectFromNavigator(IWorkbenchPage page)
+    private static IProject getProjectFromNavigator()
     {
         try
         {
-            CommonNavigator nav = (CommonNavigator) page.findView(NAVIGATOR_VIEW_ID);
+            CommonNavigator nav = (CommonNavigator) getViewById(NAVIGATOR_VIEW_ID);
             if (nav == null) return null;
             IStructuredSelection sel = (IStructuredSelection)
                 nav.getSite().getSelectionProvider().getSelection();
             if (sel == null || sel.isEmpty()) return null;
             return Adapters.adapt(sel.getFirstElement(), IProject.class);
         }
-        catch (Exception ignored) { return null; }
+        catch (Exception ignored) { 
+            return null; 
+        }
     }
+    
+    public static IViewPart getViewById(String id) {
+        IWorkbench workbench = PlatformUI.getWorkbench();
+
+        for (IWorkbenchWindow window : workbench.getWorkbenchWindows()) {
+            for (IWorkbenchPage page : window.getPages()) {
+
+                IViewReference ref =
+                    page.findViewReference(id);
+
+                if (ref != null) {
+                    IViewPart view = ref.getView(false); // не создавать, если не открыт
+                    if (view != null)
+                        return view;
+                }
+            }
+        }
+        return null;
+    }
+    
 }

@@ -86,6 +86,7 @@ public class BSLEditorMenuHook implements IStartup
     {
         Display.getDefault().asyncExec(() ->
         {
+            Activator.getDefault().getInjector().injectMembers(this);
             for (IWorkbenchWindow w : PlatformUI.getWorkbench().getWorkbenchWindows())
                 hookWindow(w);
 

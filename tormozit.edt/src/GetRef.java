@@ -194,18 +194,8 @@ public class GetRef extends AbstractHandler
             lineNumber = line0 + 1;
 
             IRegion li  = doc.getLineInformation(line0);
-            String  raw = doc.get(li.getOffset(), li.getLength());
-
-            int leadingWs = 0;
-            while (leadingWs < raw.length()
-                    && (raw.charAt(leadingWs) == ' ' || raw.charAt(leadingWs) == '\t'))
-                leadingWs++;
-
-            int col         = textSel.getOffset() - li.getOffset();
-            String stripped = raw.substring(leadingWs).stripTrailing();
-            int strippedCol = Math.min(Math.max(0, col - leadingWs), stripped.length());
-            markedLine = stripped.substring(0, strippedCol) + "*" + stripped.substring(strippedCol); //$NON-NLS-1$
-
+            markedLine = doc.get(li.getOffset(), li.getLength()).stripTrailing();
+            markedLine = markedLine.substring(1, Math.min(100, markedLine.length()));
             method = findEnclosingMethod(doc, line0);
         }
         catch (BadLocationException e)

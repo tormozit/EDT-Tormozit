@@ -127,6 +127,7 @@ public class ApplicationsViewHook implements IStartup
     {
         Display.getDefault().asyncExec(() ->
         {
+            Activator.getDefault().getInjector().injectMembers(this);
             IWorkbench wb = PlatformUI.getWorkbench();
             for (IWorkbenchWindow w : wb.getWorkbenchWindows())
                 hookWindow(w);
