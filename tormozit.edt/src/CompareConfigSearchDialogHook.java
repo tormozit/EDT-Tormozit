@@ -2,6 +2,7 @@ import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.eclipse.jface.dialogs.IDialogSettings; // Добавлен импорт
 import org.eclipse.jface.viewers.AbstractTreeViewer;
 import org.eclipse.jface.viewers.StructuredSelection;
 import org.eclipse.jface.viewers.IContentProvider;
@@ -30,16 +31,17 @@ import com._1c.g5.v8.dt.compare.ui.partialmodel.node.AbstractDirectPartialModelN
 import com._1c.g5.v8.dt.compare.ui.partialmodel.node.AbstractNodeWithLabels;
 
 /**
- * Патч диалога поиска EDT (CTRL+F в дереве сравнения).
- *
- * Добавляет флажок "Только имена объектов" (включён по умолчанию).
- * Когда флажок снят — кнопки "Далее"/"Назад" используют наш поиск:
- * обходят всю модель дерева (включая свернутые узлы) и ищут текст во всех ячейках.
+ * Патч диалога поиска EDT (CTRL+F в дереве сравнения конфигураций).
  */
 public class CompareConfigSearchDialogHook
 {
     private static final String PATCHED_KEY = "tormozit.searchPatched"; //$NON-NLS-1$
     private static final String DIALOG_CLASS = "ComparisonTreeSearchDialog"; //$NON-NLS-1$
+    
+    // Ключи настроек для хранения в dialog_settings.xml
+    private static final String SETTINGS_SECTION = "TormozitCompareConfigSearchSettings"; //$NON-NLS-1$
+    private static final String KEY_SEARCH_All_rows = "searchAllRows"; //$NON-NLS-1$
+    private static final String KEY_SEARCH_All_columns = "searchAllColumns"; //$NON-NLS-1$
 
     public static void install(Display display)
     {
@@ -73,32 +75,65 @@ public class CompareConfigSearchDialogHook
 
         Composite parent = btnCase != null ? btnCase.getParent() : btnNext.getParent();
 
-        Button cbDetailedSearch = new Button(parent, SWT.CHECK);
-        cbDetailedSearch.setText("По всем строкам");
-        cbDetailedSearch.setToolTipText("Стандартный поиск EDT ищет только по строкам имен объектов. Этот флажок включает просмотр всех строк (Tormozit)");
-        cbDetailedSearch.setSelection(true);
-        cbDetailedSearch.setLayoutData(new GridData(GridData.BEGINNING, GridData.CENTER, false, false));
+        // Получаем сохраненные настройки диалога
+        IDialogSettings settings = getDialogSettings();
+
+        Button cbSearchAllRows = new Button(parent, SWT.CHECK);
+        cbSearchAllRows.setText("По всем строкам");
+        cbSearchAllRows.setToolTipText("Стандартный поиск EDT ищет только по строкам имен объектов. Этот флажок включает просмотр всех строк (Tormozit)");
+        cbSearchAllRows.setLayoutData(new GridData(GridData.BEGINNING, GridData.CENTER, false, false));
+        
+        // Восстановление состояния при открытии (по умолчанию true, если настройки еще не создавались)
+        boolean loadDetailed = settings.get(KEY_SEARCH_All_rows) == null ? true : settings.getBoolean(KEY_SEARCH_All_rows);
+        cbSearchAllRows.setSelection(loadDetailed);
+
+        // Сохранение при изменении состояния флажка строк
+        cbSearchAllRows.addListener(SWT.Selection, event -> {
+            settings.put(KEY_SEARCH_All_rows, cbSearchAllRows.getSelection());
+        });
 
         if (btnCase != null)
-            cbDetailedSearch.moveBelow(btnCase);
+            cbSearchAllRows.moveBelow(btnCase);
         
-        Button cbSearchObjectColumn = new Button(parent, SWT.CHECK);
-        cbSearchObjectColumn.setText("По всем колонкам");
-        cbSearchObjectColumn.setToolTipText("Дополнительно к поиску в колонках значений еще искать в колонке \"Объект\" (Tormozit)");
-        cbSearchObjectColumn.setSelection(true); 
-        cbSearchObjectColumn.setLayoutData(new GridData(GridData.BEGINNING, GridData.CENTER, false, false));
+        Button cbSearchAllColumns = new Button(parent, SWT.CHECK);
+        cbSearchAllColumns.setText("По всем колонкам");
+        cbSearchAllColumns.setToolTipText("Дополнительно к поиску в колонках значений еще искать в колонке \"Объект\" (Tormozit)");
+        cbSearchAllColumns.setLayoutData(new GridData(GridData.BEGINNING, GridData.CENTER, false, false));
 
-        if (btnCase != null)
-            cbSearchObjectColumn.moveBelow(btnCase);
+        // Восстановление состояния при открытии (по умолчанию true, если настройки еще не создавались)
+        boolean loadObjectCol = settings.get(KEY_SEARCH_All_columns) == null ? true : settings.getBoolean(KEY_SEARCH_All_columns);
+        cbSearchAllColumns.setSelection(loadObjectCol);
+
+        // Сохранение при изменении состояния флажка колонок
+        cbSearchAllColumns.addListener(SWT.Selection, event -> {
+            settings.put(KEY_SEARCH_All_columns, cbSearchAllColumns.getSelection());
+        });
         
-        interceptButton(btnNext, cbDetailedSearch, dialog, false, cbSearchObjectColumn);
-        interceptButton(btnPrev, cbDetailedSearch, dialog, true, cbSearchObjectColumn);
+        if (btnCase != null)
+            cbSearchAllColumns.moveBelow(btnCase);
+        
+        interceptButton(btnNext, cbSearchAllRows, dialog, false, cbSearchAllColumns);
+        interceptButton(btnPrev, cbSearchAllRows, dialog, true, cbSearchAllColumns);
 
         parent.layout(true, true);
         shell.pack();
     }
+    
+    /**
+     * Вспомогательный метод для получения секции настроек плагина.
+     */
+    private static IDialogSettings getDialogSettings()
+    {
+        IDialogSettings topSettings = Activator.getDefault().getDialogSettings();
+        IDialogSettings section = topSettings.getSection(SETTINGS_SECTION);
+        if (section == null)
+        {
+            section = topSettings.addNewSection(SETTINGS_SECTION);
+        }
+        return section;
+    }
 
-    private static void interceptButton(Button button, Button cbDetailedSearch, Object dialog, boolean backward, Button cbSearchObjectColumn)
+    private static void interceptButton(Button button, Button cbSearchAllRows, Object dialog, boolean backward, Button cbSearchAllColumns)
     {
         Listener[] original = button.getListeners(SWT.Selection);
         for (Listener l : original)
@@ -106,14 +141,14 @@ public class CompareConfigSearchDialogHook
 
         button.addListener(SWT.Selection, event ->
         {
-            if (!cbDetailedSearch.getSelection())
+            if (!cbSearchAllRows.getSelection())
             {
                 for (Listener l : original)
                     l.handleEvent(event);
             }
             else
             {
-                performFullTreeSearch(dialog, backward, cbSearchObjectColumn.getSelection());
+                performFullTreeSearch(dialog, backward, cbSearchAllColumns.getSelection());
             }
         });
     }
@@ -176,8 +211,6 @@ public class CompareConfigSearchDialogHook
             
             if (isMatched(candidate, effectiveQuery, caseSensitive, viewer, searchObjectColumn))
             {
-                // setSelection с флагом reveal=true заставит дерево само
-                // раскрыть все нужные родительские ветки и прокрутить к элементу!
                 viewer.setSelection(new StructuredSelection(candidate), true);
                 if (!viewer.getSelection().isEmpty())
                 {

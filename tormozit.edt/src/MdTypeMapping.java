@@ -4,8 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Единственный источник правды для маппинга имён типов метаданных 1С
- * во всех трёх вариантах написания.
+ * TODO Нужно максимально опереться на нтатный преобразователь EDT com._1c.g5.v8.dt.md.naming.MdSymbolicLinkLocalizer.localizeSymbolicLink(String symbolicLink, EObject contextObject, EStructuralFeature feature, Locale locale)
  *
  * <h3>Три формы одного типа</h3>
  * <pre>

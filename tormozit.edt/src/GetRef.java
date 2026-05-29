@@ -26,6 +26,7 @@ import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.swt.dnd.Clipboard;
 import org.eclipse.swt.dnd.TextTransfer;
 import org.eclipse.swt.dnd.Transfer;
+import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.ui.IEditorInput;
 import org.eclipse.ui.IEditorPart;
@@ -50,10 +51,11 @@ import com._1c.g5.v8.dt.md.ui.editor.base.DtGranularEditorXtextEditorPage;
  *   <li><b>Расширенная ссылка</b> — помещается в буфер обмена и показывается
  *       первым уведомлением. Поддерживается только в ИР:
  *       <pre>{[РасшИмя ]Тип.Объект.Модуль(НомерСтроки:ИмяМетода,СмещениеВМетоде)}: *ТекстСтроки</pre></li>
- *   <li><b>Стандартная ссылка</b> — второе уведомление. Поддерживается в ИР и EDT:
+ *   <li><b>Стандартная ссылка</b> — второе уведомление с кнопкой «Копировать».
+ *       Поддерживается в ИР и EDT:
  *       <pre>{[РасшИмя ]Тип.Объект.Модуль(НомерСтроки)}</pre></li>
- *   <li><b>Полное имя метода</b> — третье уведомление (только если курсор внутри метода).
- *       Для вставки в документирующие комментарии после «см. »:
+ *   <li><b>Полное имя метода</b> — третье уведомление с кнопкой «Копировать»
+ *       (только если курсор внутри метода). Для документирующих комментариев:
  *       <pre>см. Тип.Объект.Форма.ИмяФормы.ИмяМетода</pre></li>
  * </ol>
  *
@@ -87,18 +89,14 @@ public class GetRef extends AbstractHandler
         // Form.bsl под Forms/<Name>/Ext/ обрабатывается отдельно
     }
 
-    /**
-     * Папки, где Ext-файл является самим объектом, а не его под-модулем
-     * (суффикс модуля не добавляется).
-     */
+    /** Папки, где Ext-файл является самим объектом (суффикс модуля не добавляется). */
     private static final Set<String> TOP_LEVEL_CONTAINERS = new HashSet<>(Arrays.asList(
         "CommonModules", "CommonForms", "CommonTemplates", "CommonPictures", "CommonCommands"
     ));
 
     /**
-     * Суффиксы, идентифицирующие ТИП модуля в пути ссылки.
-     * Убираются при построении ссылки на метод («см. Путь.ИмяМетода»),
-     * но только для путей из 3+ сегментов (чтобы не трогать «ОбщийМодуль.МойМодуль»).
+     * Суффиксы типа модуля — убираются при построении ссылки на метод,
+     * только для путей из 3+ сегментов.
      */
     private static final Set<String> MODULE_TYPE_SUFFIXES = new HashSet<>(Arrays.asList(
         "МодульОбъекта", "МодульМенеджера", "МодульНабораЗаписей", "Модуль", "Форма"
@@ -157,11 +155,14 @@ public class GetRef extends AbstractHandler
 
     /**
      * Формирует три варианта ссылки на строку модуля и показывает их в отдельных уведомлениях.
-     * Расширенная ссылка (вариант 1) сразу помещается в буфер обмена.
+     *
+     * <ul>
+     *   <li>Ссылка 1 (расширенная) — сразу в буфере обмена.</li>
+     *   <li>Ссылки 2 и 3 — с кнопкой «Копировать» в уведомлении.</li>
+     * </ul>
      */
     private static void showModuleLineRefs(BslXtextEditor bslEditor, Shell shell)
     {
-        // Путь к модулю
         IFile file = bslEditor.getEditorInput() != null
             ? bslEditor.getEditorInput().getAdapter(IFile.class) : null;
         if (file == null) return;
@@ -169,14 +170,12 @@ public class GetRef extends AbstractHandler
         ModuleRef moduleRef = pathToModuleRef(file.getProjectRelativePath().toString());
         if (moduleRef == null)
         {
-            // Не удалось разобрать как BSL-модуль; fallback на имя объекта
             String ref = pathToFullName(file.getProjectRelativePath().toString());
             if (ref != null) { setClipboardText(ref, shell); ToastNotification.show("Скопирована ссылка", ref, 6000); }
             else ToastNotification.show("Ссылка", "Не удалось определить путь к модулю", 5000);
             return;
         }
 
-        // Документ и позиция курсора
         ISourceViewer viewer = bslEditor.getInternalSourceViewer();
         if (viewer == null) return;
         IDocument doc = viewer.getDocument();
@@ -186,7 +185,7 @@ public class GetRef extends AbstractHandler
         if (!(selObj instanceof ITextSelection)) return;
         ITextSelection textSel = (ITextSelection) selObj;
 
-        int lineNumber; // 1-based
+        int lineNumber;
         String markedLine;
         MethodInfo method;
         try
@@ -194,7 +193,6 @@ public class GetRef extends AbstractHandler
             int line0 = doc.getLineOfOffset(textSel.getOffset());
             lineNumber = line0 + 1;
 
-            // Текст строки с «*» на позиции курсора (leading whitespace убирается)
             IRegion li  = doc.getLineInformation(line0);
             String  raw = doc.get(li.getOffset(), li.getLength());
 
@@ -208,7 +206,6 @@ public class GetRef extends AbstractHandler
             int strippedCol = Math.min(Math.max(0, col - leadingWs), stripped.length());
             markedLine = stripped.substring(0, strippedCol) + "*" + stripped.substring(strippedCol); //$NON-NLS-1$
 
-            // Объемлющий метод
             method = findEnclosingMethod(doc, line0);
         }
         catch (BadLocationException e)
@@ -217,9 +214,9 @@ public class GetRef extends AbstractHandler
             return;
         }
 
-        String prefix = moduleRef.toRefPrefix(); // «[РасшИмя ]Тип.Объект.Модуль»
+        String prefix = moduleRef.toRefPrefix();
 
-        // ── Ссылка 1: расширенная ────────────────────────────────────────────
+        // ── Ссылка 1: расширенная ─────────────────────────────────────────────
         String ref1;
         if (method != null)
         {
@@ -235,8 +232,6 @@ public class GetRef extends AbstractHandler
         String ref2 = "{" + prefix + "(" + lineNumber + ")}"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
         // ── Ссылка 3: полное имя метода ───────────────────────────────────────
-        // Использует modulePath БЕЗ имени расширения; последний суффикс-тип модуля заменяется
-        // именем метода: «Обработка.ирКонсольКода.Форма.Форма.Форма» → «...Форма.МетодИмя»
         String ref3 = null;
         if (method != null)
         {
@@ -246,28 +241,26 @@ public class GetRef extends AbstractHandler
 
         Global.log("GetRef (line ref): " + ref1); //$NON-NLS-1$
 
-        // Ref 1 → буфер обмена + первое уведомление
+        // Ref 1 → буфер обмена + первое уведомление (без кнопки — уже в буфере)
         setClipboardText(ref1, shell);
-        ToastNotification.show("Расширенная ссылка строки", ref1, 10_000);
+        ToastNotification.show("Скопировано", ref1);
 
-        // Ref 2 → второе уведомление
-        ToastNotification.show("Стандартная ссылка строки", ref2, 10_000);
+//        // Ref 2 → второе уведомление с кнопкой «Копировать»
+//        ToastNotification.show("Стандартная ссылка", ref2, 4_000,
+//            () -> copyToClipboard(ref2), "Копировать"); //$NON-NLS-1$
 
-        // Ref 3 → третье уведомление (если курсор внутри метода)
+        // Ref 3 → третье уведомление с кнопкой «Копировать» (только если есть метод)
         if (ref3 != null)
-            ToastNotification.show("Полное имя метода", ref3, 10_000);
+        {
+            final String ref3Copy = ref3; // effectively final для лямбды
+            ToastNotification.show("Имя метода", ref3, 4_000,
+                () -> copyToClipboard(ref3Copy), "Копировать"); //$NON-NLS-1$
+        }
     }
 
     /**
-     * Возвращает активный {@link BslXtextEditor} или {@code null} если BSL-редактор
-     * не активен.
-     *
-     * <p>Проверяет (в порядке приоритета):
-     * <ol>
-     *   <li>Сам {@code part} — BSL-редактор (открыт как самостоятельная вкладка).</li>
-     *   <li>Активный редактор — {@link DtGranularEditor} с активной BSL-страницей.</li>
-     *   <li>Активный редактор — непосредственно BSL-редактор.</li>
-     * </ol>
+     * Возвращает активный {@link BslXtextEditor} или {@code null}.
+     * Проверяет: сам part → DtGranularEditor с BSL-страницей → активный редактор.
      */
     private static BslXtextEditor getActiveBslEditor(IWorkbenchPart part, IWorkbenchPage page)
     {
@@ -297,18 +290,14 @@ public class GetRef extends AbstractHandler
     // =========================================================================
 
     /**
-     * Разбирает project-relative путь BSL-файла и возвращает {@link ModuleRef}
-     * с именем расширения (или {@code null}) и путём модуля в формате ссылок 1С.
+     * Разбирает project-relative путь BSL-файла и возвращает {@link ModuleRef}.
      *
      * <pre>
-     *   src/Catalogs/Валюты/Ext/ObjectModule.bsl                        → null, "Справочник.Валюты.МодульОбъекта"
-     *   src/CommonModules/МойМодуль/Ext/Module.bsl                       → null, "ОбщийМодуль.МойМодуль"
-     *   src/DataProcessors/ирКонсольКода/Forms/Форма/Ext/Form.bsl        → null, "Обработка.ирКонсольКода.Форма.Форма.Форма"
-     *   src/ext/ИнструментыРазработчикаTormozit/DataProcessors/.../Form.bsl → "ИнструментыРазработчикаTormozit", "Обработка.ирКонсольКода.Форма.Форма.Форма"
+     *   src/Catalogs/Валюты/Ext/ObjectModule.bsl                         → null, "Справочник.Валюты.МодульОбъекта"
+     *   src/CommonModules/МойМодуль/Ext/Module.bsl                        → null, "ОбщийМодуль.МойМодуль"
+     *   src/DataProcessors/ирКод/Forms/Форма/Ext/Form.bsl                 → null, "Обработка.ирКод.Форма.Форма.Форма"
+     *   src/ext/ИнструментыТормозит/DataProcessors/ирКод/Forms/.../Form.bsl → "ИнструментыТормозит", "Обработка.ирКод.Форма.Форма.Форма"
      * </pre>
-     *
-     * <p>Ключевое отличие от {@link #pathToFullName}: для формы добавляется
-     * суффикс {@code .Форма} (тип модуля формы) — итого 5 сегментов вместо 4.
      */
     static ModuleRef pathToModuleRef(String projectRelativePath)
     {
@@ -327,10 +316,9 @@ public class GetRef extends AbstractHandler
             relative = rest.substring(slash + 1);
         }
         else if (path.startsWith("src/")) //$NON-NLS-1$
-        {
             relative = path.substring("src/".length()); //$NON-NLS-1$
-        }
-        else { return null; }
+        else
+            return null;
 
         String[] p = relative.split("/", -1); //$NON-NLS-1$
         if (p.length < 3 || p[0].isEmpty() || p[1].isEmpty()) return null;
@@ -345,8 +333,7 @@ public class GetRef extends AbstractHandler
         if (seg2.endsWith(".bsl") && p.length >= 3) //$NON-NLS-1$
         {
             if (TOP_LEVEL_CONTAINERS.contains(p[0]))
-                // CommonModules, CommonForms: модуль И есть объект, суффикс не нужен
-                return new ModuleRef(extensionName, base);
+                return new ModuleRef(extensionName, base); // CommonModules и т.п.: суффикс не нужен
 
             String moduleSuffix = BSL_TO_MODULE_RU.get(p[3]);
             if (moduleSuffix == null) return null;
@@ -354,36 +341,31 @@ public class GetRef extends AbstractHandler
         }
 
         // ── Forms/<ФормаИмя>/Ext/Form.bsl — модуль формы ────────────────────
-        // Путь: [0]=Folder [1]=Object [2]=Forms [3]=FormName [4]=Ext [5]=Form.bsl
+        // p: [0]=Folder [1]=Object [2]=Forms [3]=FormName [4]=Ext [5]=Form.bsl
         if ("Forms".equals(seg2) && p.length >= 6 //$NON-NLS-1$
                 && "Ext".equals(p[4]) && "Form.bsl".equals(p[5])) //$NON-NLS-1$ //$NON-NLS-2$
         {
-            // «Обработка.Объект.Форма.ИмяФормы.Форма» — последняя «Форма» = тип модуля формы
+            // «Тип.Объект.Форма.ИмяФормы.Форма» — последняя «Форма» = тип модуля формы
             return new ModuleRef(extensionName, base + ".Форма." + p[3] + ".Форма"); //$NON-NLS-1$ //$NON-NLS-2$
         }
 
-        return null; // не BSL-модуль
+        return null;
     }
 
     /**
-     * Убирает суффикс типа модуля (последний сегмент) из пути модуля,
-     * чтобы получить базовый путь для ссылки на метод.
-     *
-     * <p>Суффикс убирается только для путей с 3+ сегментами (не трогает
-     * двухсегментные пути вида «ОбщийМодуль.МойМодуль»).
+     * Убирает суффикс типа модуля из конца пути — только для путей из 3+ сегментов.
      *
      * <pre>
-     *   "Справочник.Валюты.МодульОбъекта"            → "Справочник.Валюты"
-     *   "Обработка.Объект.Форма.Форма.Форма"          → "Обработка.Объект.Форма.Форма"
-     *   "ОбщийМодуль.МойМодуль"                       → "ОбщийМодуль.МойМодуль"  (не меняется)
+     *   "Справочник.Валюты.МодульОбъекта"   → "Справочник.Валюты"
+     *   "Обработка.Объект.Форма.Форма.Форма" → "Обработка.Объект.Форма.Форма"
+     *   "ОбщийМодуль.МойМодуль"              → "ОбщийМодуль.МойМодуль"  (2 сегмента, не меняется)
      * </pre>
      */
     private static String stripModuleSuffix(String modulePath)
     {
         int lastDot = modulePath.lastIndexOf('.');
         if (lastDot < 0) return modulePath;
-        // Не трогаем двухсегментные пути (один '.'):  ОбщийМодуль.МойМодуль
-        if (modulePath.indexOf('.') == lastDot) return modulePath;
+        if (modulePath.indexOf('.') == lastDot) return modulePath; // только 2 сегмента
         String lastSegment = modulePath.substring(lastDot + 1);
         return MODULE_TYPE_SUFFIXES.contains(lastSegment)
             ? modulePath.substring(0, lastDot)
@@ -395,17 +377,8 @@ public class GetRef extends AbstractHandler
     // =========================================================================
 
     /**
-     * Ищет объявление Процедуры/Функции, содержащей строку {@code cursorLine0}.
-     *
-     * <p>Алгоритм: идёт от строки курсора вверх.
-     * <ul>
-     *   <li>Встречает «КонецПроцедуры»/«КонецФункции» — курсор вне метода,
-     *       возвращает {@code null}.</li>
-     *   <li>Встречает «Процедура»/«Функция» — найден объемлющий метод.</li>
-     * </ul>
-     *
-     * @param cursorLine0 0-based номер строки с курсором
-     * @return информация о методе или {@code null}
+     * Ищет объявление Процедуры/Функции, содержащей строку {@code cursorLine0} (0-based).
+     * При встрече КонецПроцедуры выше курсора возвращает {@code null}.
      */
     private static MethodInfo findEnclosingMethod(IDocument doc, int cursorLine0)
     {
@@ -419,7 +392,6 @@ public class GetRef extends AbstractHandler
             }
             catch (BadLocationException e) { break; }
 
-            // КонецПроцедуры выше курсора → мы вне какого-либо метода
             if (line < cursorLine0 && METHOD_END.matcher(text).find())
                 return null;
 
@@ -436,24 +408,18 @@ public class GetRef extends AbstractHandler
 
     private static String resolveRef(IWorkbenchPart part, IWorkbenchPage page)
     {
-        // Дерево сравнения конфигураций
         if (part instanceof IEditorPart
                 && Global.COMPARE_EDITOR_ID.equals(part.getSite().getId()))
             return refFromCompareEditor((IEditorPart) part);
 
-        // Навигатор
         if (part == page.findView(Global.NAVIGATOR_VIEW_ID))
             return refFromNavigator(page);
 
-        // Редактор (не BSL — он перехвачен выше)
         String ref = getRefFromEditor(page);
         if (ref != null) return ref;
 
-        // Fallback: навигатор
         return refFromNavigator(page);
     }
-
-    // ── Дерево сравнения ─────────────────────────────────────────────────────
 
     private static String refFromCompareEditor(IEditorPart editor)
     {
@@ -477,8 +443,6 @@ public class GetRef extends AbstractHandler
         return eObjectToFullName(
             CompareConfigOpenObjectHandler.getEObject(session, bmId, node));
     }
-
-    // ── Редактор ─────────────────────────────────────────────────────────────
 
     public static String getRefFromEditor(IWorkbenchPage page)
     {
@@ -516,8 +480,6 @@ public class GetRef extends AbstractHandler
         if (file == null) return null;
         return pathToFullName(file.getProjectRelativePath().toString());
     }
-
-    // ── Навигатор ────────────────────────────────────────────────────────────
 
     private static String refFromNavigator(IWorkbenchPage page)
     {
@@ -641,7 +603,7 @@ public class GetRef extends AbstractHandler
     }
 
     // =========================================================================
-    // Путь файла EDT → полное русское имя МД (для объектов/папок)
+    // Путь файла EDT → полное русское имя МД
     // =========================================================================
 
     static String pathToFullName(String projectRelativePath)
@@ -712,9 +674,27 @@ public class GetRef extends AbstractHandler
     // Буфер обмена
     // =========================================================================
 
+    /**
+     * Копирует текст в буфер обмена, используя переданный {@link Shell}.
+     * Используется для ссылки 1 (уже на UI-потоке).
+     */
     private static void setClipboardText(String text, Shell shell)
     {
         Clipboard cb = new Clipboard(shell.getDisplay());
+        try { cb.setContents(new Object[]{ text }, new Transfer[]{ TextTransfer.getInstance() }); }
+        finally { cb.dispose(); }
+    }
+
+    /**
+     * Копирует текст в буфер обмена без необходимости в {@link Shell}.
+     * Вызывается из {@code Runnable}, уже выполняемого на потоке Display
+     * (через {@code Display.asyncExec} внутри {@link ToastNotification}).
+     */
+    private static void copyToClipboard(String text)
+    {
+        Display display = Display.getDefault();
+        if (display == null || display.isDisposed()) return;
+        Clipboard cb = new Clipboard(display);
         try { cb.setContents(new Object[]{ text }, new Transfer[]{ TextTransfer.getInstance() }); }
         finally { cb.dispose(); }
     }
@@ -727,15 +707,15 @@ public class GetRef extends AbstractHandler
      * Путь к BSL-модулю в формате ссылок 1С.
      *
      * <pre>
-     *   extensionName = "ИнструментыРазработчикаTormozit"  (или null для конфигурации)
+     *   extensionName = "ИнструментыРазработчикаTormozit"  (или null)
      *   modulePath    = "Обработка.ирКонсольКода.Форма.Форма.Форма"
      *   toRefPrefix() = "ИнструментыРазработчикаTormozit Обработка.ирКонсольКода.Форма.Форма.Форма"
      * </pre>
      */
     static final class ModuleRef
     {
-        final String extensionName; // имя расширения или null
-        final String modulePath;    // путь в формате ссылок (без имени расширения)
+        final String extensionName;
+        final String modulePath;
 
         ModuleRef(String extensionName, String modulePath)
         {
@@ -743,7 +723,6 @@ public class GetRef extends AbstractHandler
             this.modulePath    = modulePath;
         }
 
-        /** «[ИмяРасш ]ПутьМодуля» — вставляется в фигурные скобки ссылок 1 и 2. */
         String toRefPrefix()
         {
             return extensionName != null ? extensionName + " " + modulePath : modulePath; //$NON-NLS-1$
@@ -753,8 +732,8 @@ public class GetRef extends AbstractHandler
     /** Объемлющий метод (Процедура/Функция). */
     private static final class MethodInfo
     {
-        final String name;          // имя метода
-        final int declarationLine1; // 1-based номер строки объявления
+        final String name;
+        final int declarationLine1; // 1-based
 
         MethodInfo(String name, int declarationLine1)
         {
