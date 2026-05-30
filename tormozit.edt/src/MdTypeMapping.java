@@ -145,7 +145,9 @@ public final class MdTypeMapping
         // ── Под-объекты объектов метаданных (используются в BM FQN) ─────────
         // Эти типы встречаются как сегменты BM URI вида
         // "Catalog.Валюты.Template.Классификатор" и нужны для GetRef.eObjectToFullName.
-        add("Макет",               "Template",        null);
+        add("Форма",               "Form",           "Forms");
+        add("Команда",             "Command",        "Commands");
+        add("Макет",               "Template",       "Templates");
         add("ТабличнаяЧасть",      "TabularSection",  null);
         add("Реквизит",            "Attribute",       null);
         add("Измерение",           "Dimension",       null);
@@ -444,5 +446,9 @@ public final class MdTypeMapping
         String name = s.substring(best + 1);
         if (type.isBlank() || name.isBlank()) return null;
         return new Parsed(type, name);
+    }
+    public static String ruToEnSingRequired(String ru)
+    {
+        return RU_TO_EN_SING.get(ru);
     }
 }

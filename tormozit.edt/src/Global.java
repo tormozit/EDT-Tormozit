@@ -8,6 +8,7 @@ import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.Adapters;
 import org.eclipse.jface.viewers.IStructuredSelection;
+import org.eclipse.jface.viewers.TreeSelection;
 import org.eclipse.ui.IEditorInput;
 import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.IViewPart;
@@ -17,6 +18,7 @@ import org.eclipse.ui.IWorkbenchPage;
 import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.navigator.CommonNavigator;
+import org.eclipse.xtext.ide.server.ProjectManager;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.FrameworkUtil;
@@ -240,11 +242,12 @@ public final class Global
         try
         {
             CommonNavigator nav = (CommonNavigator) getViewById(NAVIGATOR_VIEW_ID);
-            if (nav == null) return null;
-            IStructuredSelection sel = (IStructuredSelection)
-                nav.getSite().getSelectionProvider().getSelection();
-            if (sel == null || sel.isEmpty()) return null;
-            return Adapters.adapt(sel.getFirstElement(), IProject.class);
+            if (nav == null) 
+                return null;
+            TreeSelection sel = (TreeSelection) nav.getSite().getSelectionProvider().getSelection();
+            if (sel == null || sel.isEmpty()) 
+                return null;
+            return (IProject) sel.getPaths()[0].getSegment(0);
         }
         catch (Exception ignored) { 
             return null; 

@@ -3,7 +3,6 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -17,12 +16,11 @@ import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.emf.common.util.URI;
-import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EObject;
-import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.jface.text.BadLocationException;
 import org.eclipse.jface.text.IDocument;
+import org.eclipse.jface.viewers.ISelection;
 import org.eclipse.swt.dnd.Clipboard;
 import org.eclipse.swt.dnd.TextTransfer;
 import org.eclipse.swt.widgets.Shell;
@@ -34,29 +32,23 @@ import org.eclipse.ui.handlers.HandlerUtil;
 import org.eclipse.ui.ide.IDE;
 import org.eclipse.ui.texteditor.ITextEditor;
 import org.eclipse.xtext.naming.QualifiedName;
-import org.eclipse.xtext.resource.IEObjectDescription;
 import org.eclipse.xtext.resource.IResourceServiceProvider;
 import org.eclipse.xtext.ui.editor.XtextEditor;
 import org.eclipse.xtext.ui.editor.model.IXtextDocument;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.inject.Inject;
+
 import com._1c.g5.v8.bm.core.BmPlatform;
 import com._1c.g5.v8.bm.core.IBmNamespace;
 import com._1c.g5.v8.bm.core.IBmPlatformTransaction;
-import com._1c.g5.v8.dt.bm.index.emf.IBmEmfIndexManager;
-import com._1c.g5.v8.dt.bm.index.emf.IBmEmfIndexProvider;
 import com._1c.g5.v8.dt.bsl.ui.menu.BslHandlerUtil;
 import com._1c.g5.v8.dt.core.filesystem.IQualifiedNameFilePathConverter;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
-import com._1c.g5.v8.dt.core.platform.IResourceLookup;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
-import com._1c.g5.v8.dt.form.ui.editor.FormEditor;
 import com._1c.g5.v8.dt.md.ui.editor.base.DtGranularEditor;
 import com._1c.g5.v8.dt.md.ui.editor.base.DtGranularEditorEmbeddedEditorPage;
-import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.ui.util.OpenHelper;
 
@@ -64,29 +56,27 @@ import com._1c.g5.v8.dt.ui.util.OpenHelper;
  * Глобальная команда «Перейти к определению».
  */
 public class GoToDefinition extends AbstractHandler
-{  
+{
     // =======================================================================
     // МАППИНГИ
     // =======================================================================
 
-    /** RU ед.ч. → папка EDT (обратная совместимость; источник — {@link MdTypeMapping}). */
+    /** RU ед.ч. → папка EDT. */
     static final Map<String, String> TYPE_TO_FOLDER = MdTypeMapping.getRuToFolderMap();
 
-    /** Суффикс модуля платформы → BSL-файл в EDT. */
+    /** Суффикс модуля в ссылке → BSL-файл в EDT. */
     static final Map<String, String> MODULE_SUFFIX_TO_BSL = new LinkedHashMap<>();
     static
     {
         MODULE_SUFFIX_TO_BSL.put("МодульОбъекта",               "ObjectModule.bsl");
         MODULE_SUFFIX_TO_BSL.put("МодульМенеджера",             "ManagerModule.bsl");
         MODULE_SUFFIX_TO_BSL.put("МодульНабораЗаписей",         "RecordSetModule.bsl");
-        MODULE_SUFFIX_TO_BSL.put("МодульФормы",                 "Form.bsl");
-        MODULE_SUFFIX_TO_BSL.put("МодульМодуля",                "Module.bsl");
-        MODULE_SUFFIX_TO_BSL.put("МодульОбщийМодуль",           "Module.bsl");
-        MODULE_SUFFIX_TO_BSL.put("МодульОбъектаБизнесПроцесса", "ObjectModule.bsl");
-        MODULE_SUFFIX_TO_BSL.put("МодульЗадачи",                "ObjectModule.bsl");
+        MODULE_SUFFIX_TO_BSL.put("МодульКоманды",               "CommandModule.bsl");
+        MODULE_SUFFIX_TO_BSL.put("Модуль",                      "Module.bsl");
+        MODULE_SUFFIX_TO_BSL.put("Форма",                       "Module.bsl");
     }
 
-    /** Тип данных с суффиксом → базовый тип МД. Например «СправочникСсылка» → «Справочник». */
+    /** Тип+суффикс данных → базовый тип МД. «СправочникСсылка» → «Справочник». */
     static final Map<String, String> TYPE_SUFFIX_MAP = new LinkedHashMap<>();
     static
     {
@@ -117,8 +107,7 @@ public class GoToDefinition extends AbstractHandler
 
     private static void addSuffix(String base, String... suffixes)
     {
-        for (String s : suffixes)
-            TYPE_SUFFIX_MAP.put(base + s, base);
+        for (String s : suffixes) TYPE_SUFFIX_MAP.put(base + s, base);
     }
 
     // =======================================================================
@@ -140,11 +129,6 @@ public class GoToDefinition extends AbstractHandler
 
     private static final Pattern TYPE_DESCRIPTION_SPLITTER = Pattern.compile("\\s*,\\s*");
 
-    /** Объявление Процедуры/Функции — для поиска метода при переходе по расширенной ссылке. */
-    private static final Pattern METHOD_DECL = Pattern.compile(
-        "^\\s*(?:Асинх\\s+)?(?:Процедура|Функция|Procedure|Function)\\s+(%s)\\s*[\\(\\s]",
-        Pattern.UNICODE_CASE);
-
     // =======================================================================
     // ТОЧКА ВХОДА
     // =======================================================================
@@ -152,6 +136,20 @@ public class GoToDefinition extends AbstractHandler
     @Override
     public Object execute(ExecutionEvent event) throws ExecutionException
     {
+        IProject activeProject = Global.getActiveEditorProject(false);
+        if (activeProject == null)
+        {
+            ToastNotification.show("Переход к определению", "Отсутствует активный проект");
+            return null;
+        }
+        IV8ProjectManager projectManager =
+            (IV8ProjectManager) Global.getServiceByClass(IV8ProjectManager.class);
+        IV8Project v8Project = projectManager.getProject(activeProject);
+        if (v8Project == null)
+        {
+            ToastNotification.show("Переход к определению", "Активный проект " + activeProject.getName() + " не открыт");
+            return null;
+        }
         File newFile = null, oldFile = null;
         String command = "";
         String transportFolder = IRApplicationRegistry.transportFolder;
@@ -186,12 +184,12 @@ public class GoToDefinition extends AbstractHandler
             }
             command = command.strip();
         }
-
-        Global.log("GoToDefinition: ref = " + command); //$NON-NLS-1$
-
         if (!jump(command, shell, page))
+        {
             ToastNotification.show("Перейти к определению",
-                "Не удалось перейти по ссылке:\n" + truncate(command, 120), 5000);
+                "В проекте " + activeProject.getName() + " не найдена ссылка:\n" + truncate(command, 120), 5000);
+            return null;
+        }
 
         if (newFile != null && (command.contains("Макет.") || command.contains("Template."))) //$NON-NLS-1$ //$NON-NLS-2$
         {
@@ -220,16 +218,15 @@ public class GoToDefinition extends AbstractHandler
     // ГЛАВНЫЙ ДИСПЕТЧЕР
     // =======================================================================
 
-    public boolean jump(String raw, Shell shell, IWorkbenchPage page)
+    public static boolean jump(String raw, Shell shell, IWorkbenchPage page)
     {
         if (raw == null) return false;
         String ref = raw.strip();
         if (ref.isEmpty()) return false;
 
         if (ref.startsWith("http://") || ref.startsWith("https://")) //$NON-NLS-1$ //$NON-NLS-2$
-        {
-            openUrl(ref);
-            return true;
+        { openUrl(ref); 
+         return true;
         }
 
         if (ref.contains("{") && ref.contains("}")) //$NON-NLS-1$ //$NON-NLS-2$
@@ -239,8 +236,7 @@ public class GoToDefinition extends AbstractHandler
         if (gitM.matches())
             return openGitFileRef(gitM.group(1), parseInt(gitM.group(2)), page, shell);
 
-        if (ref.startsWith("БД.")) //$NON-NLS-1$
-            ref = ref.substring(3);
+        if (ref.startsWith("БД.")) ref = ref.substring(3); //$NON-NLS-1$
 
         if (ref.startsWith("ПакетXDTO.")) //$NON-NLS-1$
             return openXdtoRef(ref, shell, page);
@@ -256,8 +252,7 @@ public class GoToDefinition extends AbstractHandler
         }
 
         String stripped = stripTypeSuffix(ref);
-        if (stripped != null)
-            return openByFullName(stripped, shell, page);
+        if (stripped != null) return openByFullName(stripped, shell, page);
 
         return openByFullName(ref, shell, page);
     }
@@ -266,7 +261,7 @@ public class GoToDefinition extends AbstractHandler
     // ССЫЛКИ СТРОК МОДУЛЕЙ
     // =======================================================================
 
-    private boolean handleModuleLineRefs(String text, Shell shell, IWorkbenchPage page)
+    private static boolean handleModuleLineRefs(String text, Shell shell, IWorkbenchPage page)
     {
         List<ModuleLineRef> refs = parseAllModuleLineRefs(text);
         if (refs.isEmpty()) return false;
@@ -291,301 +286,155 @@ public class GoToDefinition extends AbstractHandler
     }
 
     /**
-     * Открывает модуль по ссылке строки.
+     * Открывает редактор модуля по ссылке строки.
      *
-     * <p>Стратегии (в порядке приоритета):
+     * <h3>Приоритеты</h3>
      * <ol>
-     *   <li>Git-путь ({@code r.file != null}) → {@link #openGitFileRef}.</li>
-     *   <li><b>IBmEmfIndex + OpenHelper</b> — проверенный подход из EDT.CodeLinkOpener:
-     *       находит {@link MdObject} по индексу, открывает редактор объекта через
-     *       {@link OpenHelper#openEditor(MdObject, EStructuralFeature)}, активирует
-     *       страницу модуля, переходит к строке через {@link BslHandlerUtil}.
-     *       Для расширенных ссылок ({@code method != null}) ищет метод в документе
-     *       и переходит по смещению внутри него.</li>
-     *   <li>Fallback — открытие BSL-файла напрямую через {@link IDE#openEditor}.</li>
+     *   <li>Git-путь ({@code r.file != null}) → файловый переход.</li>
+     *   <li><b>URI-подход</b>: строим {@code platform:/resource/.../Module.bsl#/0}
+     *       и вызываем {@link OpenHelper#openEditor(URI, ISelection)} — EDT открывает
+     *       редактор объекта и <em>автоматически</em> активирует страницу модуля.</li>
+     *   <li>Fallback: прямое открытие BSL-файла через {@link IDE#openEditor}.</li>
      * </ol>
      */
-    private boolean openModuleLineRef(ModuleLineRef r, IWorkbenchPage page, Shell shell)
+    private static boolean openModuleLineRef(ModuleLineRef r, IWorkbenchPage page, Shell shell)
     {
+        
         if (r.file != null)
             return openGitFileRef(r.file, r.line, page, shell);
-
-        // Основной путь: IBmEmfIndex + OpenHelper
-        if (openModuleRefViaBmIndex(r, page))
+        if (openModuleRefViaUri(r, page)) 
             return true;
-
-        // Fallback: файловый путь
-        String bslPath = moduleToBslPath(r.modulePath, r.extension);
-        if (bslPath == null)
-        {
-            Global.log("GoToDefinition: не могу построить путь для " + r.modulePath); //$NON-NLS-1$
-            return false;
-        }
-        return openBslFileAt(bslPath, r.line, page, shell);
+        return false;
+//        // Fallback: файловый путь без активации страницы
+//        String bslPath = moduleToBslPath(r.modulePath, r.extension);
+//        if (bslPath == null)
+//        {
+//            Global.log("GoToDefinition: не могу построить BSL-путь для " + r.modulePath); //$NON-NLS-1$
+//            return false;
+//        }
+//        return openBslFileAt(bslPath, r.line, page, shell);
     }
 
     // =======================================================================
-    // ОТКРЫТИЕ МОДУЛЯ ЧЕРЕЗ IBmEmfIndex + OpenHelper
-    // (алгоритм из EDT.CodeLinkOpener/OpenerHandlerDialog.java)
+    // ОТКРЫТИЕ МОДУЛЯ ЧЕРЕЗ platform:-URI
     // =======================================================================
 
     /**
-     * Открывает модуль 1С по ссылке, используя {@link IBmEmfIndexManager} для поиска
-     * {@link MdObject} и {@link OpenHelper} для открытия редактора.
+     * Открывает модуль BSL через URI вида
+     * {@code platform:/resource/<Проект>/src/.../Module.bsl#/0}.
      *
-     * <h3>Алгоритм</h3>
-     * <ol>
-     *   <li>Разбирает русский путь модуля по парам «(ТипRU, Имя)»:
-     *       {@code ["Справочник","Валюты","МодульОбъекта"]} → тип {@code CATALOG},
-     *       EN FQN {@code "Catalog.Валюты"}, свойство модуля {@code "objectModule"}.</li>
-     *   <li>Получает {@link MdObject} через
-     *       {@link IBmEmfIndexProvider}.</li>
-     *   <li>Открывает редактор объекта через
-     *       {@link OpenHelper#openEditor(MdObject, EStructuralFeature)}.</li>
-     *   <li>Для форм активирует страницу модуля:
-     *       {@code FormEditor.setActivePage("editors.form.pages.module")}.</li>
-     *   <li>Получает {@link XtextEditor} через {@link BslHandlerUtil#extractXtextEditor}.</li>
-     *   <li>Переходит к строке:
-     *       <ul>
-     *         <li>Расширенная ссылка ({@code method != null}): ищет метод в документе
-     *             → переходит к {@code methodLine + offset}.</li>
-     *         <li>Стандартная ссылка: переходит к {@code line}.</li>
-     *       </ul>
-     *   </li>
-     * </ol>
+     * <p>Этот подход аналогичен родному коду EDT:
+     * {@code openHelper.openEditor(EcoreUtil.getURI(module), (ISelection)null)}.
+     * EDT по URI находит нужный ресурс, открывает редактор объекта-владельца
+     * и <b>сам активирует страницу модуля</b> — никакой ручной обработки
+     * {@code FormEditor.setActivePage} или {@code moduleProperty} не требуется.
      *
-     * @return {@code true} если переход выполнен; {@code false} при любой ошибке
-     *         (вызывающий код применит file-based fallback)
+     * <p>После открытия переходим к целевой строке:
+     * <ul>
+     *   <li><b>Расширенная ссылка</b> ({@code r.method != null}): ищем объявление
+     *       метода в документе и добавляем смещение {@code r.offset} — переход
+     *       корректен, даже если метод переместился по файлу.</li>
+     *   <li><b>Стандартная ссылка</b>: переходим к абсолютному номеру строки {@code r.line}.</li>
+     * </ul>
      */
-    private boolean openModuleRefViaBmIndex(ModuleLineRef r, IWorkbenchPage page)
+    private static boolean openModuleRefViaUri(ModuleLineRef r, IWorkbenchPage page)
     {
-        IProject activeProject = Global.getActiveProject(page, true);
-        if (activeProject == null) 
-            return false;
         if (r.modulePath == null) return false;
 
-        String[] frags = r.modulePath.split("\\.", -1); //$NON-NLS-1$
-        if (frags.length < 2) return false;
-
-        // ── Разбираем пары (ТипRU, Имя) ────────────────────────────────────
-        // Последний фрагмент (нечётный индекс) — суффикс модуля.
-        // Пример: ["Справочник","Валюты","МодульОбъекта"]   → pairCount=1, suffix="МодульОбъекта"
-        //         ["Обработка","ирКод","Форма","Форма","Форма"] → pairCount=2, suffix="Форма"
-        int    pairCount    = frags.length / 2;
-        String mdClassRu    = null;
-        boolean isForm      = false;
-        boolean isCommand   = false;
-        StringBuilder engFqn = new StringBuilder();
-
-        for (int i = 0; i < pairCount; i++)
+        // 1. Путь к BSL-файлу (src/<Folder>/<Object>/ObjectModule.bsl и т.п.)
+        String bslPath = moduleToBslPath(r.modulePath, r.extension);
+        if (bslPath == null)
         {
-            String ruType  = frags[i * 2];
-            String objName = frags[i * 2 + 1];
-            String enType  = MdTypeMapping.anyToEnSing(ruType);
-            if (enType == null) return false;
-            mdClassRu = ruType;
-            if ("Форма".equals(ruType)) //$NON-NLS-1$ //$NON-NLS-2$
-                isForm = true;
-            else if ("Команда".equals(ruType)) //$NON-NLS-1$ //$NON-NLS-2$
-                isCommand = true;
-            if (engFqn.length() > 0) engFqn.append('.');
-            engFqn.append(enType).append('.').append(objName);
-        }
-
-        if (mdClassRu == null) return false;
-
-        // ── EClass для поиска в индексе ──────────────────────────────────────
-        EClass mdLiteral = getMdLiteralForIndex(mdClassRu, isForm, isCommand);
-        if (mdLiteral == null) 
+            Global.log("GoToDefinition: moduleToBslPath вернул null для: " + r.modulePath); //$NON-NLS-1$
             return false;
-        IV8ProjectManager projectManager = (IV8ProjectManager) Global.getServiceByClass(IV8ProjectManager.class);
-        IV8Project v8Project = projectManager.getProject(activeProject);
-        if (v8Project == null) 
+        }
+
+        // 2. Находим файл в воркспейсе
+        IFile file = findFileInWorkspace(bslPath, page);
+        if (file == null)
+        {
+            Global.log("GoToDefinition: BSL-файл не найден: " + bslPath); //$NON-NLS-1$
             return false;
-        QualifiedName qn = buildQualifiedName(engFqn.toString());
-        MdObject mdObject = (MdObject) resolveEObjectByQualifiedName(qn.toString(), v8Project);
-
-        // ── Свойство-модуль (objectModule, managerModule, …) ─────────────────
-        // Последний фрагмент пути — суффикс модуля (МодульОбъекта, МодульМенеджера, Форма, …)
-        String lastFrag      = frags[frags.length - 1];
-        String enModuleSuffix = MdTypeMapping.anyToEnSing(lastFrag); // "ObjectModule", "Form", …
-        EStructuralFeature moduleProperty = null;
-        if (enModuleSuffix != null)
-        {
-            // Имя свойства = EN-имя с маленькой первой буквой: "ObjectModule" → "objectModule"
-            String propName = Character.toLowerCase(enModuleSuffix.charAt(0))
-                              + enModuleSuffix.substring(1);
-            moduleProperty = mdObject.eClass().getEStructuralFeature(propName);
         }
 
-        // ── Открываем редактор ───────────────────────────────────────────────
-        OpenHelper openHelper = new OpenHelper();
-        IEditorPart editorPart = openHelper.openEditor(mdObject, moduleProperty);
-        if (editorPart == null) return false;
+        // 3. Строим platform:-URI на корневой EObject модуля:
+        //    platform:/resource/<Проект>/src/.../Module.bsl#/0
+        //    Фрагмент "/0" адресует первый (и единственный) EObject ресурса.
+        URI moduleUri = URI.createPlatformResourceURI(file.getFullPath().toString(), true)
+                           .appendFragment("/0"); //$NON-NLS-1$
 
-        // Для форм: активируем страницу модуля
-        if (isForm)
+        // 4. Открываем редактор — EDT активирует нужную страницу автоматически
+        IEditorPart editorPart = new OpenHelper().openEditor(moduleUri, (ISelection) null);
+        if (editorPart == null)
         {
-            FormEditor formEditor = (FormEditor) editorPart;
-            formEditor.setActivePage("editors.form.pages.module"); //$NON-NLS-1$
+            Global.log("GoToDefinition: openEditor вернул null для URI: " + moduleUri); //$NON-NLS-1$
+            return false;
         }
-        
-        // ── Извлекаем XtextEditor и переходим к строке ──────────────────────
+
+        // 5. Извлекаем XtextEditor и переходим к строке
         XtextEditor xtextEditor = BslHandlerUtil.extractXtextEditor(editorPart);
-        if (xtextEditor == null) return false;
+        if (xtextEditor == null)
+        {
+            Global.log("GoToDefinition: extractXtextEditor вернул null"); //$NON-NLS-1$
+            return false; 
+        }
 
         IXtextDocument document = (IXtextDocument) xtextEditor.getDocument();
-
-        // Определяем целевую строку (0-based)
-        int targetLine0;
-        if (r.method != null && !r.method.isEmpty())
-        {
-            // Расширенная ссылка: ищем метод, переходим на methodLine + offset
-            int methodLine0 = findMethodLine(document, r.method);
-            targetLine0 = (methodLine0 >= 0) ? methodLine0 + r.offset : r.line - 1;
-        }
-        else
-        {
-            targetLine0 = r.line - 1;
-        }
+        int targetLine0 = resolveTargetLine(r, document);
 
         try
         {
             int offset = document.getLineOffset(Math.max(0, targetLine0));
             xtextEditor.selectAndReveal(offset, 0);
-            return true;
+            return true; 
         }
         catch (BadLocationException e)
         {
-            Global.log("GoToDefinition.openModuleRefViaBmIndex: revealLine " + targetLine0 + ": " + e); //$NON-NLS-1$ //$NON-NLS-2$
-            return false;
+            Global.log("GoToDefinition: selectAndReveal(" + targetLine0 + "): " + e); //$NON-NLS-1$ //$NON-NLS-2$
+            return false; 
         }
     }
 
     /**
-     * Возвращает {@link EClass} из {@link MdClassPackage.Literals} для поиска объекта
-     * в BM-индексе.
+     * Определяет 0-based номер целевой строки.
      *
-     * <p>Карта соответствий воспроизводит {@code getMdLiteral} из
-     * EDT.CodeLinkOpener/OpenerHandlerDialog с учётом флагов {@code isForm}/{@code isCommand}.
+     * <p>Для расширенной ссылки ({@code r.method != null}) ищет объявление метода
+     * и добавляет смещение {@code r.offset}. Это позволяет корректно перейти
+     * к строке даже если метод был перемещён по файлу со времени создания ссылки.
+     * Если метод не найден — использует абсолютный {@code r.line}.
      */
-    private static EClass getMdLiteralForIndex(String mdClassRu, boolean isForm, boolean isCommand)
+    private static int resolveTargetLine(ModuleLineRef r, IXtextDocument document)
     {
-        switch (mdClassRu)
+        if (r.method != null && !r.method.isEmpty())
         {
-            case "Конфигурация":            return MdClassPackage.Literals.CONFIGURATION;
-            case "Подсистема":              return MdClassPackage.Literals.SUBSYSTEM;
-            case "HTTPСервис":              return MdClassPackage.Literals.HTTP_SERVICE;
-            case "WebСервис":               return MdClassPackage.Literals.WEB_SERVICE;
-            case "ВнешнийИсточникДанных":   return MdClassPackage.Literals.EXTERNAL_DATA_SOURCE;
-            case "ОбщийМодуль":             return MdClassPackage.Literals.COMMON_MODULE;
-            case "ОбщаяФорма":              return MdClassPackage.Literals.COMMON_FORM;
-            case "ОбщаяКоманда":            return MdClassPackage.Literals.COMMON_COMMAND;
-            case "Константа":               return MdClassPackage.Literals.CONSTANT;
-
-            case "Справочник":
-                return isForm ? MdClassPackage.Literals.CATALOG_FORM
-                     : isCommand ? MdClassPackage.Literals.CATALOG_COMMAND
-                     : MdClassPackage.Literals.CATALOG;
-            case "Документ":
-                return isForm ? MdClassPackage.Literals.DOCUMENT_FORM
-                     : isCommand ? MdClassPackage.Literals.DOCUMENT_COMMAND
-                     : MdClassPackage.Literals.DOCUMENT;
-            case "Перечисление":
-                return isForm ? MdClassPackage.Literals.ENUM_FORM
-                     : isCommand ? MdClassPackage.Literals.ENUM_COMMAND
-                     : MdClassPackage.Literals.ENUM;
-            case "Обработка":
-                return isForm ? MdClassPackage.Literals.DATA_PROCESSOR_FORM
-                     : isCommand ? MdClassPackage.Literals.DATA_PROCESSOR_COMMAND
-                     : MdClassPackage.Literals.DATA_PROCESSOR;
-            case "Отчет":
-                return isForm ? MdClassPackage.Literals.REPORT_FORM
-                     : isCommand ? MdClassPackage.Literals.REPORT_COMMAND
-                     : MdClassPackage.Literals.REPORT;
-            case "ПланОбмена":
-                return isForm ? MdClassPackage.Literals.EXCHANGE_PLAN_FORM
-                     : isCommand ? MdClassPackage.Literals.EXCHANGE_PLAN_COMMAND
-                     : MdClassPackage.Literals.EXCHANGE_PLAN;
-            case "ПланВидовХарактеристик":
-                return isForm ? MdClassPackage.Literals.CHART_OF_CHARACTERISTIC_TYPES_FORM
-                     : isCommand ? MdClassPackage.Literals.CHART_OF_CHARACTERISTIC_TYPES_COMMAND
-                     : MdClassPackage.Literals.CHART_OF_CHARACTERISTIC_TYPES;
-            case "ПланВидовРасчета":
-                return isForm ? MdClassPackage.Literals.CHART_OF_CALCULATION_TYPES_FORM
-                     : isCommand ? MdClassPackage.Literals.CHART_OF_CALCULATION_TYPES_COMMAND
-                     : MdClassPackage.Literals.CHART_OF_CALCULATION_TYPES;
-            case "ПланСчетов":
-                return isForm ? MdClassPackage.Literals.CHART_OF_ACCOUNTS_FORM
-                     : isCommand ? MdClassPackage.Literals.CHART_OF_ACCOUNTS_COMMAND
-                     : MdClassPackage.Literals.CHART_OF_ACCOUNTS;
-            case "РегистрСведений":
-                return isForm ? MdClassPackage.Literals.INFORMATION_REGISTER_FORM
-                     : isCommand ? MdClassPackage.Literals.INFORMATION_REGISTER_COMMAND
-                     : MdClassPackage.Literals.INFORMATION_REGISTER;
-            case "РегистрНакопления":
-                return isForm ? MdClassPackage.Literals.ACCUMULATION_REGISTER_FORM
-                     : isCommand ? MdClassPackage.Literals.ACCUMULATION_REGISTER_COMMAND
-                     : MdClassPackage.Literals.ACCUMULATION_REGISTER;
-            case "РегистрБухгалтерии":
-                return isForm ? MdClassPackage.Literals.ACCOUNTING_REGISTER_FORM
-                     : isCommand ? MdClassPackage.Literals.ACCOUNTING_REGISTER_COMMAND
-                     : MdClassPackage.Literals.ACCOUNTING_REGISTER;
-            case "РегистрРасчета":
-                return isForm ? MdClassPackage.Literals.CALCULATION_REGISTER_FORM
-                     : isCommand ? MdClassPackage.Literals.CALCULATION_REGISTER_COMMAND
-                     : MdClassPackage.Literals.CALCULATION_REGISTER;
-            case "БизнесПроцесс":
-                return isForm ? MdClassPackage.Literals.BUSINESS_PROCESS_FORM
-                     : isCommand ? MdClassPackage.Literals.BUSINESS_PROCESS_COMMAND
-                     : MdClassPackage.Literals.BUSINESS_PROCESS;
-            case "Задача":
-                return isForm ? MdClassPackage.Literals.TASK_FORM
-                     : isCommand ? MdClassPackage.Literals.TASK_COMMAND
-                     : MdClassPackage.Literals.TASK;
-
-            default: return null;
+            int methodLine0 = findMethodLine(document, r.method);
+            if (methodLine0 >= 0) return methodLine0 + r.offset;
         }
+        return Math.max(0, r.line - 1);
     }
 
     /**
-     * Строит {@link QualifiedName} из строки вида {@code "Catalog.Валюты.Form.Форма"}.
-     */
-    private static QualifiedName buildQualifiedName(String dotSeparated)
-    {
-        String[] parts = dotSeparated.split("\\.", -1); //$NON-NLS-1$
-        QualifiedName qn = null;
-        for (String p : parts)
-            qn = qn == null ? QualifiedName.create(p) : qn.append(p);
-        return qn;
-    }
-
-    /**
-     * Ищет 0-based номер строки объявления метода {@code methodName} в документе.
-     * Используется для расширенных ссылок вида
-     * {@code {Module(line:MethodName,offset)}}: даже если метод переместился
-     * по файлу, переход всё равно попадёт в нужную строку.
+     * Ищет 0-based номер строки объявления метода {@code methodName}.
+     * Поддерживает «Процедура»/«Функция»/«Procedure»/«Function» и опциональный «Асинх».
      *
      * @return 0-based номер строки или {@code -1} если метод не найден
      */
     private static int findMethodLine(IXtextDocument document, String methodName)
     {
         Pattern p = Pattern.compile(
-            String.format(
-                "^\\s*(?:Асинх\\s+)?(?:Процедура|Функция|Procedure|Function)\\s+%s\\s*[\\(\\s]", //$NON-NLS-1$
-                Pattern.quote(methodName)),
+            "^\\s*(?:Асинх\\s+)?(?:Процедура|Функция|Procedure|Function)\\s+" //$NON-NLS-1$
+            + Pattern.quote(methodName) + "\\s*[\\(\\s]", //$NON-NLS-1$
             Pattern.UNICODE_CASE);
 
         String text  = document.get();
-        int    start = 0;
+        int    pos   = 0;
         int    line  = 0;
-        while (start <= text.length())
+        while (pos <= text.length())
         {
-            int end = text.indexOf('\n', start);
-            if (end < 0) end = text.length();
-            String lineText = text.substring(start, end);
-            if (p.matcher(lineText).find()) return line;
-            start = end + 1;
+            int eol = text.indexOf('\n', pos);
+            if (eol < 0) eol = text.length();
+            if (p.matcher(text.substring(pos, eol)).find()) return line;
+            pos = eol + 1;
             line++;
         }
         return -1;
@@ -661,55 +510,42 @@ public class GoToDefinition extends AbstractHandler
     {
         IV8ProjectManager projectManager =
             (IV8ProjectManager) Global.getServiceByClass(IV8ProjectManager.class);
-
         IProject activeProject = Global.getActiveProject(page, true);
         if (activeProject == null)
         {
-            ToastNotification.show("Переход к определению", "Сначала нужно активировать проект.");
             return false;
         }
-
         IV8Project v8Project = projectManager.getProject(activeProject);
         if (v8Project == null)
         {
-            ToastNotification.show("Переход к определению",
-                "Проект не распознан EDT: " + activeProject.getName());
             return false;
         }
-
         EObject eObject = resolveEObjectByQualifiedName(fullName, v8Project);
-        if (eObject != null)
+        if (eObject instanceof MdObject)
         {
-            new OpenHelper().openEditor((MdObject) eObject);
+            new OpenHelper().openEditor((MdObject) eObject, null);
             return true;
         }
-
         String mdoPath = mdNameToMdoPath(fullName);
         if (mdoPath == null)
         {
             Global.log("GoToDefinition: не могу построить .mdo-путь для: " + fullName); //$NON-NLS-1$
             return false;
         }
-
         IFile mdoFile = findFileInWorkspace(mdoPath, page);
         if (mdoFile == null)
         {
             Global.log("GoToDefinition: .mdo не найден: " + mdoPath); //$NON-NLS-1$
             return false;
         }
-
         eObject = resolveEObjectViaResourceSet(mdoFile, v8Project);
-        if (eObject != null)
+        if (eObject instanceof MdObject)
         {
-            new OpenHelper().openEditor((MdObject) eObject);
+            new OpenHelper().openEditor((MdObject) eObject, null);
             return true;
         }
-
         Global.log("GoToDefinition: EObject не получен, открываем .mdo напрямую"); //$NON-NLS-1$
-        try
-        {
-            return IDE.openEditor(page, mdoFile, true) != null;
-        }
+        try { return IDE.openEditor(page, mdoFile, true) != null; }
         catch (PartInitException e)
         {
             Global.log("GoToDefinition: IDE.openEditor(.mdo): " + e); //$NON-NLS-1$
@@ -739,10 +575,7 @@ public class GoToDefinition extends AbstractHandler
         BmPlatform platform = modelManager.getBmPlatform();
         IBmPlatformTransaction transaction = platform.beginReadOnlyTransaction(true);
         IBmNamespace ns = modelManager.getBmNamespace(v8Project.getProject());
-        try
-        {
-            return (EObject) transaction.getTopObjectByFqn(ns, fqn);
-        }
+        try { return (EObject) transaction.getTopObjectByFqn(ns, fqn); }
         catch (Exception e) { return null; }
         finally { transaction.commit(); }
     }
@@ -754,11 +587,7 @@ public class GoToDefinition extends AbstractHandler
     private static boolean openBslFileAt(String bslPath, int line, IWorkbenchPage page, Shell shell)
     {
         IFile file = findFileInWorkspace(bslPath, page);
-        if (file == null)
-        {
-            Global.log("GoToDefinition: BSL не найден: " + bslPath); //$NON-NLS-1$
-            return false;
-        }
+        if (file == null) { Global.log("GoToDefinition: BSL не найден: " + bslPath); return false; } //$NON-NLS-1$
         return openFileAtLine(file, line, page, shell);
     }
 
@@ -771,11 +600,7 @@ public class GoToDefinition extends AbstractHandler
             if (line > 0) revealLine(editor, line);
             return true;
         }
-        catch (PartInitException e)
-        {
-            Global.log("GoToDefinition: openFileAtLine: " + e); //$NON-NLS-1$
-            return false;
-        }
+        catch (PartInitException e) { Global.log("GoToDefinition: openFileAtLine: " + e); return false; } //$NON-NLS-1$
     }
 
     private static void revealLine(IEditorPart editor, int lineNumber)
@@ -784,32 +609,26 @@ public class GoToDefinition extends AbstractHandler
         ITextEditor te  = (ITextEditor) editor;
         IDocument   doc = te.getDocumentProvider().getDocument(te.getEditorInput());
         if (doc == null) return;
-        try
-        {
-            int offset = doc.getLineOffset(Math.max(0, lineNumber - 1));
-            te.selectAndReveal(offset, 0);
-        }
-        catch (BadLocationException e)
-        {
-            Global.log("GoToDefinition: revealLine " + lineNumber + ": " + e); //$NON-NLS-1$ //$NON-NLS-2$
-        }
+        try { te.selectAndReveal(doc.getLineOffset(Math.max(0, lineNumber - 1)), 0); }
+        catch (BadLocationException ignored) {}
     }
 
     private static IFile findFileInWorkspace(String relPath, IWorkbenchPage page)
     {
         String path = relPath.replace('\\', '/');
         IProject active = Global.getActiveProject(page, true);
-        if (active != null)
-        {
+        if (active != null) {
             IFile f = findInProject(active, path);
-            if (f != null) return f;
+            if (f != null)
+                return f; 
         }
-        for (IProject p : ResourcesPlugin.getWorkspace().getRoot().getProjects())
-        {
-            if (!p.isOpen() || p.equals(active)) continue;
-            IFile f = findInProject(p, path);
-            if (f != null) return f;
-        }
+        // Не будетм перебирать все проекты, если актвиного нет
+//        for (IProject p : ResourcesPlugin.getWorkspace().getRoot().getProjects())
+//        {
+//            if (!p.isOpen() || p.equals(active)) continue;
+//            IFile f = findInProject(p, path);
+//            if (f != null) return f;
+//        }
         return null;
     }
 
@@ -823,32 +642,69 @@ public class GoToDefinition extends AbstractHandler
     // КОНВЕРТАЦИЯ ИМЁН МОДУЛЕЙ → ПУТИ BSL
     // =======================================================================
 
+    /**
+     * Преобразует русский путь модуля (из ссылки строки) в project-relative путь BSL-файла.
+     *
+     * <pre>
+     *   "ОбщийМодуль.МойМодуль"                             → "src/CommonModules/МойМодуль/Module.bsl"
+     *   "ОбщаяФорма.Форма1.Форма"                           → "src/CommonForms/Форма1/Module.bsl"
+     *   "Справочник.Валюты.МодульОбъекта"                   → "src/Catalogs/Валюты/ObjectModule.bsl"
+     *   "Обработка.ирКод.Форма.Форма.Форма"                 → "src/DataProcessors/ирКод/Forms/Форма/Module.bsl"
+     *   "ИнструментыTormozit Обработка.ирКод.Форма.Форма.Форма" → "src/ext/ИнструментыTormozit/DataProcessors/ирКод/Forms/Форма/Module.bsl"
+     * </pre>
+     */
     static String moduleToBslPath(String modulePath, String extension)
     {
-        String[] parts = modulePath.split("\\.", -1); //$NON-NLS-1$
-        if (parts.length == 0) return null;
-        String folder = MdTypeMapping.anyToFolder(parts[0]);
-        if (folder == null) return null;
-        String prefix = extension != null
-            ? "src/ext/" + extension + "/" + folder //$NON-NLS-1$ //$NON-NLS-2$
-            : "src/" + folder; //$NON-NLS-1$
+        if (modulePath == null || modulePath.isBlank())
+            return null;
 
-        if (folder.startsWith("Common") && parts.length >= 2) //$NON-NLS-1$
-            return prefix + "/" + parts[1] + "/Module.bsl"; //$NON-NLS-1$ //$NON-NLS-2$
-        if (parts.length < 2) return null;
-        String objectName = parts[1];
-        for (int i = 2; i < parts.length - 1; i++)
+        String[] p = modulePath.split("\\.");
+        if (p.length < 3)
+            return null;
+
+        String rootFolder = MdTypeMapping.ruToFolder(p[0]);
+        if (rootFolder == null)
+            return null;
+
+        StringBuilder path = new StringBuilder("src/");
+
+        if (extension != null && !extension.isBlank())
         {
-            if ("Форма".equals(parts[i]) && i + 1 < parts.length) //$NON-NLS-1$
-                return prefix + "/" + objectName + "/Forms/" + parts[i + 1] + "/Ext/Form.bsl"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            path.append("ext/")
+                .append(extension)
+                .append('/');
         }
-        if (parts.length >= 3)
+
+        path.append(rootFolder)
+            .append('/')
+            .append(p[1]);
+
+        int last = p.length - 1;
+        String moduleTypeRu = p[last];
+
+        // контейнеры: Команда и Форма
+        for (int i = 2; i < last - 1; i += 2)
         {
-            String bslFile = MODULE_SUFFIX_TO_BSL.get(parts[parts.length - 1]);
-            if (bslFile != null)
-                return prefix + "/" + objectName + "/Ext/" + bslFile; //$NON-NLS-1$ //$NON-NLS-2$
+            String folder = MdTypeMapping.ruToFolder(p[i]);
+            if (folder == null)
+                return null;
+
+            path.append('/')
+                .append(folder)
+                .append('/')
+                .append(p[i + 1]);
         }
-        return null;
+
+        if ("Форма".equals(moduleTypeRu))
+        {
+            return path.append("/Module.bsl").toString();
+        }
+
+        path.append('/')
+            .append(MdTypeMapping.ruToEnSingRequired(moduleTypeRu))
+            .append(".bsl");
+
+        return path.toString();
     }
 
     private static String mdNameToMdoPath(String fullName)
@@ -875,7 +731,7 @@ public class GoToDefinition extends AbstractHandler
                     String prefix = extension != null
                         ? "src/ext/" + extension + "/" + folder //$NON-NLS-1$ //$NON-NLS-2$
                         : "src/" + folder; //$NON-NLS-1$
-                    return prefix + "/" + parts[1] + "/Forms/" + parts[i + 1] + "/Ext/Form.bsl"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    return prefix + "/" + parts[1] + "/Forms/" + parts[i + 1] + "/Module.bsl"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 }
             }
         }
@@ -921,9 +777,8 @@ public class GoToDefinition extends AbstractHandler
 
     private static boolean isModuleSuffixPath(String name)
     {
-        for (String suffix : MODULE_SUFFIX_TO_BSL.keySet())
-            if (name.endsWith("." + suffix)) return true; //$NON-NLS-1$
-        return false;
+        String lastSeg = name.substring(name.lastIndexOf('.') + 1);
+        return lastSeg.startsWith("Module");
     }
 
     private static int indexOfFormPart(String fullName)
@@ -953,10 +808,7 @@ public class GoToDefinition extends AbstractHandler
             r.method     = m.group(4);
             r.offset     = parseInt(m.group(5));
             if (r.modulePath.contains("/") || r.modulePath.contains("\\")) //$NON-NLS-1$ //$NON-NLS-2$
-            {
-                r.file       = r.modulePath;
-                r.modulePath = null;
-            }
+            { r.file = r.modulePath; r.modulePath = null; }
             result.add(r);
         }
         return result;
