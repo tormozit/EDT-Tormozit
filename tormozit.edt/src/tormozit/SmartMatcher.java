@@ -101,9 +101,9 @@ public class SmartMatcher {
                 presentFragments.add(frag);
             }
         }
-        // Если не все фрагменты запроса присутствуют — дефолтная премия 1
+        // Если не все фрагменты запроса присутствуют в данной части — премия 0
         if (presentFragments.size() != fragments.length) {
-            return 1;
+            return 0;
         }
         // Все фрагменты присутствуют. Теперь проверяем, совпадают ли они с началами слов.
         List<Integer> wordBoundaries = new ArrayList<>();
@@ -141,7 +141,7 @@ public class SmartMatcher {
                 return 1;                  // не с первого слова
             }
         } else {
-            // Все фрагменты есть, но не все совпали с началами слов
+            // Все фрагменты есть, но не все совпали с началами слов — совпадение внутри слов
             return 1;
         }
     }
