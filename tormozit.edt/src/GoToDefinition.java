@@ -213,11 +213,16 @@ public class GoToDefinition extends AbstractHandler
             final IRSession finalSession = session;
             try {
                 String currentTextLiteral = session.executeOnComThread(() ->
-                    finalSession.codeEditor.selectTextLiteral()
+                    finalSession.selectTextLiteral()
                 );
                 boolean allowImport = currentTextLiteral.compareTo(Global.readTextFromFile(oldFile)) == 0;
+                String newText = Global.readTextFromFile(newFile);
                 if (allowImport) {
-                    return null;
+                    session.executeOnComThread(() ->
+                        {
+                            return finalSession.replaceSelectedText(newText);
+                        }
+                );
                 } else {
                     notifyDenyReplaceObject(newFile, command);
                 }

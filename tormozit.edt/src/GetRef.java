@@ -398,9 +398,13 @@ public class GetRef extends AbstractHandler
         return eObjectToFullName(CompareConfigOpenObjectHandler.getEObject(session, bmId, node));
     }
 
-    public static String getRefFromEditor(IWorkbenchPage page)
+    public static String getRefFromEditor(Object pageOrEditor)
     {
-        IEditorPart editor = page != null ? page.getActiveEditor() : null;
+        IEditorPart editor;
+        if (pageOrEditor instanceof IEditorPart)
+            editor = (IEditorPart)pageOrEditor;
+        else
+            editor = pageOrEditor != null ? ((IWorkbenchPage)pageOrEditor).getActiveEditor() : null;
         if (editor == null) return null;
         if (editor instanceof DtGranularEditor<?>)
         {

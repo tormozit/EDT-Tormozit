@@ -20,8 +20,8 @@ public final class IRSession
         public final LocalDateTime startTime;
         public final long pid;
         public final String platformVersion;
-        final Object root;
-        final Object processObj;
+        final Object root; // V8X.Application
+        final Object processObj; // WMIProcess
         public String appTitle;
         public IProject project;
         public final ExecutorService executor; // Выделенный поток для всех операций с этой COM-сессией
@@ -29,7 +29,7 @@ public final class IRSession
          *  В этом случае getModule() использует эту форму вместо root (COM-приложения). */
         public Object moduleRoot = null;
         public InfobaseReference infobase;
-        public IRCodeEditor codeEditor = null;
+        public Object codeEditor = null; // ирКлсПолеТекстаПрограммы
 
         IRSession(IRApplication.State state, LocalDateTime startTime, long pid, String platformVersion,
                   Object root, Object processObj, String appTitle, IProject project, ExecutorService executor, InfobaseReference infobase)
@@ -68,7 +68,7 @@ public final class IRSession
             }
         }
 
-        public IRCodeEditor getCodeEditor(BslXtextEditor editor) {
+        public void getCodeEditor(BslXtextEditor editor) {
             // Читаем данные из UI-потока EDT — они нам понадобятся в COM-потоке
             ISourceViewer viewer = editor.getInternalSourceViewer();
             Object sel = viewer.getSelectionProvider().getSelection();
@@ -80,13 +80,13 @@ public final class IRSession
             final int endOffset     = offset + textSelection.getLength();
 
             // Инициализация и setText выполняются в COM-потоке, результат возвращается синхронно
-            return executeOnComThread(() -> {
+            executeOnComThread(() -> {
                 if (codeEditor == null) {
                     Object irCache = getModule("ирКэш");
-                    codeEditor = new IRCodeEditor(ComBridge.invoke(irCache, "ПолеТекстаПрограммы", 0));
+                    codeEditor = ComBridge.invoke(irCache, "ПолеТекстаПрограммы", 0);
                 }
-                codeEditor.setText(text, moduleName, offset, endOffset);
-                return codeEditor;
+                setText(text, moduleName, offset, endOffset);
+                return null;
             });
         }
         /**
@@ -98,5 +98,37 @@ public final class IRSession
             // (Текст, Знач Заголовок = "", ВариантПросмотра = "Компактный", ТолькоПросмотр = Ложь, Знач КлючУникальности = Неопределено, ВладелецФормы = Неопределено, ВыделитьВсе = Ложь,
             // Знач Модально = Ложь, ВыделениеДвумерное = Неопределено, Знач ИскомаяСтрока = "", Знач КлючИсточника = "")
             ComBridge.invoke(irClient, "ОткрытьТекстЛкс", text, sourceRef, null, false, sourceRef, null, false, false, null, "", sourceRef); //$NON-NLS-1$                
+        }
+        
+        public void setText(String text
+            , String moduleName
+            , int startOffset // from 0
+            , int endOffset // from 0
+        )
+        {
+//            Процедура УстановитьТекст(Знач Текст = Неопределено, Знач Активировать = Ложь, Знач НачальныйТекстДляСравнения = Неопределено, Знач СохранитьГраницыВыделения = Ложь, Знач ИмяМодуляСжатое = Неопределено,
+//                Знач ИмяМодуля = Неопределено, Знач НовоеНачалоВыделения = 0, Знач НовоеКонецВыделения = 0) Экспорт
+            ComBridge.invoke(codeEditor, "УстановитьТекст", text, false, null, false, "", moduleName, startOffset + 1,
+                endOffset + 1);
+        }
+
+        public Object replaceSelectedText(String text)
+        {
+     //        ВставитьИзмененныйТекстовыйЛитерал(Знач НовыйТекст, Знач СтарыйТекстЛитерала = "", выхТекстИзменен = Ложь)
+            return ComBridge.toString(ComBridge.invoke(codeEditor, "ВставитьИзмененныйТекстовыйЛитерал", text));
+            
+       }
+
+        public String selectTextLiteral()
+        {
+//            Функция ВыделитьТекстовыйЛитерал(Знач ПолеТекстаЛ = Неопределено, выхНачальнаяПозиция0 = 0, выхКонечнаяПозиция0 = 0, Знач РазбиратьКонтекст = Истина, выхВыражение = "",
+//                Знач РазрешитьПотерюКомментариев = Истина) Экспорт 
+            return ComBridge.toString(ComBridge.invoke(codeEditor, "ВыделитьТекстовыйЛитерал", null, null, null, true, null, false));
+        }
+
+        // Модальный
+        public boolean openTextLiteralEditor()
+        {
+            return ComBridge.toBoolean(ComBridge.invoke(codeEditor, "ОткрытьРедакторТекстовогоЛитерала", null, null, null, true, null, false));
         }
     }

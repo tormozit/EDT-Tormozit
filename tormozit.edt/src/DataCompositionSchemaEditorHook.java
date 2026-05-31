@@ -33,6 +33,7 @@ import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.IEditorSite;
 import org.eclipse.ui.IPartListener2;
 import org.eclipse.ui.IStartup;
+import org.eclipse.ui.IWorkbenchPage;
 import org.eclipse.ui.IWorkbenchPartReference;
 import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.PlatformUI;
@@ -182,6 +183,7 @@ public class DataCompositionSchemaEditorHook implements IStartup
                 Object BmModel = Global.getField(editor, "bmModel");
                 IDtProject project = (IDtProject)Global.getField(BmModel, "project");
                 IRSession irSession = IRApplication.getSession(project);
+                String fullObjectName = GetRef.getRefFromEditor(editor);
                 if (irSession == null || irSession.executor == null) {
                     return;
                 }
@@ -192,8 +194,6 @@ public class DataCompositionSchemaEditorHook implements IStartup
                         String file = exportToFile(page);
                         Object irClient = irSession.getModule("ирКлиент");
                         ComBridge.setProperty(irSession.root, "Visible", true);
-                        URI fileUri = page.getModel().eResource().getURI();
-                        String fullObjectName = fileUri.path().substring(1);
                         // Мультиметка260525_210353
                         ComBridge.invoke(irClient, "РедактироватьСхемуКомпоновкиИзФайлаЛкс", file, false, fullObjectName);
                         new File(file).delete();
