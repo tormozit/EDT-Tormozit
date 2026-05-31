@@ -3,14 +3,14 @@
 <plugin>
 
   <extension point="org.eclipse.ui.startup">
-    <startup class="CompareConfigMenuHook"/>
-    <startup class="ApplicationsViewHook"/>
-    <startup class="ApplicationEditorHook"/>
-    <startup class="DataCompositionSchemaEditorHook"/> 
-    <startup class="BSLEditorMenuHook"/> 
-    <startup class="SmartOutlineHook"/> 
-    <startup class="OpenMdObjectHook"/>
-    <startup class="MenuTooltipStatusLineHook"/>  
+    <startup class="tormozit.CompareConfigMenuHook"/>
+    <startup class="tormozit.ApplicationsViewHook"/>
+    <startup class="tormozit.ApplicationEditorHook"/>
+    <startup class="tormozit.DataCompositionSchemaEditorHook"/> 
+    <startup class="tormozit.BSLEditorMenuHook"/> 
+    <startup class="tormozit.SmartOutlineHook"/> 
+    <startup class="tormozit.OpenMdObjectHook"/>
+    <startup class="tormozit.MenuTooltipStatusLineHook"/>  
   </extension>
 
   <extension point="org.eclipse.ui.contexts">
@@ -116,7 +116,7 @@
   <extension point="org.eclipse.ui.preferencePages">
     <page
         category="com._1c.g5.v8.dt.bsl.Bsl"
-        class="tormozit.edt.assist.ContentAssistAutoOpenPreferencePage"
+        class="tormozit.ContentAssistAutoOpenPreferencePage"
         id="tormozit.edt.contentAssistAutoOpen.preferencePages"
         name="Автооткрытие подсказки"/>
   </extension>
@@ -124,7 +124,7 @@
   <!-- Инициализатор значений по умолчанию для настроек автооткрытия -->
   <extension point="org.eclipse.core.runtime.preferences">
     <initializer
-        class="tormozit.edt.assist.ContentAssistAutoOpenInitializer"/>
+        class="tormozit.ContentAssistAutoOpenInitializer"/>
   </extension>
 
 </plugin>
