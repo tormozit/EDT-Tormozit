@@ -5,7 +5,6 @@ import org.eclipse.jface.viewers.ILabelDecorator;
 import org.eclipse.jface.viewers.ILabelProvider;
 
 import java.lang.reflect.Field;
-import java.util.List;
 
 import org.eclipse.core.runtime.jobs.IJobChangeEvent;
 import org.eclipse.core.runtime.jobs.Job;
@@ -127,25 +126,22 @@ public class OpenMdObjectHook implements IStartup {
 
                 pendingTask[0] = () -> {
                     if (filterText.isDisposed()) return;
+
                     smartFilter.setPattern(pattern);
                     smartLp.setPattern(pattern);
                     comparator.setMatcher(new SmartMatcher(pattern));
 
-                    if (pattern.trim().isEmpty() && !" ".equals(filterText.getText())) {
-                        // Пустой фильтр: устанавливаем фейковый пробел, чтобы RefreshJob
-                        // прошел через fillContentProvider → matchItem()
+                    if (pattern.trim().isEmpty()) {
+                        // Пустой фильтр: фейковый пробел для прохода через matchItem
                         isSettingFakeText[0] = true;
                         try {
                             filterText.setText(" ");
                             Global.invoke(dialog, "applyFilter");
-                            // applyFilter создаст MdObjectItemsFilter, подменяем на наш
                             Global.setField(dialog, "filter", smartFilter);
                             setFieldExactClass(dialog, FilteredItemsSelectionDialog.class, "filter", smartFilter);
                         } finally {
                             isSettingFakeText[0] = false;
                         }
-
-                        // После завершения job восстанавливаем пустой текст
                         restoreTextAfterJob(dialog, filterText, display, isSettingFakeText);
                     } else {
                         Global.invoke(dialog, "applyFilter");
@@ -162,23 +158,10 @@ public class OpenMdObjectHook implements IStartup {
                 }
             });
 
-            // При открытии
-            if (filterText.getText().trim().isEmpty() && !" ".equals(filterText.getText())) {
-                isSettingFakeText[0] = true;
-                try {
-                    filterText.setText(" ");
-                    Global.invoke(dialog, "applyFilter");
-                    Global.setField(dialog, "filter", smartFilter);
-                    setFieldExactClass(dialog, FilteredItemsSelectionDialog.class, "filter", smartFilter);
-                } finally {
-                    isSettingFakeText[0] = false;
-                }
-                restoreTextAfterJob(dialog, filterText, display, isSettingFakeText);
-            } else {
-                Global.invoke(dialog, "applyFilter");
-                Global.setField(dialog, "filter", smartFilter);
-                setFieldExactClass(dialog, FilteredItemsSelectionDialog.class, "filter", smartFilter);
-            }
+            // === ПРИ ОТКРЫТИИ: НЕ вызываем applyFilter(), только подменяем компоненты ===
+            // Стандартный EDT сам вызовет applyFilter при первом вводе или по таймеру
+            Global.setField(dialog, "filter", smartFilter);
+            setFieldExactClass(dialog, FilteredItemsSelectionDialog.class, "filter", smartFilter);
 
             shell.setData(PATCHED_KEY, Boolean.TRUE);
             Global.log("OpenMdObjectHook: patched successfully");
@@ -217,7 +200,6 @@ public class OpenMdObjectHook implements IStartup {
                 return;
             }
         }
-        // Job уже завершился или не найден — восстанавливаем сразу
         display.asyncExec(restore);
     }
 

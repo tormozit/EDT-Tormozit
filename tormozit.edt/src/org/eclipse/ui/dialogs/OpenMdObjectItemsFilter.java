@@ -36,20 +36,17 @@ public class OpenMdObjectItemsFilter extends FilteredItemsSelectionDialog.ItemsF
             return isHistoryElement(item);
         }
 
+        // === ИСКАТЬ ТОЛЬКО ПО ЧИСТОМУ ИМЕНИ (до " - ") ===
         String text = labelProvider.getText(item);
-        if (text != null && matcher.matches(text)) {
+        String objectName = text;
+        int dashIdx = text != null ? text.indexOf(" - ") : -1;
+        if (dashIdx >= 0) {
+            objectName = text.substring(0, dashIdx);
+        }
+
+        if (objectName != null && matcher.matches(objectName)) {
             return true;
         }
-        try {
-            String className = item.getClass().getName();
-            if (className.contains("ObjectDescriptionPair")) {
-                Object desc = Global.getField(item, "description");
-                if (desc != null && matchesQualifiedName(desc)) return true;
-
-                Object descRu = Global.getField(item, "descriptionRu");
-                if (descRu != null && matchesQualifiedName(descRu)) return true;
-            }
-        } catch (Exception ignored) {}
         return false;
     }
 
@@ -73,11 +70,6 @@ public class OpenMdObjectItemsFilter extends FilteredItemsSelectionDialog.ItemsF
         Object uriA = Global.invoke(descA, "getEObjectURI");
         Object uriB = Global.invoke(descB, "getEObjectURI");
         return uriA != null && uriA.equals(uriB);
-    }
-
-    private boolean matchesQualifiedName(Object description) throws Exception {
-        Object qName = Global.invoke(description, "getQualifiedName");
-        return qName != null && matcher.matches(qName.toString());
     }
 
     @Override
