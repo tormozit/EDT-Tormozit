@@ -9,11 +9,14 @@ import org.eclipse.jface.text.IRegion;
 import org.eclipse.jface.text.ITextSelection;
 import org.eclipse.jface.text.source.ISourceViewer;
 import org.eclipse.ui.IEditorInput;
+import org.eclipse.xtext.ui.editor.model.IXtextDocument;
 
 import com._1c.g5.v8.dt.bsl.ui.editor.BslXtextEditor;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.bsl.qw.utils.BslQueryWizardUtils;
+import com._1c.g5.v8.dt.bsl.qw.utils.BslQueryWizardUtils.QueryTextInfo;
 
 /**
  * Обработчик команды «Вложенный текст» в контекстном меню BSL-редактора.
@@ -52,7 +55,7 @@ public final class EditEmbeddedTextHandler
         if (viewer == null) 
             return false;
 
-        IDocument doc = viewer.getDocument();
+        IXtextDocument doc = (IXtextDocument)viewer.getDocument();
         if (doc == null) 
             return false;
 
@@ -76,59 +79,21 @@ public final class EditEmbeddedTextHandler
      */
     public static void editEmbeddedText(BslXtextEditor editor)
     {
-        // 1. Получаем viewer и документ
-        ISourceViewer viewer = editor.getInternalSourceViewer();
-        if (viewer == null) 
-            return;
-
-        IDocument doc = viewer.getDocument();
-        if (doc == null) 
-            return;
-
-        Object sel = viewer.getSelectionProvider().getSelection();
-        if (!(sel instanceof ITextSelection)) 
-            return;
-
-        int offset = ((ITextSelection) sel).getOffset();
-
-        // 2. Извлекаем строковый литерал под курсором
-        String embeddedText = extractStringLiteral(doc, offset);
-        if (embeddedText == null)
-        {
-            ToastNotification.show("Вложенный текст",
-                "Поместите курсор внутрь строкового литерала BSL");
-            return;
-        }
-
-        // 3. Определяем проект
         IDtProject dtProject = getProjectFromBslEditor(editor);
-        if (dtProject == null)
-        {
-            ToastNotification.show("Вложенный текст",
-                "Не удалось определить проект редактора");
-            return;
-        }
-
-        // 4. Получаем или инициируем сессию ИР (аналог DataCompositionSchemaEditorHook)
-        IRApplicationRegistry.IrSession irSession =
-            IRApplicationRegistry.getSession(dtProject);
+        IRSession irSession = IRApplication.getSession(dtProject);
         if (irSession == null || irSession.executor == null)
         {
-            // getSession() уже запустил подключение — сообщаем пользователю
             return;
         }
-
-        final String textToOpen = embeddedText;
-
-        // 5. Вызываем ОткрытьТекстЛкс() строго в потоке COM-сессии
+        String ref = GetRef.buildExtendedRef(editor, false);
+        irSession.getCodeEditor(editor);
         irSession.executor.submit(() ->
         {
             try
             {
+                String textToOpen = irSession.codeEditor.selectTextLiteral();
                 ComBridge.setProperty(irSession.root, "Visible", true); //$NON-NLS-1$
-                Object irClient = irSession.getModule("ирКлиент"); //$NON-NLS-1$
-                String ref = GetRef.getRefFromEditor(editor.getSite().getPage());
-                ComBridge.invoke(irClient, "ОткрытьТекстЛкс", textToOpen, ref, null, false, ref); //$NON-NLS-1$
+                irSession.openTextEditor(textToOpen, ref);
                 ToastNotification.show("Редактор ИР", "Измененный вложенный текст вернется в EDT, если не будет изменяться там во время редактирования в приложении ИР!");
             }
             catch (Exception e)
@@ -150,10 +115,11 @@ public final class EditEmbeddedTextHandler
      * <p>Поддерживает однострочные и многострочные (через {@code |}) литералы.
      * Возвращает {@code null}, если курсор не находится внутри литерала.
      */
-    static String extractStringLiteral(IDocument doc, int offset)
+    static String extractStringLiteral(IXtextDocument doc, int offset)
     {
         try
         {
+//            QueryTextInfo literal = BslQueryWizardUtils.getCurrentStringLiteral(doc.module, doc.getLineOfOffset(offset), 0, 0);
             int cursorLine = doc.getLineOfOffset(offset);
 
             // ── Шаг 1: найти строку с открывающей кавычкой ─────────────────

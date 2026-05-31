@@ -272,7 +272,15 @@ public final class ComBridge
         try { return (Boolean) methodVariantToBoolean.invoke(variant); }
         catch (Exception e) { return false; }
     }
-
+    
+    public static String toString(Object variant)
+    {
+        if (variant == null) return "";
+        if (variant instanceof String) return (String) variant;
+        try { return (String) methodVariantToString.invoke(variant); }
+        catch (Exception e) { return ""; }
+    }
+    
     public static long toLong(Object variant)
     {
         if (variant == null) return 0L;

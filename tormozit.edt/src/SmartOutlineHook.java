@@ -20,6 +20,7 @@ import org.eclipse.ui.IStartup;
 
 /**
  * Перехватчик открытия окна Quick Outline для замены стандартного поиска на "Умный".
+ * TODO подключить к окну "Открыть объект метаданных" com._1c.g5.v8.dt.md.ui.dialogs.OpenMdObjectSelectionDialog.class
  */
 public class SmartOutlineHook implements IStartup {
 

@@ -9,6 +9,7 @@
     <startup class="DataCompositionSchemaEditorHook"/> 
     <startup class="BSLEditorMenuHook"/> 
     <startup class="SmartOutlineHook"/> 
+    <startup class="OpenMdObjectHook"/>
     <startup class="MenuTooltipStatusLineHook"/>  
   </extension>
 

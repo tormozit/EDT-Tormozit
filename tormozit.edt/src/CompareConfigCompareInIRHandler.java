@@ -92,7 +92,7 @@ public class CompareConfigCompareInIRHandler extends AbstractHandler {
         Path pathOther = getPropertySideFile(editor, element, ComparisonSide.OTHER); // mxlx
         Path pathAncestor = getPropertySideFile(editor, element, ComparisonSide.COMMON_ANCESTOR); // mxlx
         IComparisonSession compSession = CompareConfigSelectionListener.getSession(editor);
-        IRApplicationRegistry.IrSession irSession = IRApplicationRegistry.getSession(compSession.getDataSource(ComparisonSide.MAIN).getDtProject());
+        IRSession irSession = IRApplication.getSession(compSession.getDataSource(ComparisonSide.MAIN).getDtProject());
         if (irSession == null || irSession.executor == null) {
             return;
         }

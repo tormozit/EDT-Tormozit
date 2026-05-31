@@ -291,13 +291,13 @@ public class ApplicationsViewHook implements IStartup
                 {
                     @Override public void update(ViewerCell cell)
                     {
-                        IRApplicationRegistry ir = IRApplicationRegistry.getInstance();
+                        IRApplication ir = IRApplication.getInstance();
                         renderSessionCell(cell, ir.getSessionStart(cell.getElement()),
                             ir.getSessionPlatformVersion(cell.getElement()));
                     }
                     @Override public String getToolTipText(Object element)
                     {
-                        return IRApplicationRegistry.getInstance().isConnected(getInfobase(element))
+                        return IRApplication.getInstance().isConnected(getInfobase(element))
                             ? "Нажмите для отключения приложения ИР" //$NON-NLS-1$
                             : "Приложение ИР не подключено"; //$NON-NLS-1$
                     }
@@ -308,7 +308,7 @@ public class ApplicationsViewHook implements IStartup
                 {
                     @Override public void update(ViewerCell cell)
                     {
-                        boolean auto = IRApplicationRegistry.getInstance()
+                        boolean auto = IRApplication.getInstance()
                             .isAutoConnect(cell.getElement());
                         cell.setText(auto ? "\u2611" : "\u2610"); //$NON-NLS-1$ //$NON-NLS-2$
                     }
@@ -327,14 +327,14 @@ public class ApplicationsViewHook implements IStartup
         return new EditingSupport(viewer)
         {
             @Override protected boolean canEdit(Object e)  { return true; }
-            @Override protected Object  getValue(Object e) { return IRApplicationRegistry.getInstance().isAutoConnect(e); }
+            @Override protected Object  getValue(Object e) { return IRApplication.getInstance().isAutoConnect(e); }
             @Override protected org.eclipse.jface.viewers.CellEditor getCellEditor(Object e)
             {
                 return new CheckboxCellEditor(((TreeViewer) viewer).getTree());
             }
             @Override protected void setValue(Object e, Object v)
             {
-                IRApplicationRegistry.getInstance().setAutoConnect(e, (Boolean) v);
+                IRApplication.getInstance().setAutoConnect(e, (Boolean) v);
                 viewer.update(e, null);
             }
         };
@@ -430,7 +430,7 @@ public class ApplicationsViewHook implements IStartup
         switch (col)
         {
             case SSH: return DesignerSessionPoolAccessor.getInstance().isConnected(ib);
-            case IR:  return IRApplicationRegistry.getInstance().isConnected(ib);
+            case IR:  return IRApplication.getInstance().isConnected(ib);
             default:  return false;
         }
     }
@@ -449,7 +449,7 @@ public class ApplicationsViewHook implements IStartup
             }
             case IR:
             {
-                IRApplicationRegistry ir = IRApplicationRegistry.getInstance();
+                IRApplication ir = IRApplication.getInstance();
                 InfobaseReference ib = getInfobase(element);
                 if (ir.isConnected(ib)) ir.disconnect(ib);
                 break;
@@ -496,7 +496,7 @@ public class ApplicationsViewHook implements IStartup
                             disconnectSsh(sel.toList(), viewer);
                             InfobaseReference infobase = ApplicationsViewHook.getInfobaseFromApplication(sel.getFirstElement());
                             IProject project = (IProject) Global.getField(sel.getFirstElement(), "project");
-                            String connectionString = IRApplicationRegistry.buildConnectionString(infobase, true);
+                            String connectionString = IRApplication.buildConnectionString(infobase, true);
                             RuntimeInstallation runtimeInstallation = ApplicationsViewHook.getRuntimeInstallation(project, infobase);
                             try
                             {
@@ -558,7 +558,7 @@ public class ApplicationsViewHook implements IStartup
             if (sel.isEmpty()) return;
 
             DesignerSessionPoolAccessor sshAcc = DesignerSessionPoolAccessor.getInstance();
-            IRApplicationRegistry irReg        = IRApplicationRegistry.getInstance();
+            IRApplication irReg        = IRApplication.getInstance();
             boolean anySsh = sel.toList().stream().anyMatch(el -> sshConnected(sshAcc, el));
             boolean anyIr  = sel.toList().stream().anyMatch(el -> irReg.isConnected(getInfobase(el)));
 
@@ -618,7 +618,7 @@ public class ApplicationsViewHook implements IStartup
                     if (sel.isEmpty()) return;
 
                     DesignerSessionPoolAccessor sshAcc = DesignerSessionPoolAccessor.getInstance();
-                    IRApplicationRegistry irReg        = IRApplicationRegistry.getInstance();
+                    IRApplication irReg        = IRApplication.getInstance();
                     boolean anySsh = sel.toList().stream().anyMatch(el -> sshConnected(sshAcc, el));
                     boolean anyIr  = sel.toList().stream().anyMatch(el -> irReg.isConnected(getInfobase(el)));
 
@@ -677,7 +677,7 @@ public class ApplicationsViewHook implements IStartup
 
     private void registerRedrawOnIrChange(ColumnViewer viewer)
     {
-        IRApplicationRegistry ir = IRApplicationRegistry.getInstance();
+        IRApplication ir = IRApplication.getInstance();
         Runnable r = () -> Display.getDefault().asyncExec(() -> safeRefresh(viewer));
         ir.addChangeListener(r);
         viewer.getControl().addDisposeListener(e -> ir.removeChangeListener(r));

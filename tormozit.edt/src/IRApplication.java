@@ -79,7 +79,7 @@ import com._1c.g5.wiring.ServiceSupplier;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
 
-public final class IRApplicationRegistry
+public final class IRApplication
 {
     // -----------------------------------------------------------------------
     // Синглтон
@@ -96,59 +96,23 @@ public final class IRApplicationRegistry
         return "ИР";
     }
     
-    private static final IRApplicationRegistry INSTANCE = new IRApplicationRegistry();
+    private static final IRApplication INSTANCE = new IRApplication();
     private static ServiceSupplier<IInfobaseAccessManager> infobaseAccessManagerSupplier = 
         ServiceAccess.supplier(IInfobaseAccessManager.class, Global.ourContext()); 
-    public static IRApplicationRegistry getInstance() { return INSTANCE; }
+    public static IRApplication getInstance() { return INSTANCE; }
     /** Аналог ПапкаПередачиФайлов — временный транспортный каталог для передачи файлов из приложения ИР в EDT */
     static public String transportFolder = ""; // оперативный единый для всех приложений EDT и ИР буферный файл, не учитываем пересечения //$NON-NLS-1$
     /** Аналог выхИспользуемоеИмяФайлаПортативногоИР — путь к .epf или .1cd портативного ИР */
     static public String usedPortableFileName = ""; //$NON-NLS-1$
 
-    private IRApplicationRegistry() {}
+    private IRApplication() {}
     public enum State { IDLE, CONNECTING, CONNECTED }
-    public final class IrSession
+    IRSession newSession(ExecutorService executor)
     {
-        public final State state;
-        public final LocalDateTime startTime;
-        public final long pid;
-        public final String platformVersion;
-        final Object root;
-        final Object processObj;
-        public String appTitle;
-        public IProject project;
-        public final ExecutorService executor; // Выделенный поток для всех операций с этой COM-сессией
-        /** Не null, если ИР подключён портативно (ирПортативный.epf), а не через расширение.
-         *  В этом случае getModule() использует эту форму вместо root (COM-приложения). */
-        public Object moduleRoot = null;
-        public InfobaseReference infobase;
-
-        IrSession(State state, LocalDateTime startTime, long pid, String platformVersion,
-                  Object root, Object processObj, String appTitle, IProject project, ExecutorService executor, InfobaseReference infobase)
-        {
-            this.state = state;
-            this.startTime = startTime;
-            this.pid = pid;
-            this.platformVersion = platformVersion;
-            this.root = root;
-            this.processObj = processObj;
-            this.appTitle = appTitle;
-            this.project = project;
-            this.executor = executor;
-            this.infobase = infobase;
-        }
-
-        public Object getModule(String name)
-        {
-            return ComBridge.getProperty(moduleRoot != null ? moduleRoot : root, name);
-        }
-    }
-    IrSession newSession(ExecutorService executor)
-    {
-        return new IrSession(State.CONNECTING, LocalDateTime.now(), 0, "", null, null, "", null, executor, null);
+        return new IRSession(State.CONNECTING, LocalDateTime.now(), 0, "", null, null, "", null, executor, null);
     }
     
-    static private final Map<String, IrSession>  sessions           = new ConcurrentHashMap<>();
+    static private final Map<String, IRSession>  sessions           = new ConcurrentHashMap<>();
     static private final List<Runnable>          changeListeners    = new CopyOnWriteArrayList<>();
     /** Ключи баз, к которым уже выполнялось хотя бы одно успешное подключение в этом сеансе EDT.
      *  Аналог ВосстановитьЗначениеСеансаКонфигуратора("ЛиПервоеПодключениеИР"). */
@@ -162,7 +126,7 @@ public final class IRApplicationRegistry
     public boolean isConnected(Object infobase)
     {
         String key = sessionKey((InfobaseReference)infobase);
-        IrSession s = sessions.get(key);
+        IRSession s = sessions.get(key);
         return s != null && s.state == State.CONNECTED;
     }
 
@@ -173,7 +137,7 @@ public final class IRApplicationRegistry
     {
         InfobaseReference infobase = ApplicationsViewHook.getInfobaseFromApplication(element);
         String key = sessionKey(infobase);
-        IrSession s = sessions.get(key);
+        IRSession s = sessions.get(key);
         return (s != null && s.state == State.CONNECTED) ? s.startTime : null;
     }
 
@@ -187,13 +151,13 @@ public final class IRApplicationRegistry
     {
         InfobaseReference infobase = ApplicationsViewHook.getInfobaseFromApplication(element);
         String key = sessionKey(infobase);
-        IrSession s = sessions.get(key);
+        IRSession s = sessions.get(key);
         return (s != null && s.state == State.CONNECTED) ? s.platformVersion : null;
     }
 
     public Object getAnyActiveDispatch()
     {
-        for (IrSession s : sessions.values())
+        for (IRSession s : sessions.values())
             if (s.state == State.CONNECTED && s.root != null)
                 return s.root;
         return null;
@@ -216,7 +180,7 @@ public final class IRApplicationRegistry
         InfobaseReference infobase = ApplicationsViewHook.getInfobaseFromApplication(element);
         String key = sessionKey(infobase);
 
-        IrSession existing = sessions.get(key);
+        IRSession existing = sessions.get(key);
         if (existing != null && existing.state == State.CONNECTED) {
             doDisconnect(key, existing);
         }
@@ -265,7 +229,7 @@ public final class IRApplicationRegistry
         {
             ToastNotification.show(toastTitle(), "Ошибка подключения: " + e.getMessage(), 10_000);
             String key = sessionKey(infobase);
-            IrSession s = sessions.remove(key);
+            IRSession s = sessions.remove(key);
             if (s != null && s.executor != null) {
                 s.executor.submit(() -> ComBridge.releaseComThread());
                 s.executor.shutdown();
@@ -377,24 +341,24 @@ public final class IRApplicationRegistry
         }
 
      // Находим временную сессию, чтобы забрать созданный executor
-        IrSession connectingSession = sessions.get(key);
+        IRSession connectingSession = sessions.get(key);
         ExecutorService currentExecutor = connectingSession != null ? connectingSession.executor : null;
 
-        IrSession irSession = new IrSession(
+        IRSession IRSession = new IRSession(
             State.CONNECTED, LocalDateTime.now(), pid, platformVersion,
             comDispatch, processObj, title, project, currentExecutor, infobase);
-        sessions.put(key, irSession);
+        sessions.put(key, IRSession);
         notifyListeners();
 
-        if (!resolveIrModules(comDispatch, irSession))
+        if (!resolveIrModules(comDispatch, IRSession))
         {
             // МодулиИР = Неопределено → выхПодключеноНоНетПодсистемы = Истина
             sessions.remove(key);
             notifyListeners();
             return;
         }
-        Object irCache  = irSession.getModule("ирКэш");  //$NON-NLS-1$
-        Object irClient = irSession.getModule("ирКлиент"); //$NON-NLS-1$
+        Object irCache  = IRSession.getModule("ирКэш");  //$NON-NLS-1$
+        Object irClient = IRSession.getModule("ирКлиент"); //$NON-NLS-1$
 
         long irSubsystemVersion = 0;
         try
@@ -510,7 +474,7 @@ public final class IRApplicationRegistry
                 ToastNotification.show(toastTitle(), //$NON-NLS-1$
                     "В файловой базе ИР включены регламентные задания. Рекомендую отключить.\n" //$NON-NLS-1$
                     + "Если в коде есть их включение, подавите его проверкой файловой базы.", 10_000, 
-                    () -> irSession.executor.submit(() -> {ComBridge.invoke(irClient, "ОткрытьКонсольЗаданийЛкс", true);})); //$NON-NLS-1$
+                    () -> IRSession.executor.submit(() -> {ComBridge.invoke(irClient, "ОткрытьКонсольЗаданийЛкс", true);})); //$NON-NLS-1$
         }
         String[] forbiddenHandlers = {
             "ОбработчикОжиданияПроверкиДинамическогоИзмененияИБ", // БСП 2.0 //$NON-NLS-1$
@@ -547,7 +511,7 @@ public final class IRApplicationRegistry
      * @throws RuntimeException если версия ИР обновилась и требуется переподключение
      *         (аналог {@code ВызватьИсключение "Требуется переподключение ИР"}).
      */
-    private boolean resolveIrModules(Object comDispatch, IrSession session)
+    private boolean resolveIrModules(Object comDispatch, IRSession session)
     {
         String updateFlag = ""; //$NON-NLS-1$
         Object result     = null;
@@ -671,7 +635,7 @@ public final class IRApplicationRegistry
         // ПапкаПортативногоИР = ТекущийКаталог() + "\" + ТурбоКонф.ПолучитьКаталогСкрипта() + "\ИР"
         // В Java: директория состояния плагина + "\ИР"
         String stateDir = Platform.getStateLocation(
-            FrameworkUtil.getBundle(IRApplicationRegistry.class)).toOSString();
+            FrameworkUtil.getBundle(IRApplication.class)).toOSString();
         String candidate = stateDir + "\\ИР"; //$NON-NLS-1$
         File dir = new File(candidate);
         if (!dir.exists()) dir.mkdirs();
@@ -743,14 +707,14 @@ public final class IRApplicationRegistry
     static public void disconnect(InfobaseReference infobase)
     {
         String key = sessionKey(infobase);
-        IrSession session = sessions.get(key);
+        IRSession session = sessions.get(key);
         if (session == null || session.state == State.IDLE) return;
         
         // Закрываем строго в том же потоке, где выполнялась работа
         session.executor.submit(() -> doDisconnect(key, session));
     }
 
-    static private void doDisconnect(String key, IrSession session)
+    static private void doDisconnect(String key, IRSession session)
     {
         boolean killed = false;
         if (session.root != null)
@@ -990,15 +954,15 @@ public final class IRApplicationRegistry
         DateTimeFormatter.ofPattern("HH:mm:ss"); //$NON-NLS-1$
 
     /**
-     * Берем любую активную сессию IRApplicationRegistry.IrSession от main проекта. Если ее нет то подключаем от основного приложения. Если его нет то подключаем от первого приложения.
+     * Берем любую активную сессию IRApplication.IRSession от main проекта. Если ее нет то подключаем от основного приложения. Если его нет то подключаем от первого приложения.
     */
-    public static IrSession getSession(IDtProject dtProject)
+    public static IRSession getSession(IDtProject dtProject)
     {
         // Сначала ищем любую подключенную сессию этого проекта, отдавая предпочтение основному приложению
-        for (Map.Entry<String, IrSession> entry : sessions.entrySet())
+        for (Map.Entry<String, IRSession> entry : sessions.entrySet())
         {
             String key = entry.getKey();
-            IrSession session = entry.getValue();
+            IRSession session = entry.getValue();
             if (session.project == dtProject.getWorkspaceProject() && checkAlive(session))
                 return session;
         }
@@ -1030,7 +994,7 @@ public final class IRApplicationRegistry
         return null;
     }
     
-    private static boolean checkAlive(IRApplicationRegistry.IrSession session)
+    private static boolean checkAlive(IRSession session)
     {
         Future<Boolean> future = session.executor.submit(() -> {
            try {
@@ -1057,12 +1021,12 @@ public final class IRApplicationRegistry
         }
     }
 
-    public static IrSession getSession(long pid)
+    public static IRSession getSession(long pid)
     {
-        for (Map.Entry<String, IrSession> entry : sessions.entrySet())
+        for (Map.Entry<String, IRSession> entry : sessions.entrySet())
         {
             String key = entry.getKey();
-            IrSession session = entry.getValue();
+            IRSession session = entry.getValue();
             if (session.pid == pid && checkAlive(session))
                 return session;
         }

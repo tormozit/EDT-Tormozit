@@ -3,7 +3,7 @@ import java.util.List;
 
 public class SmartMatcher {
     private final String[] fragments;
-    private final String fullPattern;
+    public final String fullPattern;
     private final boolean isEmpty;
 
     public SmartMatcher(String filterPattern) {

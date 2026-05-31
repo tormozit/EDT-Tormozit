@@ -9,6 +9,8 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import javax.swing.plaf.basic.BasicMenuUI;
+
 import org.eclipse.core.commands.AbstractHandler;
 import org.eclipse.core.commands.ExecutionEvent;
 import org.eclipse.core.commands.ExecutionException;
@@ -20,6 +22,8 @@ import org.eclipse.emf.ecore.EObject;
 import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.jface.text.BadLocationException;
 import org.eclipse.jface.text.IDocument;
+import org.eclipse.jface.text.ITextSelection;
+import org.eclipse.jface.text.source.ISourceViewer;
 import org.eclipse.jface.viewers.ISelection;
 import org.eclipse.swt.dnd.Clipboard;
 import org.eclipse.swt.dnd.TextTransfer;
@@ -42,14 +46,17 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com._1c.g5.v8.bm.core.BmPlatform;
 import com._1c.g5.v8.bm.core.IBmNamespace;
 import com._1c.g5.v8.bm.core.IBmPlatformTransaction;
+import com._1c.g5.v8.dt.bsl.ui.editor.BslXtextEditor;
 import com._1c.g5.v8.dt.bsl.ui.menu.BslHandlerUtil;
 import com._1c.g5.v8.dt.core.filesystem.IQualifiedNameFilePathConverter;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.md.ui.editor.base.DtGranularEditor;
 import com._1c.g5.v8.dt.md.ui.editor.base.DtGranularEditorEmbeddedEditorPage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.ui.editor.IDtGranularEditor;
 import com._1c.g5.v8.dt.ui.util.OpenHelper;
 
 /**
@@ -102,11 +109,12 @@ public class GoToDefinition extends AbstractHandler
     // РЕГУЛЯРНЫЕ ВЫРАЖЕНИЯ
     // =======================================================================
 
+    // Формат ссылки описан тут https://fastcode.im/Templates/8426
     private static final Pattern MODULE_LINE_REF = Pattern.compile(
         "\\{" +
         "(?:([А-ЯЁа-яёA-Za-z0-9]+)\\s)?" +
         "([А-ЯЁа-яёA-Za-z0-9._/\\\\]+)" +
-        "\\((\\d+)" +
+        "\\((\\d+)(?:,(\\d+))?" +
         "(?::([А-ЯЁа-яёA-Za-z_][А-ЯЁа-яёA-Za-z0-9_]*)," +
         "(\\d+))?" +
         "\\)\\}");
@@ -124,27 +132,14 @@ public class GoToDefinition extends AbstractHandler
     @Override
     public Object execute(ExecutionEvent event) throws ExecutionException
     {
-        IProject activeProject = Global.getActiveEditorProject(false);
-        if (activeProject == null)
-        {
-            ToastNotification.show("Переход к определению", "Отсутствует активный проект");
-            return null;
-        }
-        IV8ProjectManager projectManager =
-            (IV8ProjectManager) Global.getServiceByClass(IV8ProjectManager.class);
-        IV8Project v8Project = projectManager.getProject(activeProject);
-        if (v8Project == null)
-        {
-            ToastNotification.show("Переход к определению", "Активный проект " + activeProject.getName() + " не открыт");
-            return null;
-        }
+        IRSession session = null;
         File newFile = null, oldFile = null;
         String command = "";
-        String transportFolder = IRApplicationRegistry.transportFolder;
+        String transportFolder = IRApplication.transportFolder;
         Shell shell  = HandlerUtil.getActiveShell(event);
         IWorkbenchPage page = HandlerUtil.getActiveWorkbenchWindow(event).getActivePage();
         File commandFile = new File(transportFolder + "\\Команда.txt"); //$NON-NLS-1$
-
+        IProject project = null;
         if (commandFile.exists()
                 && System.currentTimeMillis() - commandFile.lastModified() < 5000)
         {
@@ -156,7 +151,8 @@ public class GoToDefinition extends AbstractHandler
                 JsonNode commandObject = mapper.readTree(command);
                 command = commandObject.get("Команда").asText(); //$NON-NLS-1$
                 long PID = commandObject.get("ИДПроцесса").asLong(); //$NON-NLS-1$
-                IRApplicationRegistry.getSession(PID);
+                session = IRApplication.getSession(PID);
+                project = session.project;
             }
             catch (IOException e) { e.printStackTrace(); }
             newFile = new File(transportFolder + "\\НовыйТекст.txt"); //$NON-NLS-1$
@@ -172,14 +168,30 @@ public class GoToDefinition extends AbstractHandler
             }
             command = command.strip();
         }
-        if (!jump(command, shell, page))
+        if (project==null)
+            project = Global.getActiveEditorProject(false);
+        if (project == null)
+        {
+            ToastNotification.show("Переход к определению", "Отсутствует активный проект");
+            return null;
+        }
+        IV8ProjectManager projectManager =
+            (IV8ProjectManager) Global.getServiceByClass(IV8ProjectManager.class);
+        IV8Project v8Project = projectManager.getProject(project);
+        if (v8Project == null)
+        {
+            ToastNotification.show("Переход к определению", "Проект " + project.getName() + " не открыт");
+            return null;
+        }
+        
+        if (!jump(command, shell, page, project))
         {
             ToastNotification.show("Перейти к определению",
-                "В проекте " + activeProject.getName() + " не найдена ссылка:\n" + truncate(command, 120), 5000);
+                "В проекте " + project.getName() + " не найдена ссылка:\n" + truncate(command, 120), 5000);
             return null;
         }
 
-        if (newFile != null && (command.contains("Макет.") || command.contains("Template."))) //$NON-NLS-1$ //$NON-NLS-2$
+        if (newFile != null && command.contains("Макет.")) //$NON-NLS-1$ //$NON-NLS-2$
         {
             DtGranularEditor templateEditor = (DtGranularEditor) page.getActiveEditor();
             DtGranularEditorEmbeddedEditorPage dcsEditor =
@@ -188,25 +200,42 @@ public class GoToDefinition extends AbstractHandler
             try
             {
                 String currentFilename = DataCompositionSchemaEditorHook.exportToFile(dcsEditor);
-                boolean allowImport = Global.readTextFromFile(new File(currentFilename))
-                    .compareTo(Global.readTextFromFile(oldFile)) == 0;
+                boolean allowImport = Global.readTextFromFile(new File(currentFilename)).compareTo(Global.readTextFromFile(oldFile)) == 0;
                 if (allowImport)
                     DataCompositionSchemaEditorHook.importFromFile(dcsEditor, newFile);
                 else
-                    ToastNotification.show(command,
-                        "Объект был изменён в EDT после начала редактирования в ИР. "
-                        + "Загрузка не выполнена. Временный файл: " + newFile, 10000);
+                    notifyDenyReplaceObject(newFile, command);
             }
             catch (Exception e) { e.printStackTrace(); }
+        }
+        if (newFile != null && (command.contains("Модуль(") || command.endsWith("Форма("))) {
+            session.getCodeEditor(GetRef.getActiveBslEditor(page.getActivePart()));
+            final IRSession finalSession = session;
+            try {
+                String currentTextLiteral = session.executeOnComThread(() ->
+                    finalSession.codeEditor.selectTextLiteral()
+                );
+                boolean allowImport = currentTextLiteral.compareTo(Global.readTextFromFile(oldFile)) == 0;
+                if (allowImport) {
+                    return null;
+                } else {
+                    notifyDenyReplaceObject(newFile, command);
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
         }
         return null;
     }
 
-    // =======================================================================
-    // ГЛАВНЫЙ ДИСПЕТЧЕР
-    // =======================================================================
+    public void notifyDenyReplaceObject(File newFile, String command)
+    {
+        ToastNotification.show(command,
+            "Объект был изменён в EDT после начала редактирования в ИР. "
+            + "Загрузка не выполнена. Временный файл: " + newFile, 10000);
+    }
 
-    public static boolean jump(String raw, Shell shell, IWorkbenchPage page)
+    public static boolean jump(String raw, Shell shell, IWorkbenchPage page, IProject project)
     {
         if (raw == null) 
             return false;
@@ -220,16 +249,16 @@ public class GoToDefinition extends AbstractHandler
         }
 
         if (ref.contains("{") && ref.contains("}")) //$NON-NLS-1$ //$NON-NLS-2$
-            return handleModuleLineRefs(ref, shell, page);
+            return handleModuleLineRefs(ref, shell, page, project);
 
         Matcher gitM = GIT_FILE_REF.matcher(ref);
         if (gitM.matches())
-            return openGitFileRef(gitM.group(1), parseInt(gitM.group(2)), page, shell);
+            return openGitFileRef(gitM.group(1), parseInt(gitM.group(2)), page, shell, project);
 
         if (ref.startsWith("БД.")) ref = ref.substring(3); //$NON-NLS-1$
 
         if (ref.startsWith("ПакетXDTO.")) //$NON-NLS-1$
-            return openXdtoRef(ref, shell, page);
+            return openXdtoRef(ref, shell, page, project);
 
         if (ref.contains(",")) //$NON-NLS-1$
         {
@@ -237,23 +266,23 @@ public class GoToDefinition extends AbstractHandler
             if (!names.isEmpty())
             {
                 if (names.size() == 1) 
-                    return openByFullName(names.get(0), shell, page);
-                return pickAndOpen(names, shell, page);
+                    return openByFullName(names.get(0), shell, page, project);
+                return pickAndOpen(names, shell, page, project);
             }
         }
 
         String stripped = stripTypeSuffix(ref);
         if (stripped != null) 
-            return openByFullName(stripped, shell, page);
+            return openByFullName(stripped, shell, page, project);
 
-        return openByFullName(ref, shell, page);
+        return openByFullName(ref, shell, page, project);
     }
 
     // =======================================================================
     // ССЫЛКИ СТРОК МОДУЛЕЙ
     // =======================================================================
 
-    private static boolean handleModuleLineRefs(String text, Shell shell, IWorkbenchPage page)
+    private static boolean handleModuleLineRefs(String text, Shell shell, IWorkbenchPage page, IProject project)
     {
         List<ModuleLineRef> refs = parseAllModuleLineRefs(text);
         if (refs.isEmpty()) 
@@ -276,7 +305,7 @@ public class GoToDefinition extends AbstractHandler
                 return false;
             chosen = refs.get(idx);
         }
-        return openModuleLineRef(chosen, page, shell);
+        return openModuleLineRef(chosen, page, shell, project);
     }
 
     /**
@@ -291,12 +320,12 @@ public class GoToDefinition extends AbstractHandler
      *   <li>Fallback: прямое открытие BSL-файла через {@link IDE#openEditor}.</li>
      * </ol>
      */
-    private static boolean openModuleLineRef(ModuleLineRef r, IWorkbenchPage page, Shell shell)
+    private static boolean openModuleLineRef(ModuleLineRef r, IWorkbenchPage page, Shell shell, IProject project)
     {
         
         if (r.file != null)
-            return openGitFileRef(r.file, r.line, page, shell);
-        if (openModuleRefViaUri(r, page)) 
+            return openGitFileRef(r.file, r.line, page, shell, project);
+        if (openModuleRefViaUri(r, page, project)) 
             return true;
         return false;
 //        // Fallback: файловый путь без активации страницы
@@ -331,7 +360,7 @@ public class GoToDefinition extends AbstractHandler
      *   <li><b>Стандартная ссылка</b>: переходим к абсолютному номеру строки {@code r.line}.</li>
      * </ul>
      */
-    private static boolean openModuleRefViaUri(ModuleLineRef r, IWorkbenchPage page)
+    private static boolean openModuleRefViaUri(ModuleLineRef r, IWorkbenchPage page, IProject project)
     {
         if (r.modulePath == null) 
             return false;
@@ -345,7 +374,7 @@ public class GoToDefinition extends AbstractHandler
         }
 
         // 2. Находим файл в воркспейсе
-        IFile file = findFileInWorkspace(bslPath, page);
+        IFile file = findFileInWorkspace(bslPath, page, project);
         if (file == null)
         {
             Global.log("GoToDefinition: BSL-файл не найден: " + bslPath); //$NON-NLS-1$
@@ -380,7 +409,7 @@ public class GoToDefinition extends AbstractHandler
         try
         {
             int offset = document.getLineOffset(Math.max(0, targetLine0));
-            xtextEditor.selectAndReveal(offset, 0);
+            xtextEditor.selectAndReveal(offset + r.column, 0);
             return true; 
         }
         catch (BadLocationException e)
@@ -441,11 +470,11 @@ public class GoToDefinition extends AbstractHandler
     // GIT-ССЫЛКА
     // =======================================================================
 
-    private static boolean openGitFileRef(String filePath, int line, IWorkbenchPage page, Shell shell)
+    private static boolean openGitFileRef(String filePath, int line, IWorkbenchPage page, Shell shell, IProject project)
     {
-        IFile file = findFileInWorkspace(filePath, page);
+        IFile file = findFileInWorkspace(filePath, page, project);
         if (file == null && !filePath.startsWith("src/")) //$NON-NLS-1$
-            file = findFileInWorkspace("src/" + filePath, page); //$NON-NLS-1$
+            file = findFileInWorkspace("src/" + filePath, page, project); //$NON-NLS-1$
         if (file == null)
         {
             Global.log("GoToDefinition: файл не найден: " + filePath); //$NON-NLS-1$
@@ -458,19 +487,19 @@ public class GoToDefinition extends AbstractHandler
     // XDTO
     // =======================================================================
 
-    private static boolean openXdtoRef(String ref, Shell shell, IWorkbenchPage page)
+    private static boolean openXdtoRef(String ref, Shell shell, IWorkbenchPage page, IProject project)
     {
         String[] parts = ref.split("\\.", 3); //$NON-NLS-1$
         if (parts.length < 2) 
             return false;
-        return openMdObjectByFullName("ПакетXDTO." + parts[1], shell, page); //$NON-NLS-1$
+        return openMdObjectByFullName("ПакетXDTO." + parts[1], shell, page, project); //$NON-NLS-1$
     }
 
     // =======================================================================
     // ПОЛНОЕ ИМЯ МД
     // =======================================================================
 
-    public static boolean openByFullName(String fullName, Shell shell, IWorkbenchPage page)
+    public static boolean openByFullName(String fullName, Shell shell, IWorkbenchPage page, IProject project)
     {
         if (fullName == null || fullName.isBlank()) 
             return false;
@@ -487,16 +516,16 @@ public class GoToDefinition extends AbstractHandler
         {
             String bslPath = moduleToBslPath(fullName, extension);
             if (bslPath != null)
-                return openBslFileAt(bslPath, 0, page, shell);
+                return openBslFileAt(bslPath, 0, page, shell, project);
         }
-        return openMdObjectByFullName(fullName, shell, page);
+        return openMdObjectByFullName(fullName, shell, page, project);
     }
 
     // =======================================================================
     // EDT: ОТКРЫТИЕ ОБЪЕКТА МД
     // =======================================================================
 
-    private static boolean openMdObjectByFullName(String fullName, Shell shell, IWorkbenchPage page)
+    private static boolean openMdObjectByFullName(String fullName, Shell shell, IWorkbenchPage page, IProject project)
     {
         IV8ProjectManager projectManager =
             (IV8ProjectManager) Global.getServiceByClass(IV8ProjectManager.class);
@@ -522,7 +551,7 @@ public class GoToDefinition extends AbstractHandler
             Global.log("GoToDefinition: не могу построить .mdo-путь для: " + fullName); //$NON-NLS-1$
             return false;
         }
-        IFile mdoFile = findFileInWorkspace(mdoPath, page);
+        IFile mdoFile = findFileInWorkspace(mdoPath, page, project);
         if (mdoFile == null)
         {
             Global.log("GoToDefinition: .mdo не найден: " + mdoPath); //$NON-NLS-1$
@@ -584,9 +613,9 @@ public class GoToDefinition extends AbstractHandler
     // ФАЙЛОВЫЕ ОПЕРАЦИИ
     // =======================================================================
 
-    private static boolean openBslFileAt(String bslPath, int line, IWorkbenchPage page, Shell shell)
+    private static boolean openBslFileAt(String bslPath, int line, IWorkbenchPage page, Shell shell, IProject project)
     {
-        IFile file = findFileInWorkspace(bslPath, page);
+        IFile file = findFileInWorkspace(bslPath, page, project);
         if (file == null)
         {
             Global.log("GoToDefinition: BSL не найден: " + bslPath);
@@ -624,12 +653,15 @@ public class GoToDefinition extends AbstractHandler
         catch (BadLocationException ignored) {}
     }
 
-    private static IFile findFileInWorkspace(String relPath, IWorkbenchPage page)
+    private static IFile findFileInWorkspace(String relPath, IWorkbenchPage page, IProject project)
     {
         String path = relPath.replace('\\', '/');
-        IProject active = Global.getActiveProject(page, true);
-        if (active != null) {
-            IFile f = findInProject(active, path);
+        if (project==null)
+        {
+            project = Global.getActiveProject(page, true);
+        }
+        if (project != null) {
+            IFile f = findInProject(project, path);
             if (f != null)
                 return f; 
         }
@@ -760,7 +792,7 @@ public class GoToDefinition extends AbstractHandler
         return result;
     }
 
-    private static boolean pickAndOpen(List<String> names, Shell shell, IWorkbenchPage page)
+    private static boolean pickAndOpen(List<String> names, Shell shell, IWorkbenchPage page, IProject project)
     {
         MessageDialog dlg = new MessageDialog(shell,
             "Выберите объект", null, //$NON-NLS-1$
@@ -769,7 +801,7 @@ public class GoToDefinition extends AbstractHandler
         int idx = dlg.open();
         if (idx < 0 || idx >= names.size()) 
             return false;
-        return openByFullName(names.get(idx), shell, page);
+        return openByFullName(names.get(idx), shell, page, project);
     }
 
     private static boolean isModuleSuffixPath(String name)
@@ -803,8 +835,9 @@ public class GoToDefinition extends AbstractHandler
             r.extension = m.group(1);
             r.modulePath = m.group(2);
             r.line = parseInt(m.group(3));
-            r.method = m.group(4);
-            r.offset = parseInt(m.group(5));
+            r.column = parseInt(m.group(4));
+            r.method = m.group(5);
+            r.offset = parseInt(m.group(6));
             if (r.modulePath.contains("/") || r.modulePath.contains("\\")) //$NON-NLS-1$ //$NON-NLS-2$
             {
                 r.file = r.modulePath;
@@ -821,13 +854,14 @@ public class GoToDefinition extends AbstractHandler
         String modulePath;
         String file;
         int line;
+        int column;
         String method;
         int offset;
 
         String displayLabel()
         {
             String base = modulePath != null ? modulePath : file;
-            String s = (base != null ? base : "") + " (" + line + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            String s = (base != null ? base : "") + " (" + line + "," + column + ")";
             if (method != null)
                 s += " : " + method; //$NON-NLS-1$
             if (extension != null)
