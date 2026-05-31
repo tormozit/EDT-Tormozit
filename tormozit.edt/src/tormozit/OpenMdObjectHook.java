@@ -158,10 +158,30 @@ public class OpenMdObjectHook implements IStartup {
                 }
             });
 
-            // === ПРИ ОТКРЫТИИ: НЕ вызываем applyFilter(), только подменяем компоненты ===
-            // Стандартный EDT сам вызовет applyFilter при первом вводе или по таймеру
+            // === ПРИ ОТКРЫТИИ ===
+            // Подменяем компоненты, но НЕ вызываем applyFilter — пусть EDT сам запустит
+            // фильтрацию когда будет готово. Но если фильтр уже пустой, форсируем показ истории.
             Global.setField(dialog, "filter", smartFilter);
             setFieldExactClass(dialog, FilteredItemsSelectionDialog.class, "filter", smartFilter);
+
+            if (filterText.getText().trim().isEmpty()) {
+                // Форсируем показ истории через фейковый пробел
+                display.timerExec(300, () -> {
+                    if (filterText.isDisposed()) return;
+                    if (!filterText.getText().trim().isEmpty()) return; // пользователь уже что-то ввел
+
+                    isSettingFakeText[0] = true;
+                    try {
+                        filterText.setText(" ");
+                        Global.invoke(dialog, "applyFilter");
+                        Global.setField(dialog, "filter", smartFilter);
+                        setFieldExactClass(dialog, FilteredItemsSelectionDialog.class, "filter", smartFilter);
+                    } finally {
+                        isSettingFakeText[0] = false;
+                    }
+                    restoreTextAfterJob(dialog, filterText, display, isSettingFakeText);
+                });
+            }
 
             shell.setData(PATCHED_KEY, Boolean.TRUE);
             Global.log("OpenMdObjectHook: patched successfully");

@@ -133,8 +133,10 @@ public class SmartMatcher {
             int wordsDiff = lastMatchedWordIdx - firstMatchedWordIdx + 1;
             boolean noGaps = (wordsDiff == fragments.length);
             if (firstMatchedWordIdx == 0) {
-                if (noGaps) return 3;      // с первого слова, без пропусков
-                else return 2;             // с первого слова, с пропусками
+                if (noGaps) 
+                    return 3;      // с первого слова, без пропусков
+                else 
+                    return 2;             // с первого слова, с пропусками
             } else {
                 return 1;                  // не с первого слова
             }

@@ -36,18 +36,18 @@ public class OpenMdObjectItemsFilter extends FilteredItemsSelectionDialog.ItemsF
             return isHistoryElement(item);
         }
 
-        // === ИСКАТЬ ТОЛЬКО ПО ЧИСТОМУ ИМЕНИ (до " - ") ===
-        String text = labelProvider.getText(item);
-        String objectName = text;
-        int dashIdx = text != null ? text.indexOf(" - ") : -1;
-        if (dashIdx >= 0) {
-            objectName = text.substring(0, dashIdx);
-        }
+        String objectName = getObjectName(labelProvider.getText(item));
+        return matcher.matches(objectName);
+    }
 
-        if (objectName != null && matcher.matches(objectName)) {
-            return true;
-        }
-        return false;
+    /**
+     * Извлекает чистое имя объекта из полного текста (до " - ").
+     * Единая точка правды для фильтрации и подсветки.
+     */
+    public static String getObjectName(String fullText) {
+        if (fullText == null) return "";
+        int dashIdx = fullText.indexOf(" - ");
+        return dashIdx >= 0 ? fullText.substring(0, dashIdx) : fullText;
     }
 
     private boolean isHistoryElement(Object item) {

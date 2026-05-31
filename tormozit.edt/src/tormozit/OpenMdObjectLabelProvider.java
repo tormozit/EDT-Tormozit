@@ -72,8 +72,14 @@ public class OpenMdObjectLabelProvider extends LabelProvider implements IStyledL
         }
 
         String plainText = styledString.getString();
-        for (SmartMatcher.HighlightRange range : matcher.getHighlightRanges(plainText)) {
-            styledString.setStyle(range.offset, range.length, matchStyler);
+        // === ПОДСВЕТКА ТОЛЬКО В ЧИСТОМ ИМЕНИ ===
+        String objectName = org.eclipse.ui.dialogs.OpenMdObjectItemsFilter.getObjectName(plainText);
+        int nameOffset = plainText.indexOf(objectName);
+        if (nameOffset < 0) nameOffset = 0;
+
+        for (SmartMatcher.HighlightRange range : matcher.getHighlightRanges(objectName)) {
+            // Смещаем офсеты относительно начала полного текста
+            styledString.setStyle(nameOffset + range.offset, range.length, matchStyler);
         }
         return styledString;
     }

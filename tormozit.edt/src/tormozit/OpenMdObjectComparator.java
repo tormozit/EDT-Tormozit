@@ -27,14 +27,18 @@ public class OpenMdObjectComparator implements Comparator<Object> {
         }
 
         int p1 = premiumCache.computeIfAbsent(o1,
-                k -> matcher.computeNamePremium(labelProvider.getText(k)));
+                k -> matcher.computeNamePremium(getObjectName(labelProvider.getText(k))));
         int p2 = premiumCache.computeIfAbsent(o2,
-                k -> matcher.computeNamePremium(labelProvider.getText(k)));
+                k -> matcher.computeNamePremium(getObjectName(labelProvider.getText(k))));
 
         if (p1 != p2) {
             return Integer.compare(p2, p1);
         }
         return compareAlphabetically(o1, o2);
+    }
+
+    private String getObjectName(String fullText) {
+        return org.eclipse.ui.dialogs.OpenMdObjectItemsFilter.getObjectName(fullText);
     }
 
     private int compareAlphabetically(Object o1, Object o2) {
