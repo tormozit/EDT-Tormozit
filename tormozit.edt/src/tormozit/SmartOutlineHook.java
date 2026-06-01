@@ -27,8 +27,8 @@ public class SmartOutlineHook implements IStartup {
 
     @Override
     public void earlyStartup() {
-        Activator.getDefault().getInjector().injectMembers(this);
         Display.getDefault().asyncExec(() -> {
+//          Activator.getDefault().getInjector().injectMembers(this); // Слишком рано?
             install(Display.getDefault());
         });
     }

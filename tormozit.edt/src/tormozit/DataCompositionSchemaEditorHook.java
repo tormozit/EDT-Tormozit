@@ -1,78 +1,54 @@
 package tormozit;
-import com.google.inject.Inject;
-
-import java.io.OutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.nio.file.FileSystem;
-import java.nio.file.Path;
+import java.io.OutputStream;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 import javax.xml.stream.XMLStreamException;
 
-import org.eclipse.core.resources.IProject;
-import org.eclipse.emf.common.util.URI;
-import org.eclipse.jface.action.Action;
-import org.eclipse.jface.action.IToolBarManager;
+import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.jface.dialogs.IPageChangedListener;
 import org.eclipse.jface.dialogs.PageChangedEvent;
 import org.eclipse.swt.SWT;
-import org.eclipse.swt.custom.CTabFolder;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.ToolBar;
 import org.eclipse.swt.widgets.ToolItem;
 import org.eclipse.ui.IEditorPart;
-import org.eclipse.ui.IEditorSite;
 import org.eclipse.ui.IPartListener2;
 import org.eclipse.ui.IStartup;
-import org.eclipse.ui.IWorkbenchPage;
 import org.eclipse.ui.IWorkbenchPartReference;
 import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.PlatformUI;
-import org.eclipse.ui.forms.IManagedForm;
-import org.eclipse.ui.forms.ManagedForm;
-import org.eclipse.ui.forms.editor.FormPage;
-import org.eclipse.ui.forms.widgets.FormToolkit;
-import org.eclipse.ui.forms.widgets.ScrolledForm;
-import org.eclipse.xtext.resource.IResourceServiceProvider;
-import org.osgi.framework.BundleContext;
-import org.osgi.framework.ServiceReference;
 
-import com._1c.g5.v8.dt.compare.model.ComparisonSide;
-import com._1c.g5.v8.dt.core.filesystem.IQualifiedNameFilePathConverter;
+import com._1c.g5.v8.bm.core.IBmTransaction;
+import com._1c.g5.v8.bm.integration.AbstractBmTask;
+import com._1c.g5.v8.bm.integration.IBmEditingContext;
+import com._1c.g5.v8.dt.common.PreferenceUtils;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IResourceLookup;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.dcs.ui.DataCompositionSchemaEditor;
-import com._1c.g5.v8.dt.dcs.ui.EditorPageBase;
+import com._1c.g5.v8.dt.dcs.ui.DcsEvent;
+import com._1c.g5.v8.dt.dcs.ui.DcsEvent.DcsEventType;
 import com._1c.g5.v8.dt.dcs.ui.datasets.DataSets;
 import com._1c.g5.v8.dt.dcs.ui.datasets.DataSetsLoadHandler;
+import com._1c.g5.v8.dt.dcs.util.DcsV8Serializer;
+import com._1c.g5.v8.dt.export.ExportException;
 import com._1c.g5.v8.dt.md.ui.editor.base.DtGranularEditor;
 import com._1c.g5.v8.dt.md.ui.editor.base.DtGranularEditorEmbeddedEditorPage;
 import com._1c.g5.v8.dt.metadata.mdclass.CompatibilityMode;
-import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
-import com._1c.g5.v8.dt.dcs.util.DcsV8Serializer;
-import com._1c.g5.v8.dt.export.ExportException;
-import com._1c.g5.v8.dt.xml.ChangeAnyRefTypeOutputStream;
 import com._1c.g5.v8.dt.platform.version.IRuntimeVersionSupport;
 import com._1c.g5.v8.dt.platform.version.Version;
-import com._1c.g5.v8.dt.common.PreferenceUtils;
-import com._1c.g5.v8.bm.core.IBmTransaction;
-import com._1c.g5.v8.bm.integration.AbstractBmTask;
-import com._1c.g5.v8.bm.integration.IBmEditingContext;
-import com._1c.g5.v8.dt.dcs.ui.DcsEvent;
-import com._1c.g5.v8.dt.dcs.ui.DcsEvent.DcsEventType;
-import org.eclipse.core.runtime.IProgressMonitor;
+import com._1c.g5.v8.dt.xml.ChangeAnyRefTypeOutputStream;
+import com.google.inject.Inject;
 
 public class DataCompositionSchemaEditorHook implements IStartup
 {
@@ -89,9 +65,9 @@ public class DataCompositionSchemaEditorHook implements IStartup
     @Override
     public void earlyStartup()
     {
-        Activator.getDefault().getInjector().injectMembers(this);
         Display.getDefault().asyncExec(() ->
         {
+//          Activator.getDefault().getInjector().injectMembers(this); // Слишком рано?
             for (IWorkbenchWindow w : PlatformUI.getWorkbench().getWorkbenchWindows())
                 hookWindow(w);
 

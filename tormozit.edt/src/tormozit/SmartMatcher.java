@@ -113,47 +113,53 @@ public class SmartMatcher {
                 wordBoundaries.add(i);
             }
         }
-        int firstMatchedWordIdx = -1;
-        int lastMatchedWordIdx = -1;
         int matchedWordsCount = 0;
-        for (String frag : fragments) {  // проходим по всем фрагментам запроса
+        for (String frag : fragments) {
             for (int w = 0; w < wordBoundaries.size(); w++) {
                 int boundaryPos = wordBoundaries.get(w);
                 if (lowerText.startsWith(frag, boundaryPos)) {
-                    if (firstMatchedWordIdx == -1) {
-                        firstMatchedWordIdx = w;
-                    }
-                    lastMatchedWordIdx = w;
                     matchedWordsCount++;
                     break;
                 }
             }
         }
         if (matchedWordsCount == fragments.length) {
-            // БазоваяПремия: с первого слова без пропусков=3, с первого с пропусками=2, не с первого=1
-            int wordsDiff = lastMatchedWordIdx - firstMatchedWordIdx + 1;
+            // Находим индекс слова для каждого фрагмента фильтра
+            int[] matchedWordIdxs = new int[fragments.length];
+            for (int fi = 0; fi < fragments.length; fi++) {
+                matchedWordIdxs[fi] = -1;
+                for (int w = 0; w < wordBoundaries.size(); w++) {
+                    if (lowerText.startsWith(fragments[fi], wordBoundaries.get(w))) {
+                        matchedWordIdxs[fi] = w;
+                        break;
+                    }
+                }
+            }
+
+            // Мин/макс индексы совпавших слов (независимо от порядка фрагментов)
+            int minWordIdx = matchedWordIdxs[0];
+            int maxWordIdx = matchedWordIdxs[0];
+            for (int idx : matchedWordIdxs) {
+                if (idx < minWordIdx) minWordIdx = idx;
+                if (idx > maxWordIdx) maxWordIdx = idx;
+            }
+
+            // БазоваяПремия: определяем по минимальному индексу совпавшего слова
+            int wordsDiff = maxWordIdx - minWordIdx + 1;
             boolean noGaps = (wordsDiff == fragments.length);
             int basePremium;
-            if (firstMatchedWordIdx == 0) {
+            if (minWordIdx == 0) {
                 basePremium = noGaps ? 3 : 2;
             } else {
                 basePremium = 1;
             }
 
-            // Проверяем порядок: каждый следующий фрагмент должен совпадать со словом
-            // с бо́льшим индексом, чем предыдущий
+            // Порядок сохранён, если индексы совпавших слов идут в том же порядке, что фрагменты в фильтре
             boolean orderKept = true;
-            int prevWordIdx = -1;
-            for (String frag : fragments) {
-                for (int w = 0; w < wordBoundaries.size(); w++) {
-                    int boundaryPos = wordBoundaries.get(w);
-                    if (lowerText.startsWith(frag, boundaryPos)) {
-                        if (w <= prevWordIdx) {
-                            orderKept = false;
-                        }
-                        prevWordIdx = w;
-                        break;
-                    }
+            for (int fi = 1; fi < fragments.length; fi++) {
+                if (matchedWordIdxs[fi] <= matchedWordIdxs[fi - 1]) {
+                    orderKept = false;
+                    break;
                 }
             }
 
