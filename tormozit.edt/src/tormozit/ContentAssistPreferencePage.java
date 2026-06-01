@@ -12,13 +12,13 @@ import org.eclipse.ui.IWorkbenchPreferencePage;
  *
  * <p>Отображает только «Включено» и «Задержка».
  * Поле «Символы» скрыто — его значение захардкожено в
- * {@link ContentAssistAutoOpenSettings#CHARSET_VALUE}.
+ * {@link ContentAssistSettings#CHARSET_VALUE}.
  */
-public class ContentAssistAutoOpenPreferencePage
+public class ContentAssistPreferencePage
         extends FieldEditorPreferencePage
         implements IWorkbenchPreferencePage
 {
-    public ContentAssistAutoOpenPreferencePage()
+    public ContentAssistPreferencePage()
     {
         super(GRID);
     }
@@ -27,7 +27,7 @@ public class ContentAssistAutoOpenPreferencePage
     public void init(IWorkbench workbench)
     {
         setPreferenceStore(
-            ContentAssistAutoOpenSettings.getInstance().getPreferenceStore());
+            ContentAssistSettings.getInstance().getPreferenceStore());
         setDescription("Настройка автоматического открытия списка подсказок " +
             "в BSL-редакторе при вводе символов.");
     }
@@ -36,18 +36,18 @@ public class ContentAssistAutoOpenPreferencePage
     protected void createFieldEditors()
     {
         addField(new BooleanFieldEditor(
-            ContentAssistAutoOpenSettings.PREF_ENABLED,
+            ContentAssistSettings.PREF_ENABLED,
             "Включено",
             getFieldEditorParent()));
 
         IntegerFieldEditor timeoutField = new IntegerFieldEditor(
-            ContentAssistAutoOpenSettings.PREF_TIMEOUT,
+            ContentAssistSettings.PREF_TIMEOUT,
             "Задержка (мс)",
             getFieldEditorParent());
         timeoutField.setValidRange(0, 10_000);
         addField(timeoutField);
 
         // Поле «Символы» намеренно не добавляется:
-        // значение задано константой ContentAssistAutoOpenSettings.CHARSET_VALUE
+        // значение задано константой ContentAssistSettings.CHARSET_VALUE
     }
 }

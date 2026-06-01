@@ -14,6 +14,7 @@ import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -767,7 +768,11 @@ public final class IRApplication
                 }
                 if (!Strings.isNullOrEmpty(access.userName()))
                 {
-                    result += ";Usr=\"" + access.userName() + "\";Pwd=\"" + access.password() + "\"";
+                    result += "Usr=\"" + access.userName() + "\";";
+                }
+                if (!Strings.isNullOrEmpty(access.password()))
+                {
+                    result += "Pwd=\"" + access.password() + "\";";
                 }
             }
             return result;
@@ -978,17 +983,25 @@ public final class IRApplication
         { return null; }
         IApplicationManager appManager = ctx.getService(ctx.getServiceReference(IApplicationManager.class));
         IInfobaseApplication application = null;
-//      application = appManager.getDefaultApplication(dtProject.getWorkspaceProject());
-        List <IApplication> apps = appManager.getApplications(dtProject.getWorkspaceProject());
-        for (IApplication elem : apps)
+        Optional<IApplication> defaultAppOptional = appManager.getDefaultApplication(dtProject.getWorkspaceProject());
+        if (defaultAppOptional.isPresent() && defaultAppOptional.get() instanceof IInfobaseApplication)
         {
-            if (elem instanceof IInfobaseApplication)
-                if (Global.invoke(elem, "getProject") == dtProject.getWorkspaceProject())
-                {
-                    application = (IInfobaseApplication) elem;
-                }
+            application = (IInfobaseApplication) defaultAppOptional.get();
         }
         if (application==null)
+        {
+            List<IApplication> apps = appManager.getApplications(dtProject.getWorkspaceProject());
+            for (IApplication elem : apps)
+            {
+                if (elem instanceof IInfobaseApplication)
+                    if (Global.invoke(elem, "getProject") == dtProject.getWorkspaceProject())
+                    {
+                        application = (IInfobaseApplication)elem;
+                        break;
+                    }
+            } 
+        }
+        if (application == null)
             return null;            
         getInstance().connectInfobaseApplication(application);
         ToastNotification.show(toastTitle(), "Ожидайте подключения приложения ИР, затем повторите команду");

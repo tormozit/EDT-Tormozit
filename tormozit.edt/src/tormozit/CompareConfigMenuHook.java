@@ -78,7 +78,7 @@ public class CompareConfigMenuHook implements IStartup
                 @Override public void windowClosed(IWorkbenchWindow w)      {}
             });
 
-            ContentAssistAutoOpenManager mgr = ContentAssistAutoOpenManager.getInstance();
+            ContentAssistManager mgr = ContentAssistManager.getInstance();
             if (mgr != null) mgr.start();
         });
     }

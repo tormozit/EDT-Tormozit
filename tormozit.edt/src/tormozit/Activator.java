@@ -26,7 +26,7 @@ import com.google.inject.Injector;
  *
  * <p><b>Важно:</b> В {@code start()} выполняется ТОЛЬКО инициализация
  * синглтонов без UI-кода — никакого {@code syncExec} или обращений к
- * Workbench. {@link ContentAssistAutoOpenManager#start()} вызывается
+ * Workbench. {@link ContentAssistManager#start()} вызывается
  * позже из {@code CompareConfigMenuHook.earlyStartup()}, когда Workbench
  * гарантированно инициализирован.
  */
@@ -44,9 +44,9 @@ public class Activator extends AbstractUIPlugin
 
         // Только инициализация синглтонов — никакого UI и обращений к Workbench.
         // manager.start() будет вызван из earlyStartup() после запуска Workbench.
-        ContentAssistAutoOpenSettings settings =
-            ContentAssistAutoOpenSettings.init(PLUGIN_ID);
-        ContentAssistAutoOpenManager.init(settings);
+        ContentAssistSettings settings =
+            ContentAssistSettings.init(PLUGIN_ID);
+        ContentAssistManager.init(settings);
     }
 
     @Override
@@ -54,7 +54,7 @@ public class Activator extends AbstractUIPlugin
     {
 //        IRApplication.disconnectAll(); // TODO
 
-        ContentAssistAutoOpenManager mgr = ContentAssistAutoOpenManager.getInstance();
+        ContentAssistManager mgr = ContentAssistManager.getInstance();
         if (mgr != null)
             mgr.stop();
 

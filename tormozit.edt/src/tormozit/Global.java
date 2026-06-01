@@ -22,7 +22,8 @@ import org.eclipse.ui.navigator.CommonNavigator;
 import org.eclipse.xtext.ide.server.ProjectManager;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
-import org.osgi.framework.FrameworkUtil;
+import org.osgi.framework.FrameworkUtil;    
+import org.eclipse.swt.widgets.*;
 
 import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
@@ -291,5 +292,28 @@ public final class Global
         // Сначала заменяем \r\n на \n (Windows)
         // Затем заменяем оставшиеся \r на \n (старые Mac)
         return text.replace("\r\n", "\n").replace("\r", "\n");
-    }    
+    }
+
+    /** Найти первый Control по предикату в поддереве */
+    public static <T extends Control> T findControl(Composite root, Class<T> type, java.util.function.Predicate<T> predicate) {
+        for (Control c : root.getChildren()) {
+            if (type.isInstance(c) && predicate.test(type.cast(c))) {
+                return type.cast(c);
+            }
+            if (c instanceof Composite) {
+                T found = findControl((Composite) c, type, predicate);
+                if (found != null) return found;
+            }
+        }
+        return null;
+    }
+
+    /** Удобный поиск Label по подстроке текста */
+    public static Label findLabelByText(Composite root, String text) {
+        return findControl(root, Label.class, lbl -> {
+            String t = lbl.getText();
+            return t != null && t.contains(text);
+        });
+    }
+
 }

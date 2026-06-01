@@ -10,7 +10,7 @@ import org.eclipse.core.runtime.preferences.InstanceScope;
  * <p>Символы-триггеры ({@link #CHARSET_VALUE}) скрыты из UI и заданы
  * константой — пользователю доступны только «Включено» и «Задержка».
  */
-public final class ContentAssistAutoOpenSettings
+public final class ContentAssistSettings
 {
     /** Ключ булевой настройки «Включено». */
     public static final String PREF_ENABLED = "contentAssistAutoOpen.enabled";  //$NON-NLS-1$
@@ -32,13 +32,13 @@ public final class ContentAssistAutoOpenSettings
 
     // ---- Синглтон ----
 
-    private static ContentAssistAutoOpenSettings instance;
+    private static ContentAssistSettings instance;
 
     private final ScopedPreferenceStore preferenceStore;
     private boolean enabled = DEFAULT_ENABLED;
     private int     timeout = DEFAULT_TIMEOUT;
 
-    private ContentAssistAutoOpenSettings(String pluginId)
+    private ContentAssistSettings(String pluginId)
     {
         this.preferenceStore =
             new ScopedPreferenceStore(InstanceScope.INSTANCE, pluginId);
@@ -48,15 +48,15 @@ public final class ContentAssistAutoOpenSettings
      * Создаёт и возвращает единственный экземпляр.
      * Вызывается один раз из {@code Activator.start()}.
      */
-    public static synchronized ContentAssistAutoOpenSettings init(String pluginId)
+    public static synchronized ContentAssistSettings init(String pluginId)
     {
         if (instance == null)
-            instance = new ContentAssistAutoOpenSettings(pluginId);
+            instance = new ContentAssistSettings(pluginId);
         return instance;
     }
 
     /** Возвращает синглтон (после {@link #init}). */
-    public static ContentAssistAutoOpenSettings getInstance()
+    public static ContentAssistSettings getInstance()
     {
         return instance;
     }

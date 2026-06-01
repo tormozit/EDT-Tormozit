@@ -116,7 +116,7 @@
   <extension point="org.eclipse.ui.preferencePages">
     <page
         category="com._1c.g5.v8.dt.bsl.Bsl"
-        class="tormozit.ContentAssistAutoOpenPreferencePage"
+        class="tormozit.ContentAssistPreferencePage"
         id="tormozit.edt.contentAssistAutoOpen.preferencePages"
         name="Автооткрытие подсказки"/>
   </extension>
@@ -124,7 +124,7 @@
   <!-- Инициализатор значений по умолчанию для настроек автооткрытия -->
   <extension point="org.eclipse.core.runtime.preferences">
     <initializer
-        class="tormozit.ContentAssistAutoOpenInitializer"/>
+        class="tormozit.ContentAssistInitializer"/>
   </extension>
 
 </plugin>

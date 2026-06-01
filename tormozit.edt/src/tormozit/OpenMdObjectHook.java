@@ -14,6 +14,7 @@ import org.eclipse.swt.SWT;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Event;
+import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Listener;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
@@ -185,6 +186,12 @@ public class OpenMdObjectHook implements IStartup {
 
             shell.setData(PATCHED_KEY, Boolean.TRUE);
             Global.log("OpenMdObjectHook: patched successfully");
+
+            Label target = Global.findLabelByText(shell, "Выберите элемент");
+            if (target != null && !target.isDisposed()) {
+                target.setText("Фильтр разбивается на слова пробелами и ищется вхождение всех слов одновременно");
+                target.getParent().layout(); // пересчитать layout
+            }
 
         } catch (Exception e) {
             e.printStackTrace();

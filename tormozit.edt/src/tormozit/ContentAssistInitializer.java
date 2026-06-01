@@ -7,22 +7,22 @@ import org.eclipse.core.runtime.preferences.AbstractPreferenceInitializer;
  * Регистрируется через точку расширения {@code org.eclipse.core.runtime.preferences}
  * в {@code plugin.xml}.
  */
-public class ContentAssistAutoOpenInitializer extends AbstractPreferenceInitializer
+public class ContentAssistInitializer extends AbstractPreferenceInitializer
 {
     @Override
     public void initializeDefaultPreferences()
     {
-        ContentAssistAutoOpenSettings settings =
-            ContentAssistAutoOpenSettings.getInstance();
+        ContentAssistSettings settings =
+            ContentAssistSettings.getInstance();
         if (settings == null)
             return; // Activator ещё не запущен — нормальная ситуация при первом запуске
 
         settings.getPreferenceStore().setDefault(
-            ContentAssistAutoOpenSettings.PREF_ENABLED,
-            ContentAssistAutoOpenSettings.DEFAULT_ENABLED);
+            ContentAssistSettings.PREF_ENABLED,
+            ContentAssistSettings.DEFAULT_ENABLED);
 
         settings.getPreferenceStore().setDefault(
-            ContentAssistAutoOpenSettings.PREF_TIMEOUT,
-            ContentAssistAutoOpenSettings.DEFAULT_TIMEOUT);
+            ContentAssistSettings.PREF_TIMEOUT,
+            ContentAssistSettings.DEFAULT_TIMEOUT);
     }
 }

@@ -5,6 +5,11 @@ import java.util.Map;
 
 import org.eclipse.jface.dialogs.IPageChangedListener;
 import org.eclipse.jface.dialogs.PageChangedEvent;
+import org.eclipse.jface.text.contentassist.ContentAssistEvent;
+import org.eclipse.jface.text.contentassist.ContentAssistant;
+import org.eclipse.jface.text.contentassist.ICompletionListener;
+import org.eclipse.jface.text.contentassist.ICompletionProposal;
+import org.eclipse.jface.text.contentassist.IContentAssistantExtension2;
 import org.eclipse.jface.text.source.ISourceViewer;
 import org.eclipse.jface.text.source.SourceViewer;
 import org.eclipse.jface.util.IPropertyChangeListener;
@@ -19,6 +24,14 @@ import org.eclipse.ui.IWorkbenchPart;
 import org.eclipse.ui.IWorkbenchPartReference;
 import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.PlatformUI;
+import org.eclipse.jface.text.contentassist.ContentAssistant;
+import org.eclipse.jface.text.contentassist.IContentAssistantExtension2;
+import org.eclipse.jface.text.contentassist.ICompletionListener;
+import org.eclipse.jface.text.contentassist.ContentAssistEvent;
+import org.eclipse.jface.text.source.SourceViewer;
+import org.eclipse.swt.events.KeyAdapter;
+import org.eclipse.swt.events.KeyEvent;
+import org.eclipse.swt.widgets.Display;
 
 import com._1c.g5.v8.dt.bsl.ui.editor.BslXtextEditor;
 import com._1c.g5.v8.dt.md.ui.editor.base.DtGranularEditor;
@@ -30,7 +43,7 @@ import com._1c.g5.v8.dt.md.ui.editor.base.DtGranularEditorXtextEditorPage;
  *
  * <p><b>Порядок инициализации:</b>
  * <ol>
- *   <li>{@code ContentAssistAutoOpenManager.init(settings)} — вызывается
+ *   <li>{@code ContentAssistManager.init(settings)} — вызывается
  *       из {@code Activator.start()} (безопасно, без UI);</li>
  *   <li>{@code start()} — вызывается из {@code earlyStartup()} уже на
  *       UI-потоке, когда Workbench гарантированно инициализирован.</li>
@@ -40,11 +53,11 @@ import com._1c.g5.v8.dt.md.ui.editor.base.DtGranularEditorXtextEditorPage;
  * он уже выполняется на UI-потоке (через {@code earlyStartup()}).
  * {@link #applyPatchToOpenedEditors()} безопасен из любого потока.
  */
-public final class ContentAssistAutoOpenManager
+public final class ContentAssistManager
 {
-    private static ContentAssistAutoOpenManager instance;
+    private static ContentAssistManager instance;
 
-    private final ContentAssistAutoOpenSettings  settings;
+    private final ContentAssistSettings  settings;
     private final WindowListener                 windowListener   = new WindowListener();
     private final SettingsChangeListener         settingsListener = new SettingsChangeListener();
 
@@ -53,22 +66,22 @@ public final class ContentAssistAutoOpenManager
     private final Map<DtGranularEditor<?>, IPageChangedListener> pageListeners =
         new HashMap<>();
 
-    private ContentAssistAutoOpenManager(ContentAssistAutoOpenSettings settings)
+    private ContentAssistManager(ContentAssistSettings settings)
     {
         this.settings = settings;
     }
 
     // ---- Синглтон ----
 
-    public static synchronized ContentAssistAutoOpenManager init(
-            ContentAssistAutoOpenSettings settings)
+    public static synchronized ContentAssistManager init(
+            ContentAssistSettings settings)
     {
         if (instance == null)
-            instance = new ContentAssistAutoOpenManager(settings);
+            instance = new ContentAssistManager(settings);
         return instance;
     }
 
-    public static ContentAssistAutoOpenManager getInstance() { return instance; }
+    public static ContentAssistManager getInstance() { return instance; }
 
     // ---- Lifecycle ----
 
@@ -181,18 +194,16 @@ public final class ContentAssistAutoOpenManager
 
     private void applyPatchToBslEditor(BslXtextEditor editor)
     {
-        if (!settings.isEnabled())
-            return;
+        if (!settings.isEnabled()) return;
 
         ISourceViewer viewer = editor.getInternalSourceViewer();
-        if (viewer instanceof SourceViewer)
-            ContentAssistAutoOpenPatcher.applyPatch(
-                (SourceViewer) viewer,
-                settings.getTimeout(),
-                settings.getCharset());
-    }
+        if (!(viewer instanceof SourceViewer)) return;
+        SourceViewer sourceViewer = (SourceViewer) viewer;
 
-    // ---- Вспомогательные методы регистрации ----
+        // --- автооткрытие и символы-триггеры ---
+        ContentAssistPatcher.applyPatch(
+            sourceViewer, settings.getTimeout(), settings.getCharset());
+    }
 
     private void registerPartListener(IWorkbenchWindow window)
     {
@@ -212,8 +223,8 @@ public final class ContentAssistAutoOpenManager
         public void propertyChange(PropertyChangeEvent event)
         {
             String prop = event.getProperty();
-            if (ContentAssistAutoOpenSettings.PREF_ENABLED.equals(prop)
-                    || ContentAssistAutoOpenSettings.PREF_TIMEOUT.equals(prop))
+            if (ContentAssistSettings.PREF_ENABLED.equals(prop)
+                    || ContentAssistSettings.PREF_TIMEOUT.equals(prop))
             {
                 settings.loadSettings();
                 applyPatchToOpenedEditors(); // безопасен из любого потока

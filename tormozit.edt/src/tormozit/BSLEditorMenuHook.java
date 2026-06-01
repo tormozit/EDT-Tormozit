@@ -63,7 +63,7 @@ import com._1c.g5.v8.dt.md.ui.editor.base.DtGranularEditorXtextEditorPage;
  */
 public class BSLEditorMenuHook implements IStartup
 {
-    private static final String ITEM_TEXT_EditEmbedded = "Вложенный текст";
+    private static final String ITEM_TEXT_EditEmbedded = "Вложенный текст ИР";
 
     /**
      * Ключ SWT-данных для маркировки «меню уже прикреплено».
@@ -270,12 +270,12 @@ public class BSLEditorMenuHook implements IStartup
 
                 Menu menu = (Menu) e.widget;
 
-                addedItems.add(new MenuItem(menu, SWT.SEPARATOR));
+//                addedItems.add(new MenuItem(menu, SWT.SEPARATOR));
 
                 MenuItem item = new MenuItem(menu, SWT.PUSH);
                 item.setText(ITEM_TEXT_EditEmbedded);
                 item.setToolTipText(
-                    "Открыть вложенный текст в отдельном редакторе (Tormozit)");
+                    "Открыть вложенный текст в редакторе текста приложения ИР (Tormozit)");
                 item.addSelectionListener(new SelectionAdapter()
                 {
                     @Override
