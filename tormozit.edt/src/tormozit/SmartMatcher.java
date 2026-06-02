@@ -186,7 +186,7 @@ public class SmartMatcher {
         return ranges;
     }
 
-    private boolean isWordBoundary(String originalText, int index) {
+    public boolean isWordBoundary(String originalText, int index) {
         if (index <= 0) return true;
         char prev = originalText.charAt(index - 1);
         char curr = originalText.charAt(index);

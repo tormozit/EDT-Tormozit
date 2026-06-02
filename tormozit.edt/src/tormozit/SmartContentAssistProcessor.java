@@ -12,28 +12,25 @@ import org.eclipse.jface.text.contentassist.IContextInformation;
 import org.eclipse.jface.text.contentassist.IContextInformationValidator;
 
 /**
- * Обёртка над оригинальным {@link IContentAssistProcessor} BSL-редактора.
+ * Обёртка над оригинальным {@link IContentAssistProcessor}.
  *
- * <p>Выполняет две задачи:
- * <ol>
- *   <li><b>Фильтрация</b> — элементы с премией 0 исключаются из списка.</li>
- *   <li><b>Сортировка</b> — список упорядочивается по убыванию премии
- *       {@link SmartCodeMatcher}.</li>
- * </ol>
- *
- * <p>Встраивается через {@link ContentAssistPatcher#applyPatch} (идемпотентно).
- * Встроенный sorter {@code ContentAssistant} нейтрализован через
- * {@link ContentAssistPatcher.NeutralSorter} — наш порядок сохраняется.
+ * <p><b>Кэширование:</b> при первом вызове {@code computeCompletionProposals}
+ * запрашивает полный список у delegate и сохраняет его. При последующих
+ * вызовах, если фильтр изменился на ±1 символ (ввод/удаление), берёт кэш,
+ * фильтрует и сортирует — <b>delegate не вызывается</b>.
  */
 public class SmartContentAssistProcessor implements IContentAssistProcessor
 {
-    /** Вес совпадения в имени метода/идентификатора */
-    private static final int NAME_WEIGHT  = 10;
-    /** Вес совпадения в параметрах */
+    private static final int NAME_WEIGHT = 10;
     private static final int PARAM_WEIGHT = 1;
 
     private final IContentAssistProcessor delegate;
     private final String activationChars;
+
+    // Кэш полного списка
+    private ICompletionProposal[] cachedProposals;
+    private String cachedFilter = "";
+    private boolean cacheValid = false;
 
     public SmartContentAssistProcessor(IContentAssistProcessor delegate, String activationChars)
     {
@@ -46,23 +43,74 @@ public class SmartContentAssistProcessor implements IContentAssistProcessor
         return delegate;
     }
 
-    // -------------------------------------------------------------------------
+    /** Сбрасывает кэш полного списка proposals. */
+    public void invalidateCache()
+    {
+        cacheValid = false;
+        cachedProposals = null;
+        cachedFilter = "";
+    }
 
     @Override
     public ICompletionProposal[] computeCompletionProposals(ITextViewer viewer, int offset)
     {
+        String filter = computeFilter(viewer, offset);
+
+        // Быстрый путь: контекст тот же, только фильтр изменился
+        if (cacheValid && cachedProposals != null && isIncrementalChange(filter))
+        {
+            cachedFilter = filter;
+            return filterAndSort(cachedProposals, filter);
+        }
+
+        // Медленный путь: перезапрашиваем полный список у delegate
         ICompletionProposal[] raw = delegate.computeCompletionProposals(viewer, offset);
         if (raw == null || raw.length == 0)
+        {
+            cacheValid = false;
             return raw;
+        }
 
-        String filter = computeFilter(viewer, offset);
+        cachedProposals = raw;
+        cachedFilter = filter;
+        cacheValid = true;
+        return filterAndSort(raw, filter);
+    }
+
+    // -------------------------------------------------------------------------
+    // Проверка контекста: фильтр изменился на ±1 символ (ввод/удаление)
+    // -------------------------------------------------------------------------
+
+    private boolean isIncrementalChange(String newFilter)
+    {
+        if (newFilter.equals(cachedFilter))
+            return true; // фильтр не изменился (стрелки и т.п.)
+
+        int diff = newFilter.length() - cachedFilter.length();
+        if (diff == 1 && newFilter.startsWith(cachedFilter))
+            return true; // добавлен 1 символ
+
+        if (diff == -1 && cachedFilter.startsWith(newFilter))
+            return true; // удалён 1 символ (Backspace)
+
+        return false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Фильтрация + сортировка
+    // -------------------------------------------------------------------------
+
+    private ICompletionProposal[] filterAndSort(ICompletionProposal[] raw, String filter)
+    {
+        if (filter.isEmpty())
+        {
+            // При пустом фильтре возвращаем полный список (delegate уже отсортировал)
+            return raw;
+        }
+
         SmartCodeMatcher matcher = new SmartCodeMatcher(filter);
 
-        // Если фильтр пуст — возвращаем исходный порядок Xtext без изменений.
-        if (matcher.isEmpty)
-            return raw;
-
-        // --- Фильтрация: оставляем только элементы с премией > 0 ---
+        // Фильтрация: оставляем только score > 0
         List<ICompletionProposal> filtered = new ArrayList<>(raw.length);
         int[] scores = new int[raw.length];
 
@@ -79,29 +127,30 @@ public class SmartContentAssistProcessor implements IContentAssistProcessor
         if (filtered.isEmpty())
             return new ICompletionProposal[0];
 
-        // --- Сортировка: по убыванию премии, затем алфавит ---
-        // Индексный массив — score уже вычислен, не пересчитываем при сравнении
+        // Сортировка по убыванию score, затем алфавит
         Integer[] idx = new Integer[filtered.size()];
         for (int i = 0; i < idx.length; i++) idx[i] = i;
 
         final int[] s = Arrays.copyOf(scores, filtered.size());
-        final List<ICompletionProposal> fp = filtered;
 
         Arrays.sort(idx, (a, b) -> {
             if (s[a] != s[b])
-                return Integer.compare(s[b], s[a]); // убывание
-            return compareDisplayStrings(fp.get(a), fp.get(b));
+                return Integer.compare(s[b], s[a]);
+            return compareDisplayStrings(filtered.get(a), filtered.get(b));
         });
 
+        // Оборачиваем в SmartCompletionProposal с подсветкой
         ICompletionProposal[] result = new ICompletionProposal[idx.length];
         for (int i = 0; i < idx.length; i++)
-            result[i] = filtered.get(idx[i]);
-
+        {
+            ICompletionProposal original = filtered.get(idx[i]);
+            result[i] = new SmartCompletionProposal(original, matcher);
+        }
         return result;
     }
 
     // -------------------------------------------------------------------------
-    // Утилиты — доступны из SmartCompletionSorter
+    // Утилиты (доступны извне)
     // -------------------------------------------------------------------------
 
     /** Совокупная премия предложения при заданном matcher-е. */
@@ -115,7 +164,7 @@ public class SmartContentAssistProcessor implements IContentAssistProcessor
 
     /**
      * Полное сравнение двух предложений: сначала по score (убывание),
-     * потом алфавитно. Используется из {@link SmartCompletionSorter}.
+     * потом алфавитно. Используется из {@link SmartCodeProposalSorter}.
      */
     public static int compareProposals(SmartCodeMatcher matcher,
                                        ICompletionProposal p1,
@@ -141,6 +190,10 @@ public class SmartContentAssistProcessor implements IContentAssistProcessor
     {
         return (p == null) ? null : p.getDisplayString();
     }
+
+    // -------------------------------------------------------------------------
+    // Вычисление фильтра
+    // -------------------------------------------------------------------------
 
     /**
      * Вычисляет фильтр: идём назад от курсора до первого символа,
