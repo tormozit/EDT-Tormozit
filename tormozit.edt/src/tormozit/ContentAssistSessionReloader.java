@@ -6,8 +6,6 @@ import org.eclipse.jface.text.IDocument;
 import org.eclipse.jface.text.contentassist.ContentAssistant;
 import org.eclipse.jface.text.contentassist.ContentAssistEvent;
 import org.eclipse.jface.text.contentassist.ICompletionListener;
-import org.eclipse.jface.text.contentassist.ICompletionProposal;
-import org.eclipse.jface.text.contentassist.ICompletionProposalSorter;
 import org.eclipse.jface.text.source.SourceViewer;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.KeyAdapter;
@@ -64,13 +62,25 @@ public final class ContentAssistSessionReloader
                 if (!isFilterAction(e)) return;
 
                 String filter = computeFilter(viewer);
+                
+                // Если фильтр стал пустым — сбрасываем кэш и штатный фильтр ДО перезапроса
+                if (filter.isEmpty()) {
+                    processor.invalidateCache();
+                    SmartFilterTracker.setCurrentFilter("");
+                    ContentAssistPopupHacker.resetFilter(assistant);
+                    try {
+                        assistant.showPossibleCompletions();
+                    } catch (Exception ignored) {}
+                    lastFilter = "";
+                    return;
+                }
+
                 SmartFilterTracker.setCurrentFilter(filter);
 
                 if (filter.equals(lastFilter)) return;
                 lastFilter = filter;
 
                 try {
-                    // Сначала сбрасываем штатный фильтр, потом перезапрашиваем
                     ContentAssistPopupHacker.resetFilter(assistant);
                     assistant.showPossibleCompletions();
                 } catch (Exception ignored) {}
@@ -105,28 +115,7 @@ public final class ContentAssistSessionReloader
             || e.keyCode == SWT.BS
             || e.keyCode == SWT.DEL;
     }
-    public class SmartCodeProposalSorter implements ICompletionProposalSorter
-    {
-        @Override
-        public int compare(ICompletionProposal p1, ICompletionProposal p2)
-        {
-            String filter = SmartFilterTracker.getCurrentFilter();
-            if (filter.isEmpty())
-                return compareDisplay(p1, p2);
-
-            SmartCodeMatcher matcher = new SmartCodeMatcher(filter);
-            return SmartContentAssistProcessor.compareProposals(matcher, p1, p2);
-        }
-
-        private int compareDisplay(ICompletionProposal p1, ICompletionProposal p2)
-        {
-            String d1 = p1 == null ? null : p1.getDisplayString();
-            String d2 = p2 == null ? null : p2.getDisplayString();
-            if (d1 == null) return d2 == null ? 0 : 1;
-            if (d2 == null) return -1;
-            return d1.compareToIgnoreCase(d2);
-        }
-    }
+    
     /**
      * Сбрасывает внутренний фильтр CompletionProposalPopup, чтобы Eclipse
      * не накладывала свою голубую подсветку поверх нашей.
