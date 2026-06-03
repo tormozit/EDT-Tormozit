@@ -25,8 +25,6 @@ import org.eclipse.xtext.util.concurrent.IUnitOfWork;
 
 import com._1c.g5.v8.dt.bsl.model.DynamicFeatureAccess;
 import com._1c.g5.v8.dt.bsl.model.Expression;
-import com._1c.g5.v8.dt.bsl.model.Invocation;
-import com._1c.g5.v8.dt.bsl.model.StaticFeatureAccess;
 import com._1c.g5.v8.dt.mcore.DuallyNamedElement;
 import com._1c.g5.v8.dt.mcore.TypeItem;
 
@@ -67,6 +65,60 @@ public class SmartContentAssistProcessor implements IContentAssistProcessor
     public IContentAssistProcessor getDelegate()
     {
         return delegate;
+    }
+
+    /**
+     * Извлекает тип ресивера из кэша списка автодополнения.
+     *
+     * <p>1С:EDT формирует displayString элементов как:
+     * {@code <Имя> : <ТипЗначения> ~ <ТипРодителя>}
+     * Часть после {@code ~} — это расчётный тип выражения слева от точки.
+     * Собираем уникальные значения и возвращаем {@code "(N) Тип"}.
+     *
+     * @return метка вида {@code "(3) ОбъектМетаданных"} или {@code ""} если кэш пуст / нет метаданных о типе
+     */
+    public String resolveReceiverTypeLabel()
+    {
+        ICompletionProposal[] cache = fullListCache;
+        if (cache == null || cache.length == 0)
+            return ""; //$NON-NLS-1$
+
+        // Собираем уникальные типы родителя, сохраняя порядок первого вхождения
+        java.util.LinkedHashSet<String> types = new java.util.LinkedHashSet<>();
+        for (ICompletionProposal p : cache)
+        {
+            String display = displayString(unwrapProposal(p));
+            if (display == null)
+                continue;
+            String parentType = extractParentType(display);
+            if (parentType != null && !parentType.isEmpty())
+                types.add(parentType);
+        }
+
+        if (types.isEmpty())
+            return ""; //$NON-NLS-1$
+
+        // Если все элементы одного типа — показываем просто тип
+        if (types.size() == 1)
+            return types.iterator().next();
+
+        // Несколько типов — счётчик + первый (D основной) тип
+        return "(" + types.size() + ") " + types.iterator().next(); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Извлекает часть после {@code ~} в displayString элемента автодополнения.
+     * Формат: {@code Имя : ТипЗначения ~ ТипРодителя}
+     */
+    static String extractParentType(String displayString)
+    {
+        if (displayString == null)
+            return null;
+        int tilde = displayString.indexOf('~');
+        if (tilde < 0)
+            return null;
+        String after = displayString.substring(tilde + 1).trim();
+        return after.isEmpty() ? null : after;
     }
 
     public void invalidateCache()
@@ -806,77 +858,103 @@ public class SmartContentAssistProcessor implements IContentAssistProcessor
             return -1;
         }
 
+        /**
+         * Находит выражение-источник (receiver) слева от точки в позиции dotOffset.
+         *
+         * <p>Алгоритм:
+         * <ol>
+         *   <li>Ищем листовую ноду на позиции точки.</li>
+         *   <li>Поднимаемся по семантическому дереву от найденного элемента.</li>
+         *   <li>Ищем ближайший {@link DynamicFeatureAccess}, у которого source-поддерево
+         *       заканчивается не позже dotOffset — это и есть receiver.</li>
+         *   <li>Если receiver не найден через node-модель, пробуем через
+         *       {@link EObjectAtOffsetHelper} как запасной вариант.</li>
+         * </ol>
+         */
         private static Expression findReceiverExpression(XtextResource resource, int dotOffset,
                                                        int completionOffset)
         {
+            // Основной путь: через ноду точки поднимаемся по семантическому дереву
+            INode dotNode = findNodeAtOffset(resource, dotOffset);
+            if (dotNode != null)
+            {
+                Expression receiver = findReceiverFromNode(dotNode, dotOffset);
+                if (receiver != null)
+                    return receiver;
+            }
+
+            // Запасной путь: через EObjectAtOffsetHelper
             EObjectAtOffsetHelper helper = new EObjectAtOffsetHelper();
             for (int probe : new int[] { dotOffset, dotOffset - 1, completionOffset - 1 })
             {
                 if (probe < 0)
                     continue;
                 EObject at = helper.resolveElementAt(resource, probe);
-                Expression receiver = receiverFromSemantic(at, dotOffset);
-                if (receiver != null)
-                    return receiver;
-            }
-
-            INode node = findNodeAtOffset(resource, dotOffset);
-            if (node == null)
-                return null;
-
-            for (EObject element = node.getSemanticElement(); element != null;
-                 element = element.eContainer())
-            {
-                Expression receiver = receiverFromSemantic(element, dotOffset);
+                if (at == null)
+                    continue;
+                Expression receiver = findReceiverInAncestors(at, dotOffset);
                 if (receiver != null)
                     return receiver;
             }
             return null;
         }
 
-        private static Expression receiverFromSemantic(EObject element, int dotOffset)
+        /**
+         * Поднимается по цепочке семантических предков, начиная с семантического элемента
+         * листа {@code dotNode}, и ищет ближайший {@link DynamicFeatureAccess},
+         * чей source-поддерево заканчивается до dotOffset включительно.
+         */
+        private static Expression findReceiverFromNode(INode dotNode, int dotOffset)
+        {
+            EObject startSemantic = dotNode.getSemanticElement();
+            if (startSemantic == null)
+            {
+                // Пробуем родителей ноды
+                for (INode n = dotNode.getParent(); n != null; n = n.getParent())
+                {
+                    startSemantic = n.getSemanticElement();
+                    if (startSemantic != null)
+                        break;
+                }
+            }
+            if (startSemantic == null)
+                return null;
+            return findReceiverInAncestors(startSemantic, dotOffset);
+        }
+
+        /**
+         * Перебирает element и его контейнеры снизу вверх.
+         * Возвращает source первого {@link DynamicFeatureAccess}, у которого точка
+         * действительно стоит после source-поддерева.
+         */
+        private static Expression findReceiverInAncestors(EObject element, int dotOffset)
         {
             for (EObject e = element; e != null; e = e.eContainer())
             {
                 if (e instanceof DynamicFeatureAccess)
                 {
                     DynamicFeatureAccess access = (DynamicFeatureAccess) e;
-                    if (!isDotAfterSource(access, dotOffset))
-                        continue;
                     Expression source = access.getSource();
-                    if (source != null)
+                    if (source == null)
+                        continue;
+                    // Точка должна стоять после конца source-поддерева
+                    if (sourceEndsBeforeDot(source, dotOffset))
                         return source;
-                }
-                else if (e instanceof Invocation)
-                {
-                    Invocation inv = (Invocation) e;
-                    if (isDotAfterSource(inv, dotOffset))
-                        return inv;
-                }
-                else if (e instanceof StaticFeatureAccess)
-                {
-                    StaticFeatureAccess access = (StaticFeatureAccess) e;
-                    if (isDotAfterSource(access, dotOffset))
-                        return access;
                 }
             }
             return null;
         }
 
-        private static boolean isDotAfterSource(DynamicFeatureAccess access, int dotOffset)
+        /**
+         * Возвращает true, если нода выражения {@code source} заканчивается
+         * не позже позиции точки (т.е. точка стоит после source, а не внутри него).
+         */
+        private static boolean sourceEndsBeforeDot(Expression source, int dotOffset)
         {
-            Expression source = access.getSource();
-            if (source == null)
-                return true;
-            return isDotAfterSource(source, dotOffset);
-        }
-
-        private static boolean isDotAfterSource(Expression expression, int dotOffset)
-        {
-            ICompositeNode node = NodeModelUtils.findActualNodeFor(expression);
+            ICompositeNode node = NodeModelUtils.findActualNodeFor(source);
             if (node == null)
-                return true;
-            return dotOffset >= node.getEndOffset();
+                return false; // не знаем — не рискуем
+            return node.getEndOffset() <= dotOffset;
         }
 
         private static INode findNodeAtOffset(XtextResource resource, int offset)

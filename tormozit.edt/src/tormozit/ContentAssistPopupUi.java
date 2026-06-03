@@ -119,10 +119,14 @@ public final class ContentAssistPopupUi
                 viewer.getDocument(), caret) < 0)
             return ""; //$NON-NLS-1$
 
-        String type = SmartContentAssistProcessor.ReceiverTypeLabel.resolve(viewer);
-        if (type == null || type.isEmpty())
-            return "Тип: —"; //$NON-NLS-1$
-        return "Тип: " + type; //$NON-NLS-1$
+        SmartContentAssistProcessor processor = ContentAssistSessionReloader.getActiveProcessor();
+        if (processor != null)
+        {
+            String label = processor.resolveReceiverTypeLabel();
+            if (label != null && !label.isEmpty())
+                return "Родитель: " + label;
+        }
+        return "Родитель: —"; //$NON-NLS-1$
     }
 
     private static Composite createFilterBar(Shell shell, ContentAssistant assistant,

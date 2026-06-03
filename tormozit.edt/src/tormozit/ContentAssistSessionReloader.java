@@ -139,6 +139,11 @@ public final class ContentAssistSessionReloader
         return ACTIVE_VIEWER.get();
     }
 
+    public static SmartContentAssistProcessor getActiveProcessor()
+    {
+        return ACTIVE_PROCESSOR.get();
+    }
+
     /** Повторная загрузка списка после reconcile (member-access после точки). */
     public static void refreshPopupIfOpen()
     {
