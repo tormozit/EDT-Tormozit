@@ -24,7 +24,9 @@ Require-Bundle: org.eclipse.ui;bundle-version="[3.201.0,4.0.0)",
  com._1c.g5.v8.dt.ui;bundle-version="[0.0.0,100.0.0)",
  com._1c.g5.v8.dt.md.ui;bundle-version="[0.0.0,100.0.0)",
  com._1c.g5.v8.dt.md;bundle-version="[0.0.0,100.0.0)",
+ com._1c.g5.v8.dt.bsl;bundle-version="[0.0.0,100.0.0)",
  com._1c.g5.v8.dt.bsl.ui;bundle-version="[0.0.0,100.0.0)",
+ com._1c.g5.v8.dt.mcore;bundle-version="[0.0.0,100.0.0)",
  com._1c.g5.v8.dt.compare.model,
  com._1c.g5.v8.dt.platform.services.core,
  com._1c.g5.v8.dt.platform.services.model,
@@ -39,6 +41,7 @@ Require-Bundle: org.eclipse.ui;bundle-version="[3.201.0,4.0.0)",
  org.eclipse.e4.core.contexts,
  org.eclipse.ui.navigator,
  org.eclipse.swt,
+ org.eclipse.xtext;bundle-version="[0.0.0,100.0.0)",
  org.eclipse.xtext.ui;bundle-version="[0.0.0,100.0.0)",
  org.eclipse.ui.forms,
  org.eclipse.jdt.annotation,
@@ -58,7 +61,8 @@ Require-Bundle: org.eclipse.ui;bundle-version="[3.201.0,4.0.0)",
  com._1c.g5.v8.dt.bm.index.emf,
  com._1c.g5.v8.dt.form.ui,
  com._1c.g5.v8.dt.bsl.qw,
- com._1c.g5.v8.dt.moxel
+ com._1c.g5.v8.dt.moxel,
+ com._1c.g5.v8.dt.bsl.model
 Import-Package: org.osgi.framework;version="[1.8.0,2.0.0)"
 Bundle-NativeCode: lib/jacob-1.21-x64.dll; osname=Win32; processor=x86-64
 Bundle-ClassPath: ., lib/jacob.jar

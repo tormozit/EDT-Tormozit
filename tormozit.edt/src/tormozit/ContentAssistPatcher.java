@@ -55,6 +55,7 @@ public final class ContentAssistPatcher
         contentAssist.enableAutoActivation(true);
         contentAssist.enableAutoInsert(false);
         contentAssist.setRepeatedInvocationMode(true);
+        contentAssist.setStatusLineVisible(false);
         contentAssist.setSorter(new PreserveOrderProposalSorter());
 
         // Перезапрос + подавление штатной раскраски
