@@ -179,14 +179,24 @@ public class SmartContentAssistProcessor implements IContentAssistProcessor
         ensureFullListForContext(viewer, doc, caret);
 
         boolean reloadUnfiltered = SmartAssistFilterState.consumeUnfilteredReloadPending();
-        if (!fullListReady || reloadUnfiltered)
+        if (reloadUnfiltered)
         {
-            if (reloadUnfiltered)
+            if (shouldReloadDelegateOnUnfiltered())
             {
                 fullListReady = false;
                 fullListCache = EMPTY;
+                memberAccessReloadScheduledSeq = -1;
+                loadFullList(viewer, true);
             }
-            loadFullList(viewer);
+            else
+            {
+                ContentAssistDebug.log("unfilteredReload reuse cache=" + fullListCache.length //$NON-NLS-1$
+                    + " key=" + fullListContextKey); //$NON-NLS-1$
+            }
+        }
+        else if (!fullListReady)
+        {
+            loadFullList(viewer, false);
         }
 
         ICompletionProposal[] out;
@@ -279,17 +289,35 @@ public class SmartContentAssistProcessor implements IContentAssistProcessor
         return -(anchor + 1);
     }
 
+    /**
+     * При снятии smart-фильтра delegate перезапрашиваем только если кэш пустой
+     * или подозрительно мал; иначе {@link #buildUnfilteredList} по уже загруженному кэшу.
+     */
+    private boolean shouldReloadDelegateOnUnfiltered()
+    {
+        if (!fullListReady || fullListCache.length == 0)
+            return true;
+        return fullListCache.length < MIN_STABLE_MEMBER_CACHE;
+    }
+
     private void loadFullList(ITextViewer viewer)
+    {
+        loadFullList(viewer, false);
+    }
+
+    private void loadFullList(ITextViewer viewer, boolean forceDelegateReadOnly)
     {
         int caret = resolveCaretOffset(viewer, 0);
         IDocument doc = viewer != null ? viewer.getDocument() : null;
         int dot = ReceiverTypeLabel.findMemberAccessDot(doc, caret);
 
         ContentAssistant assistant = ContentAssistSessionReloader.getActiveAssistant();
-        ICompletionProposal[] raw = loadDelegateProposals(viewer, doc, caret, dot, assistant);
+        ICompletionProposal[] raw = loadDelegateProposals(viewer, doc, caret, dot, assistant,
+            forceDelegateReadOnly);
         if (raw == null || raw.length == 0)
         {
-            ContentAssistDebug.log("loadFullList EMPTY dot=" + dot + " caret=" + caret); //$NON-NLS-1$ //$NON-NLS-2$
+            ContentAssistDebug.log("loadFullList EMPTY dot=" + dot + " caret=" + caret //$NON-NLS-1$ //$NON-NLS-2$
+                + (forceDelegateReadOnly ? " readOnly" : "")); //$NON-NLS-1$ //$NON-NLS-2$
             fullListReady = false;
             if (dot >= 0)
                 scheduleMemberAccessReload(viewer, dot);
@@ -298,7 +326,8 @@ public class SmartContentAssistProcessor implements IContentAssistProcessor
         fullListCache = unwrapProposals(raw);
         fullListReady = true;
         ContentAssistDebug.log("loadFullList count=" + fullListCache.length //$NON-NLS-1$
-            + " dot=" + dot + " caret=" + caret); //$NON-NLS-1$ //$NON-NLS-2$
+            + " dot=" + dot + " caret=" + caret //$NON-NLS-1$ //$NON-NLS-2$
+            + (forceDelegateReadOnly ? " readOnly" : "")); //$NON-NLS-1$ //$NON-NLS-2$
         if (dot >= 0 && fullListCache.length < MIN_STABLE_MEMBER_CACHE)
             scheduleMemberAccessReload(viewer, dot);
     }
@@ -309,15 +338,18 @@ public class SmartContentAssistProcessor implements IContentAssistProcessor
      */
     private ICompletionProposal[] loadDelegateProposals(ITextViewer viewer, IDocument doc,
                                                         int caret, int dot,
-                                                        ContentAssistant assistant)
+                                                        ContentAssistant assistant,
+                                                        boolean forceDelegateReadOnly)
     {
         if (dot >= 0)
         {
-            int[] offsets = memberAccessProbeOffsets(caret, dot, assistant);
+            int[] offsets = memberAccessProbeOffsets(caret, dot, assistant, doc);
+            if (forceDelegateReadOnly || !SmartAssistFilterState.isSmartFilterEnabled())
+                return requestDelegateProposals(viewer, doc, caret, dot, assistant, offsets);
             return probeDelegateAtOffsets(viewer, offsets, dot);
         }
         int[] offsets = completionProbeOffsets(assistant, caret, dot, doc);
-        if (!SmartAssistFilterState.isSmartFilterEnabled())
+        if (forceDelegateReadOnly || !SmartAssistFilterState.isSmartFilterEnabled())
             return probeDelegateAtOffsets(viewer, offsets, dot);
         return requestDelegateProposals(viewer, doc, caret, dot, assistant, offsets);
     }
@@ -404,7 +436,7 @@ public class SmartContentAssistProcessor implements IContentAssistProcessor
             }
         }
         else
-            return memberAccessProbeOffsets(caret, dot, assistant);
+            return memberAccessProbeOffsets(caret, dot, assistant, doc);
         int[] a = new int[set.size()];
         int i = 0;
         for (Integer o : set)
@@ -418,12 +450,23 @@ public class SmartContentAssistProcessor implements IContentAssistProcessor
             set.add(offset);
     }
 
-    private static int[] memberAccessProbeOffsets(int caret, int dot, ContentAssistant assistant)
+    private static int[] memberAccessProbeOffsets(int caret, int dot, ContentAssistant assistant,
+                                                  IDocument doc)
     {
         java.util.LinkedHashSet<Integer> set = new java.util.LinkedHashSet<>();
-        // Каретка / сразу после точки; offset на самой '.' даёт урезанный список идентификатора
-        addProbeOffset(set, caret);
+        // Сразу после точки — полный member-access без префикса идентификатора
         addProbeOffset(set, dot + 1);
+        if (doc != null)
+        {
+            String prefix = computeIdentifierFilter(doc, caret);
+            if (!prefix.isEmpty())
+            {
+                int wordStart = caret - prefix.length();
+                if (wordStart > dot)
+                    addProbeOffset(set, wordStart);
+            }
+        }
+        addProbeOffset(set, caret);
         if (assistant != null)
         {
             int popupOffset = ContentAssistPopupSync.getFilterOffset(assistant);
@@ -478,8 +521,13 @@ public class SmartContentAssistProcessor implements IContentAssistProcessor
                 return;
             int prev = fullListCache.length;
             ContentAssistant assistant = ContentAssistSessionReloader.getActiveAssistant();
-            int[] offsets = memberAccessProbeOffsets(caret, dotContextKey, assistant);
-            ICompletionProposal[] raw = probeDelegateAtOffsets(viewer, offsets, dotContextKey);
+            int[] offsets = memberAccessProbeOffsets(caret, dotContextKey, assistant, doc);
+            ICompletionProposal[] raw;
+            if (!SmartAssistFilterState.isSmartFilterEnabled())
+                raw = requestDelegateProposals(viewer, doc, caret, dotContextKey, assistant,
+                    offsets);
+            else
+                raw = probeDelegateAtOffsets(viewer, offsets, dotContextKey);
             if (raw == null || raw.length <= prev)
                 return;
             ContentAssistDebug.log("loadFullList member-access retry count=" + raw.length //$NON-NLS-1$
