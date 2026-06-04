@@ -170,7 +170,7 @@ public class DataCompositionSchemaEditorHook implements IStartup
                         // Здесь мы находимся в родном потоке для этого COM-объекта. 
                         String file = exportToFile(page);
                         Object irClient = irSession.getModule("ирКлиент");
-                        ComBridge.setProperty(irSession.root, "Visible", true);
+                        irSession.showWindow();
                         // Мультиметка260525_210353
                         ComBridge.invoke(irClient, "РедактироватьСхемуКомпоновкиИзФайлаЛкс", file, false, fullObjectName);
                         new File(file).delete();

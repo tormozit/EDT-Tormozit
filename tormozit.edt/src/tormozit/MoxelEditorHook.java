@@ -350,7 +350,7 @@ public class MoxelEditorHook implements IStartup
                 try
                 {
                     Object irClient = irSession.getModule("ирКлиент"); //$NON-NLS-1$
-                    ComBridge.setProperty(irSession.root, "Visible", true); //$NON-NLS-1$
+                    irSession.showWindow();
 //                    Функция ОткрытьТабличныйДокументЛкс(ТабличныйДокумент = Неопределено, Знач Заголовок = "", Знач ТолькоПросмотр = Ложь, Знач КлючУникальности = Неопределено, ВставитьВсеИзБуфера = Ложь,
 //                        Знач Модально = Ложь, Знач ИмяТекущейОбласти = Неопределено, Знач КлючИсточника = "") Экспорт
                     ComBridge.invoke(irClient, "ОткрытьТабличныйДокументЛкс", null, fullObjectName, false, fullObjectName, true, false, currentRegionName, fullObjectName);

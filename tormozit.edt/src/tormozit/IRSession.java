@@ -172,4 +172,11 @@ public final class IRSession
             return ComBridge.toBoolean(ComBridge.invoke(codeEditor, "ОткрытьРедакторТекстовогоЛитерала", null, null, null, true, null, false));
         }
 
+        public void showWindow()
+        {
+           ComBridge.setProperty(root, "Visible", true);
+           if (pid > 0)
+               WinWindowActivator.activateMainWindow(pid);
+         }
+
     }

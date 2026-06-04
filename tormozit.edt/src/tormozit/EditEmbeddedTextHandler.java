@@ -93,7 +93,7 @@ public final class EditEmbeddedTextHandler
             try
             {
                 String textToOpen = irSession.selectTextLiteral();
-                ComBridge.setProperty(irSession.root, "Visible", true); //$NON-NLS-1$
+                irSession.showWindow();
                 irSession.openTextEditor(textToOpen, ref);
                 ToastNotification.show("Редактор ИР", "Измененный вложенный текст вернется в EDT, если не будет изменяться там во время редактирования в приложении ИР!");
             }

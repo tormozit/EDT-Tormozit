@@ -103,7 +103,7 @@ public class CompareConfigCompareInIRHandler extends AbstractHandler {
             {
                 // Здесь мы находимся в родном потоке для этого COM-объекта. 
                 Object irClient = irSession.getModule("ирКлиент");
-                ComBridge.setProperty(irSession.root, "Visible", true);
+                irSession.showWindow();
                 ComBridge.invoke(irClient, "СравнитьТабличныеДокументыИмпортЛкс", pathMain.toString(), pathOther.toString(), ancestor);
             } 
             catch (Exception e) 
