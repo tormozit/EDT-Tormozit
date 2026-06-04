@@ -99,13 +99,10 @@ public class GetRef extends AbstractHandler
     public Object execute(ExecutionEvent event) throws ExecutionException
     {
         IWorkbenchPart part = HandlerUtil.getActivePart(event);
-        IWorkbenchPage page  = part.getSite().getPage();
         Shell          shell = HandlerUtil.getActiveShell(event);
-
         BslXtextEditor bslEditor = getActiveBslEditor(part);
         if (bslEditor != null) { showModuleLineRefs(bslEditor, shell); return null; }
-
-        String ref = resolveRef(part, page);
+        String ref = getRefFromPart(part);
         if (ref == null || ref.isBlank())
         {
             ToastNotification.show("Ссылка",
@@ -374,13 +371,16 @@ public class GetRef extends AbstractHandler
     // Режим 2: имя объекта МД
     // =========================================================================
 
-    private static String resolveRef(IWorkbenchPart part, IWorkbenchPage page)
+    public static String getRefFromPart(IWorkbenchPart part)
     {
+        IWorkbenchPage page  = part.getSite().getPage();
         if (part instanceof IEditorPart
                 && Global.COMPARE_EDITOR_ID.equals(part.getSite().getId()))
             return refFromCompareEditor((IEditorPart) part);
         if (part == page.findView(Global.NAVIGATOR_VIEW_ID))
             return refFromNavigator(page);
+//        if (part == page.findView(Global.PROPERTIES_SHEET_ID)) // не работает
+//            return null; // TODO
         String ref = getRefFromEditor(page);
         if (ref != null) return ref;
         return refFromNavigator(page);
@@ -408,8 +408,11 @@ public class GetRef extends AbstractHandler
         if (pageOrEditor instanceof IEditorPart)
             editor = (IEditorPart)pageOrEditor;
         else
-            editor = pageOrEditor != null ? ((IWorkbenchPage)pageOrEditor).getActiveEditor() : null;
-        if (editor == null) return null;
+        {
+            editor = ((IWorkbenchPage)pageOrEditor).getActiveEditor();
+//            if (editor == null) editor = ((IWorkbenchPage)pageOrEditor).getActivePart();
+            if (editor == null) return null;
+        }
         if (editor instanceof DtGranularEditor<?>)
         {
             String ref = refFromGranularEditor((DtGranularEditor<?>) editor);

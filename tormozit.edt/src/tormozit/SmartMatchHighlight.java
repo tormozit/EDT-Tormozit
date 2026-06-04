@@ -47,6 +47,20 @@ public final class SmartMatchHighlight
         return STYLER;
     }
 
+    /** Жирный шрифт без смены цвета (для подсветки на выделенной строке списка). */
+    public static Styler boldStyler()
+    {
+        return BOLD_STYLER;
+    }
+
+    private static final Styler BOLD_STYLER = new Styler() {
+        @Override
+        public void applyStyles(TextStyle textStyle)
+        {
+            textStyle.font = boldFont();
+        }
+    };
+
     public static void applyRanges(StyledString styled, Iterable<SmartMatcher.HighlightRange> ranges)
     {
         if (styled == null || ranges == null)

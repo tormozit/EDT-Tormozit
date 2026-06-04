@@ -47,6 +47,9 @@ public class Activator extends AbstractUIPlugin
         ContentAssistSettings settings =
             ContentAssistSettings.init(PLUGIN_ID);
         ContentAssistManager.init(settings);
+
+        // Подключаем персистентное хранилище последних мест.
+        RecentPlaces.getInstance().init(PLUGIN_ID);
     }
 
     @Override

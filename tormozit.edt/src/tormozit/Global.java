@@ -39,6 +39,9 @@ public final class Global
 
     /** ID редактора сравнения конфигураций EDT. */
     static final String COMPARE_EDITOR_ID  = "com._1c.g5.v8.dt.compare.ui.editor"; //$NON-NLS-1$
+   
+    /** ID универсального редактора свойств объекта EDT. */
+    static final String PROPERTIES_SHEET_ID  = "org.eclipse.ui.views.properties.PropertySheet"; //$NON-NLS-1$
 
     private Global() {}
 

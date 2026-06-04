@@ -11,7 +11,8 @@
     <startup class="tormozit.BSLEditorMenuHook"/> 
     <startup class="tormozit.SmartOutlineHook"/> 
     <startup class="tormozit.OpenMdObjectHook"/>
-    <startup class="tormozit.MenuTooltipStatusLineHook"/>  
+    <startup class="tormozit.MenuTooltipStatusLineHook"/>
+    <startup class="tormozit.RecentPlacesTracker"/>
   </extension>
 
   <extension point="org.eclipse.ui.contexts">
@@ -46,6 +47,12 @@
           schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
           sequence="M1+F11">
     </key>
+    <key
+          commandId="tormozit.edt.RecentPlaces"
+          contextId="org.eclipse.ui.contexts.window"
+          schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+          sequence="M1+3">
+    </key>
   </extension>
 
   <extension point="org.eclipse.ui.commands">
@@ -59,12 +66,16 @@
         description="Показать выбранный объект конфигурации в навигаторе (Tormozit)"/>
      <command
             id="tormozit.edt.JumpToRef"
-            name="Перейти"
+            name="Перейти по ссылке"
             description="Перейти по ссылке из буфера обмена (Tormozit)"/>
     <command
             id="tormozit.edt.CopyRef"
-            name="Ссылка"
+            name="Копировать ссылку"
             description="Копировать ссылку на текущий объект или строку модуля (Tormozit)"/>
+    <command
+            id="tormozit.edt.RecentPlaces"
+            name="Последние места"
+            description="Открыть список последних посещённых методов и объектов метаданных (Tormozit)"/>
   </extension>
 
   <extension point="org.eclipse.ui.handlers">
@@ -94,6 +105,10 @@
         class="tormozit.ExecutableExtensionFactory:tormozit.GetRef"
         commandId="tormozit.edt.CopyRef">
      </handler>
+    <handler
+        class="tormozit.ExecutableExtensionFactory:tormozit.RecentPlacesHandler"
+        commandId="tormozit.edt.RecentPlaces">
+     </handler>
   </extension>
 
   <extension point="org.eclipse.ui.menus">
@@ -101,12 +116,20 @@
          <toolbar id="tormozit.edt.toolbar.mainGroup">
             <command
               commandId="tormozit.edt.JumpToRef"
+              label = "Перейти"
               tooltip="Перейти по ссылке из буфера обмена (Tormozit)"
               style="push">
             </command>
             <command
               commandId="tormozit.edt.CopyRef"
+              label = "Ссылка"
               tooltip="Копировать ссылку на текущий объект или строку модуля (Tormozit)"
+              style="push">
+            </command>
+            <command
+              commandId="tormozit.edt.RecentPlaces"
+              label = "Последние"
+              tooltip="Последние посещённые методы и объекты метаданных (Tormozit)"
               style="push">
             </command>
          </toolbar>
