@@ -6,6 +6,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
 
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.dnd.Clipboard;
+import org.eclipse.swt.dnd.TextTransfer;
+import org.eclipse.swt.dnd.Transfer;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.FontData;
@@ -396,6 +399,25 @@ public final class ToastNotification
         gd.widthHint  = 480;
         gd.heightHint = 220;
         textWidget.setLayoutData(gd);
+
+        // SWT.READ_ONLY блокирует стандартные горячие клавиши на Windows,
+        // поэтому Ctrl+C обрабатываем вручную.
+        textWidget.addListener(SWT.KeyDown, e ->
+        {
+            if (e.stateMask == SWT.CTRL && e.keyCode == 'c')
+            {
+                String sel = textWidget.getSelectionText();
+                if (sel != null && !sel.isEmpty())
+                {
+                    Clipboard cb = new Clipboard(display);
+                    cb.setContents(
+                        new Object[]{ sel },
+                        new Transfer[]{ TextTransfer.getInstance() }
+                    );
+                    cb.dispose();
+                }
+            }
+        });
 
         Button btnClose = new Button(dialog, SWT.PUSH);
         btnClose.setText("Закрыть"); //$NON-NLS-1$

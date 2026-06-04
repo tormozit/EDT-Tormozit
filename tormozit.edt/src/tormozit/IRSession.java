@@ -74,6 +74,11 @@ public final class IRSession
             }
         }
 
+        public boolean isProcessAlive() {
+            if (pid <= 0) return true; // pid неизвестен — не блокируем
+            return ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false);
+        }
+
         public void syncCodeEditorToIR(BslXtextEditor editor) {
             ISourceViewer viewer = editor.getInternalSourceViewer();
             Object sel = viewer.getSelectionProvider().getSelection();

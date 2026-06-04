@@ -1010,6 +1010,9 @@ public final class IRApplication
     
     private static boolean checkAlive(IRSession session)
     {
+        if (!session.isProcessAlive())
+            return false;
+
         Future<Boolean> future = session.executor.submit(() -> {
            try {
                 ComBridge.getProperty(session.root, "Visible"); 
