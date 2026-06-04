@@ -239,6 +239,128 @@ public final class MdTypeMapping
     }
 
     // =========================================================================
+    // Типы модулей: имя файла .bsl → русское имя типа модуля
+    // =========================================================================
+
+    /**
+     * Имя файла BSL (без пути) → русское имя типа модуля.
+     * <pre>
+     *   "ObjectModule.bsl"    → "МодульОбъекта"
+     *   "ManagerModule.bsl"   → "МодульМенеджера"
+     *   "RecordSetModule.bsl" → "МодульНабораЗаписей"
+     *   "Module.bsl"          → "Модуль"
+     * </pre>
+     */
+    private static final java.util.Map<String, String> BSL_FILENAME_TO_MODULE_RU
+            = new java.util.LinkedHashMap<>();
+
+    /**
+     * Суффиксы русского пути, которые обозначают тип модуля или формы
+     * (последний сегмент полного имени объекта МД).
+     */
+    private static final java.util.Set<String> MODULE_TYPE_SUFFIXES_SET
+            = new java.util.HashSet<>();
+
+    static
+    {
+        BSL_FILENAME_TO_MODULE_RU.put("ObjectModule.bsl",                 "МодульОбъекта");
+        BSL_FILENAME_TO_MODULE_RU.put("ManagerModule.bsl",                "МодульМенеджера");
+        BSL_FILENAME_TO_MODULE_RU.put("RecordSetModule.bsl",              "МодульНабораЗаписей");
+        BSL_FILENAME_TO_MODULE_RU.put("Module.bsl",                       "Модуль");
+        BSL_FILENAME_TO_MODULE_RU.put("ManagedApplicationModule.bsl",     "МодульУправляемогоПриложения");
+        BSL_FILENAME_TO_MODULE_RU.put("OrdinaryApplicationModule.bsl",    "МодульОбычногоПриложения");
+        BSL_FILENAME_TO_MODULE_RU.put("ExternalConnectionModule.bsl",     "МодульВнешнегоСоединения");
+        BSL_FILENAME_TO_MODULE_RU.put("SessionModule.bsl",                "МодульСеанса");
+        BSL_FILENAME_TO_MODULE_RU.put("ValueManagerModule.bsl",           "МодульМенеджераЗначения");
+        BSL_FILENAME_TO_MODULE_RU.put("CommandModule.bsl",                "МодульКоманды");
+
+        MODULE_TYPE_SUFFIXES_SET.add("МодульОбъекта");
+        MODULE_TYPE_SUFFIXES_SET.add("МодульМенеджера");
+        MODULE_TYPE_SUFFIXES_SET.add("МодульНабораЗаписей");
+        MODULE_TYPE_SUFFIXES_SET.add("МодульМенеджераЗначения");
+        MODULE_TYPE_SUFFIXES_SET.add("МодульКоманды");
+        MODULE_TYPE_SUFFIXES_SET.add("МодульСеанса");
+        MODULE_TYPE_SUFFIXES_SET.add("МодульУправляемогоПриложения");
+        MODULE_TYPE_SUFFIXES_SET.add("МодульОбычногоПриложения");
+        MODULE_TYPE_SUFFIXES_SET.add("МодульВнешнегоСоединения");
+        MODULE_TYPE_SUFFIXES_SET.add("Модуль");
+        MODULE_TYPE_SUFFIXES_SET.add("Форма");
+    }
+
+    /**
+     * Имя файла BSL → русское имя типа модуля.
+     * @return например {@code "МодульОбъекта"}, или {@code null} если неизвестен
+     */
+    public static String bslFilenameToModuleRu(String filename)
+    {
+        return BSL_FILENAME_TO_MODULE_RU.get(filename);
+    }
+
+    /**
+     * Является ли строка суффиксом-типом модуля (или формы) в полном пути МД.
+     * Например {@code "МодульМенеджера"}, {@code "Форма"} — {@code true}.
+     */
+    public static boolean isModuleTypeSuffix(String suffix)
+    {
+        return MODULE_TYPE_SUFFIXES_SET.contains(suffix);
+    }
+
+    /**
+     * Преобразует полное имя модуля в «прямое» имя для документирующих ссылок.
+     * Точный порт функции {@code ирОбщий.ПрямоеИмяМодуляИзПолного} из приложения ИР.
+     *
+     * <pre>
+     *   "Справочник.Валюты.МодульОбъекта"    → "СправочникОбъект.Валюты"
+     *   "Справочник.Валюты.МодульМенеджера"  → "Справочники.Валюты"
+     *   "Обработка.Код.МодульКоманды"        → "Обработка.Код"
+     *   "ОбщийМодуль.МойМодуль"              → "МойМодуль"
+     *   "ОбщийМодуль.МойМодуль.Модуль"       → "МойМодуль"
+     * </pre>
+     *
+     * @return прямое имя модуля, или пустая строка если не определяется
+     */
+    public static String directModuleName(String modulePath)
+    {
+        if (modulePath == null || modulePath.isBlank()) return "";
+
+        String[] arr = modulePath.split("\\.", -1);
+        if (arr.length == 1) return ""; // внешний модуль
+
+        java.util.List<String> parts = new java.util.ArrayList<>(java.util.Arrays.asList(arr));
+        int last = parts.size() - 1;
+
+        if (last >= 1 && "Форма".equals(parts.get(last)))
+        {
+            parts.remove(last);
+        }
+        else if ("МодульОбъекта".equals(parts.get(last)))
+        {
+            parts.remove(last);
+            parts.set(0, parts.get(0) + "Объект");
+        }
+        else if ("МодульКоманды".equals(parts.get(last)))
+        {
+            parts.remove(last);
+        }
+        else if ("МодульМенеджера".equals(parts.get(last)))
+        {
+            parts.remove(last);
+            String ruPlural = ruToRuPlural(parts.get(0));
+            if (ruPlural != null) parts.set(0, ruPlural);
+        }
+        else if ("ОбщийМодуль".equals(parts.get(0)))
+        {
+            parts.remove(0);
+        }
+
+        // Убрать завершающий "Модуль" (общий финальный шаг)
+        if (!parts.isEmpty() && "Модуль".equals(parts.get(parts.size() - 1)))
+            parts.remove(parts.size() - 1);
+
+        return String.join(".", parts);
+    }
+
+    // =========================================================================
     // Совместимость
     // =========================================================================
 
@@ -292,8 +414,9 @@ public final class MdTypeMapping
         }
         return null;
     }
+
     public static String ruToEnSingRequired(String ru)
     {
         return RU_TO_EN_SING.get(ru);
-    } 
+    }
 }

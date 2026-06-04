@@ -129,6 +129,36 @@ public final class Global
         return null;
     }
 
+    /** Как {@link #invoke}, но {@code true} если метод найден и вызван (в т.ч. {@code void}). */
+    public static boolean invokeVoid(Object obj, String methodName, Object... args)
+    {
+        if (obj == null || methodName == null) return false;
+        int argc = args == null ? 0 : args.length;
+        for (Class<?> c = obj.getClass(); c != null; c = c.getSuperclass())
+        {
+            for (java.lang.reflect.Method m : c.getDeclaredMethods())
+            {
+                if (m.getName().equals(methodName) && m.getParameterCount() == argc)
+                {
+                    try
+                    {
+                        m.setAccessible(true);
+                        m.invoke(obj, args);
+                        return true;
+                    }
+                    catch (java.lang.reflect.InvocationTargetException e)
+                    {
+                        Throwable cause = e.getCause();
+                        if (cause instanceof RuntimeException) throw (RuntimeException) cause;
+                        throw new RuntimeException(cause);
+                    }
+                    catch (Exception ignored) { return false; }
+                }
+            }
+        }
+        return false;
+    }
+
     /**
      * Вызывает публичный метод {@code methodName} без аргументов на объекте {@code obj}.
      *

@@ -3,11 +3,16 @@ import org.eclipse.jface.viewers.DelegatingStyledCellLabelProvider;
 import org.eclipse.jface.viewers.DelegatingStyledCellLabelProvider.IStyledLabelProvider;
 import org.eclipse.jface.viewers.IBaseLabelProvider;
 import org.eclipse.jface.viewers.ILabelProvider;
+import org.eclipse.jface.viewers.CheckboxTreeViewer;
+import org.eclipse.jface.viewers.ICheckStateProvider;
+import org.eclipse.jface.viewers.LabelProvider;
+import org.eclipse.jface.viewers.StyledCellLabelProvider;
 import org.eclipse.jface.viewers.TreeViewer;
 import org.eclipse.jface.viewers.ViewerFilter;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.ModifyEvent;
 import org.eclipse.swt.events.ModifyListener;
+import org.eclipse.swt.custom.StyledText;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
@@ -20,8 +25,7 @@ import org.eclipse.swt.widgets.TreeItem;
 import org.eclipse.ui.IStartup;
 
 /**
- * Перехватчик открытия окна Quick Outline для замены стандартного поиска на "Умный".
- * TODO подключить к окну "Открыть объект метаданных" com._1c.g5.v8.dt.md.ui.dialogs.OpenMdObjectSelectionDialog.class
+ * Перехватчик окон с деревом и полем поиска: Quick Outline, «Редактирование типа данных» (SelectTypeDialog).
  */
 public class SmartOutlineHook implements IStartup {
 
@@ -34,6 +38,9 @@ public class SmartOutlineHook implements IStartup {
     }
     
     private static final String PATCHED_KEY = "tormozit.outlinePatched";
+    /** Заголовок {@code SelectTypeDialog_title} / {@code TypeDescriptionDialogComponent_DialogTitle}. */
+    private static final String SELECT_TYPE_DIALOG_TITLE =
+            "\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u0435 \u0442\u0438\u043f\u0430 \u0434\u0430\u043d\u043d\u044b\u0445"; //$NON-NLS-1$
 
     public static void install(Display display) {
         if (display == null || display.isDisposed()) return;
@@ -42,15 +49,15 @@ public class SmartOutlineHook implements IStartup {
             @Override
             public void handleEvent(Event event) {
                 if (!(event.widget instanceof Shell)) return;
-                
+
                 Shell shell = (Shell) event.widget;
                 if (shell.getData(PATCHED_KEY) != null) return;
 
-                display.asyncExec(() -> {
-                    if (!shell.isDisposed()) {
-                        tryPatchOutline(shell);
-                    }
-                });
+                String title = shell.getText();
+                if (!mightBeSmartFilterShell(shell, title))
+                    return;
+
+                schedulePatchAttempt(display, shell, 0);
             }
         };
 
@@ -58,88 +65,276 @@ public class SmartOutlineHook implements IStartup {
         display.addFilter(SWT.Show, listener);
     }
 
-    private static void tryPatchOutline(Shell shell) {
-        if (shell.getData(PATCHED_KEY) != null)
+    private static void schedulePatchAttempt(Display display, Shell shell, int attempt)
+    {
+        if (shell.isDisposed() || shell.getData(PATCHED_KEY) != null)
             return;
-
-        Text filterText = findTextWidget(shell);
-        Tree treeWidget = findTreeWidget(shell);
-
-        if (filterText == null || treeWidget == null) return;
-
-        TreeViewer viewer = findTreeViewer(treeWidget, shell);
-        if (viewer == null || viewer.getContentProvider() == null) return;
-
-        String lpName = viewer.getLabelProvider() != null ? viewer.getLabelProvider().getClass().getName() : "";
-        String cpName = viewer.getContentProvider() != null ? viewer.getContentProvider().getClass().getName() : "";
-        String shellName = shell.getClass().getName();
-        Object dialog = shell.getData();
-        String dialogName = dialog != null ? dialog.getClass().getName() : "";
-        
-        boolean isOutline = lpName.contains("Outline") || cpName.contains("Outline") 
-                         || shellName.contains("Outline") || dialogName.contains("Outline");
-        
-        if (!isOutline) return;
-
-        shell.setData(PATCHED_KEY, Boolean.TRUE);
-        applySmartSearch(viewer, filterText);
+        int delay = attempt == 0 ? 0 : 80;
+        display.timerExec(delay, () -> {
+            if (shell.isDisposed() || shell.getData(PATCHED_KEY) != null)
+                return;
+            if (tryPatchOutline(shell, attempt))
+                return;
+            if (attempt < 12)
+                schedulePatchAttempt(display, shell, attempt + 1);
+        });
     }
 
-    private static TreeViewer findTreeViewer(Tree treeWidget, Shell shell) {
-        Composite parent = treeWidget.getParent();
-        while (parent != null) {
-            Object viewer = Global.invoke(parent, "getTreeViewer");
-            if (viewer instanceof TreeViewer) return (TreeViewer) viewer;
+    /** @return {@code true}, если патч применён */
+    private static boolean tryPatchOutline(Shell shell, int attempt) {
+        if (shell.getData(PATCHED_KEY) != null)
+            return true;
 
-            viewer = Global.invoke(parent, "getViewer");
-            if (viewer instanceof TreeViewer) return (TreeViewer) viewer;
+        Object dialog = findDialog(shell);
+        String dialogName = dialog != null ? dialog.getClass().getName() : "";
+        String shellTitle = shell.getText();
 
-            for (String fieldName : new String[]{"treeViewer", "viewer", "fTreeViewer", "bslTreeViewer"}) {
-                Object fViewer = Global.getField(parent, fieldName);
-                if (fViewer instanceof TreeViewer) return (TreeViewer) fViewer;
-            }
+        Control filterControl = findFilterControl(shell, dialog);
+        Tree treeWidget = findTreeWidget(shell);
 
-            if (parent == shell) break;
-            parent = parent.getParent();
+        if (filterControl == null || treeWidget == null)
+            return false;
+
+        TreeViewer viewer = findTreeViewer(treeWidget, shell, dialog);
+        if (viewer == null || viewer.getContentProvider() == null)
+            return false;
+
+        String lpName = viewer.getLabelProvider() != null ? viewer.getLabelProvider().getClass().getName() : "";
+        String cpName = viewer.getContentProvider().getClass().getName();
+        String shellName = shell.getClass().getName();
+
+        if (!isSmartFilterTarget(shell, shellTitle, lpName, cpName, shellName, dialogName))
+            return false;
+
+        shell.setData(PATCHED_KEY, Boolean.TRUE);
+
+        disableSearchBoxesInShell(shell, shell, viewer);
+
+        applySmartSearch(viewer, filterControl, shellTitle, dialogName, dialog, shell);
+        return true;
+    }
+
+    private static boolean mightBeSmartFilterShell(Shell shell, String title)
+    {
+        if (shell.getClass().getName().contains("WorkbenchWindow") //$NON-NLS-1$
+                && (title == null || !title.contains(SELECT_TYPE_DIALOG_TITLE)))
+            return false;
+        if (findTreeWidget(shell) == null)
+            return false;
+        if (title != null && (title.contains(SELECT_TYPE_DIALOG_TITLE) || title.contains("\u0442\u0438\u043f\u0430 \u0434\u0430\u043d\u043d\u044b\u0445"))) //$NON-NLS-1$
+            return true;
+        Object data = shell.getData();
+        if (data != null) {
+            String n = data.getClass().getName();
+            if (n.contains("Outline") || n.contains("SelectTypeDialog") || n.contains("TypeDescriptionDialog") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    || n.contains("LwtDialogRenderer") || n.contains("aef2.lwt")) //$NON-NLS-4$ //$NON-NLS-5$
+                return true;
         }
+        if (title != null && title.toLowerCase().contains("outline")) //$NON-NLS-1$
+            return true;
+        return findFilterControl(shell, findDialog(shell)) != null;
+    }
 
-        Object dialog = shell.getData();
-        if (dialog != null) {
-            for (String fieldName : new String[]{"treeViewer", "viewer", "fTreeViewer", "outlineViewer"}) {
-                Object viewer = Global.getField(dialog, fieldName);
-                if (viewer instanceof TreeViewer) return (TreeViewer) viewer;
-            }
-            Object viewer = Global.invoke(dialog, "getTreeViewer");
-            if (viewer instanceof TreeViewer) return (TreeViewer) viewer;
+    private static boolean isSmartFilterTarget(Shell shell, String shellTitle, String lpName, String cpName,
+            String shellName, String dialogName)
+    {
+        if (lpName.contains("Outline") || cpName.contains("Outline") //$NON-NLS-1$ //$NON-NLS-2$
+                || shellName.contains("Outline") || dialogName.contains("Outline")) //$NON-NLS-1$ //$NON-NLS-2$
+            return true;
+        if (dialogName.contains("SelectTypeDialog") || dialogName.contains("TypeDescriptionDialog")) //$NON-NLS-1$ //$NON-NLS-2$
+            return true;
+        if (dialogName.contains("LwtDialogRenderer") || dialogName.contains("LwtDialog")) //$NON-NLS-1$ //$NON-NLS-2$
+            return true;
+        if (shellTitle != null && shellTitle.contains(SELECT_TYPE_DIALOG_TITLE))
+            return true;
+        if (lpName.contains("TypeInfo") || cpName.contains("TypeInfo") //$NON-NLS-1$ //$NON-NLS-2$
+                || lpName.contains("SelectType") || cpName.contains("SelectType")) //$NON-NLS-1$ //$NON-NLS-2$
+            return true;
+        for (ViewerFilter f : findViewerFilters(shell))
+        {
+            if (f.getClass().getName().contains("SelectTypeDialogFilter")) //$NON-NLS-1$
+                return true;
         }
+        return false;
+    }
 
-        int[] vitalEvents = { SWT.Selection, SWT.Expand, SWT.Collapse };
-        for (int eventType : vitalEvents) {
-            for (Listener listener : treeWidget.getListeners(eventType)) {
-                Object outer = Global.getField(listener, "this$0");
-                if (outer instanceof TreeViewer) return (TreeViewer) outer;
+    private static ViewerFilter[] findViewerFilters(Shell shell)
+    {
+        Tree tree = findTreeWidget(shell);
+        if (tree == null)
+            return new ViewerFilter[0];
+        TreeViewer viewer = findTreeViewer(tree, shell, findDialog(shell));
+        return viewer != null ? viewer.getFilters() : new ViewerFilter[0];
+    }
 
-                Object viewer = Global.getField(listener, "viewer");
-                if (viewer instanceof TreeViewer) return (TreeViewer) viewer;
-
-                viewer = Global.getField(listener, "treeViewer");
-                if (viewer instanceof TreeViewer) return (TreeViewer) viewer;
+    private static Object findDialog(Shell shell)
+    {
+        Object data = shell.getData();
+        if (data != null)
+            return data;
+        Object win = shell.getData("org.eclipse.jface.window.Window"); //$NON-NLS-1$
+        if (win != null)
+            return win;
+        Tree tree = findTreeWidget(shell);
+        if (tree == null)
+            return null;
+        int[] events = { SWT.Selection, SWT.Expand, SWT.Collapse, SWT.Modify };
+        for (int eventType : events) {
+            for (Listener listener : tree.getListeners(eventType)) {
+                Object outer = Global.getField(listener, "this$0"); //$NON-NLS-1$
+                if (outer != null) {
+                    String n = outer.getClass().getName();
+                    if (n.contains("SelectTypeDialog") || n.contains("TypeDescriptionDialog")) //$NON-NLS-1$ //$NON-NLS-2$
+                        return outer;
+                }
             }
         }
         return null;
     }
 
-private static void applySmartSearch(TreeViewer viewer, Text filterText) {
+    private static Object findSearchBox(Object dialog)
+    {
+        return dialog != null ? Global.getField(dialog, "searchBox") : null; //$NON-NLS-1$
+    }
+
+    /** Отключаем авто-поиск SearchBox; {@code DtTreeView$SearchListener} сохраняем для подсветки. */
+    private static void disableSearchBoxesInShell(Composite root, Shell shell, TreeViewer viewer)
+    {
+        if (root == null || root.isDisposed())
+            return;
+        for (Control child : root.getChildren())
+        {
+            if (child.getClass().getName().contains("SearchBox")) //$NON-NLS-1$
+            {
+                Object listener = Global.getField(child, "searchListener"); //$NON-NLS-1$
+                if (listener != null && listener.getClass().getName().contains("DtTreeView$SearchListener")) //$NON-NLS-1$
+                    storeAefSearchListener(shell, viewer, listener);
+                Global.invoke(child, "setSearchListener", (Object) null); //$NON-NLS-1$
+                Global.invoke(child, "setRunSearchOnTextChange", Boolean.FALSE); //$NON-NLS-1$
+            }
+            if (child instanceof Composite)
+                disableSearchBoxesInShell((Composite) child, shell, viewer);
+        }
+    }
+
+    private static void storeAefSearchListener(Shell shell, TreeViewer viewer, Object listener)
+    {
+        if (shell != null)
+            shell.setData(AefTreeItemHighlight.SAVED_LISTENER_KEY, listener);
+        if (viewer != null)
+        {
+            Control control = viewer.getControl();
+            if (control != null)
+                control.setData(AefTreeItemHighlight.SAVED_LISTENER_KEY, listener);
+        }
+    }
+
+    private static TreeViewer findTreeViewer(Tree treeWidget, Shell shell, Object dialog)
+    {
+        TreeViewer viewer = findTreeViewerInParents(treeWidget, shell);
+        if (viewer != null)
+            return viewer;
+        if (dialog == null)
+            dialog = findDialog(shell);
+        if (dialog != null)
+        {
+            for (String fieldName : new String[] { "treeViewer", "viewer", "fTreeViewer", "outlineViewer" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            {
+                Object v = Global.getField(dialog, fieldName);
+                if (v instanceof TreeViewer)
+                    return (TreeViewer) v;
+            }
+            Object v = Global.invoke(dialog, "getTreeViewer"); //$NON-NLS-1$
+            if (v instanceof TreeViewer)
+                return (TreeViewer) v;
+        }
+        for (int eventType : new int[] { SWT.Selection, SWT.Expand, SWT.Collapse })
+        {
+            for (Listener listener : treeWidget.getListeners(eventType))
+            {
+                Object outer = Global.getField(listener, "this$0"); //$NON-NLS-1$
+                if (outer instanceof TreeViewer)
+                    return (TreeViewer) outer;
+                Object v = Global.getField(listener, "viewer"); //$NON-NLS-1$
+                if (v instanceof TreeViewer)
+                    return (TreeViewer) v;
+                v = Global.getField(listener, "treeViewer"); //$NON-NLS-1$
+                if (v instanceof TreeViewer)
+                    return (TreeViewer) v;
+            }
+        }
+        return null;
+    }
+
+    private static TreeViewer findTreeViewerInParents(Tree treeWidget, Shell shell)
+    {
+        Composite parent = treeWidget.getParent();
+        while (parent != null)
+        {
+            TreeViewer fromDt = treeViewerOnDtTreeView(parent);
+            if (fromDt != null)
+                return fromDt;
+            Object viewer = Global.invoke(parent, "getTreeViewer"); //$NON-NLS-1$
+            if (viewer instanceof TreeViewer)
+                return (TreeViewer) viewer;
+            viewer = Global.invoke(parent, "getViewer"); //$NON-NLS-1$
+            if (viewer instanceof TreeViewer)
+                return (TreeViewer) viewer;
+            for (String fieldName : new String[] { "treeViewer", "viewer", "fTreeViewer", "bslTreeViewer" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            {
+                Object fViewer = Global.getField(parent, fieldName);
+                if (fViewer instanceof TreeViewer)
+                    return (TreeViewer) fViewer;
+            }
+            if (parent == shell)
+                break;
+            parent = parent.getParent();
+        }
+        return null;
+    }
+
+    private static TreeViewer treeViewerOnDtTreeView(Composite composite)
+    {
+        if (composite == null || !composite.getClass().getName().contains("DtTreeView")) //$NON-NLS-1$
+            return null;
+        String key = dtTreeViewerDataKey();
+        if (key == null)
+            return null;
+        Object data = composite.getData(key);
+        return data instanceof TreeViewer ? (TreeViewer) data : null;
+    }
+
+    private static String dtTreeViewerDataKey()
+    {
+        try
+        {
+            Class<?> c = Class.forName("com._1c.g5.v8.dt.ui.aef.swt.views.DtTreeView"); //$NON-NLS-1$
+            java.lang.reflect.Field f = c.getDeclaredField("TREE_VIEWER_KEY"); //$NON-NLS-1$
+            f.setAccessible(true);
+            Object key = f.get(null);
+            if (key instanceof String)
+                return (String) key;
+        }
+        catch (Exception ignored) {}
+        return null;
+    }
+
+private static void applySmartSearch(TreeViewer viewer, Control filterControl, String shellTitle,
+            String dialogName, Object dialog, Shell patchedShell)
+    {
         for (ViewerFilter filter : viewer.getFilters()) {
             viewer.removeFilter(filter);
         }
 
-        IBaseLabelProvider rawLp = viewer.getLabelProvider();
+        IBaseLabelProvider rawLp = resolveNativeLabelProvider(viewer, dialog, viewer.getLabelProvider());
+        restoreCheckStateProvider(viewer, dialog);
+
         ILabelProvider baseLp = createLabelProviderAdapter(rawLp);
-        
-        SmartOutlineFilter smartFilter = new SmartOutlineFilter(baseLp);
-        smartFilter.setPattern(filterText.getText());
-        
+
+        boolean typeTree = isTypeTreeDialog(shellTitle, dialogName);
+        SmartOutlineFilter smartFilter = new SmartOutlineFilter(baseLp, typeTree, typeTree);
+        smartFilter.setPattern(getFilterPattern(filterControl));
+
         IStyledLabelProvider innerStyledLp = null;
         if (rawLp instanceof DelegatingStyledCellLabelProvider) {
             innerStyledLp = ((DelegatingStyledCellLabelProvider) rawLp).getStyledStringProvider();
@@ -147,23 +342,17 @@ private static void applySmartSearch(TreeViewer viewer, Text filterText) {
             innerStyledLp = (IStyledLabelProvider) rawLp;
         }
 
-        final SmartOutlineLabelProvider finalSmartLabelProvider;
-        if (innerStyledLp != null) {
-            SmartOutlineLabelProvider smartLabelProvider = new SmartOutlineLabelProvider(innerStyledLp);
-            smartLabelProvider.setPattern(filterText.getText());
-            
-            if (rawLp instanceof DelegatingStyledCellLabelProvider) {
-                injectStyledStringProvider((DelegatingStyledCellLabelProvider) rawLp, smartLabelProvider);
-            } else {
-                viewer.setLabelProvider(new DelegatingStyledCellLabelProvider(smartLabelProvider));
-            }
-            finalSmartLabelProvider = smartLabelProvider;
-        } else {
-            finalSmartLabelProvider = null;
+        final SmartLabelHighlight highlightControl = installHighlightProvider(viewer, rawLp, baseLp,
+                innerStyledLp, getFilterPattern(filterControl), dialogName);
+        final boolean aefTree = highlightControl instanceof AefTreeItemHighlight;
+        viewer.addFilter(smartFilter);
+        if (aefTree)
+        {
+            AefTreeItemHighlight aef = (AefTreeItemHighlight) highlightControl;
+            aef.bindContext(smartFilter);
+            aef.apply(viewer, patchedShell);
         }
 
-        viewer.addFilter(smartFilter);
-        
         // ОПТИМИЗАЦИЯ 1: Устанавливаем компаратор ОДИН раз при инициализации.
         // Переданные кэш-карты обновляются внутри smartFilter, компаратор увидит изменения автоматически.
         viewer.setComparator(new SmartOutlineComparator(smartFilter.getNamePremiumCache(), smartFilter.getParamPremiumCache(), baseLp));
@@ -171,11 +360,11 @@ private static void applySmartSearch(TreeViewer viewer, Text filterText) {
         // Контейнер для хранения ссылки на текущую отложенную задачу (дебаунс)
         final Runnable[] pendingFilterTask = new Runnable[1];
 
-        filterText.addModifyListener(new ModifyListener() {
+        addFilterModifyListener(filterControl, new ModifyListener() {
             @Override
             public void modifyText(ModifyEvent e) {            
-                String pattern = filterText.getText();
-                Display display = filterText.getDisplay();
+                String pattern = getFilterPattern(filterControl);
+                Display display = filterControl.getDisplay();
                 
                 // ОПТИМИЗАЦИЯ 2: Дебаунс. Отменяем прошлый таймер, если пользователь продолжает быстро печатать
                 if (pendingFilterTask[0] != null) {
@@ -198,16 +387,19 @@ private static void applySmartSearch(TreeViewer viewer, Text filterText) {
                             // 1. Очищаем кэши и задаем новый текст поиска
                             smartFilter.refreshPattern(pattern);
                             
-                            // 2. Обновляем паттерн для подсветки совпадений жирным цветом
-                            if (finalSmartLabelProvider != null) {
-                                finalSmartLabelProvider.setPattern(pattern);
-                            }
-                            
+                            // 2. Паттерн подсветки (styled label — при refresh; AEF — после refresh)
+                            if (highlightControl != null)
+                                highlightControl.setHighlightPattern(pattern);
+
                             // 3. Выполняем ровно ОДИН refresh дерева
                             viewer.refresh();
-                            
-                            // 4. Железно активируем первую видимую строку в уже отфильтрованном списке
-                            selectFirstVisibleItem(tree);
+
+                            if (highlightControl instanceof AefTreeItemHighlight)
+                                ((AefTreeItemHighlight) highlightControl).apply(viewer, patchedShell);
+
+                            // 4. Выделение первой строки — только для обычного SWT-дерева (AEF/LWT ломает TreeItem)
+                            if (!aefTree)
+                                selectFirstVisibleItem(tree);
                         } finally {
                             // Включаем отрисовку обратно. ОС мгновенно отобразит финальный готовый результат
                             tree.setRedraw(true);
@@ -220,32 +412,57 @@ private static void applySmartSearch(TreeViewer viewer, Text filterText) {
             }
         });
 
-        FilterFieldListNavigation.installTreeNavigation(filterText, viewer.getTree());
+        FilterFieldListNavigation.installTreeNavigation(filterControl, viewer.getTree());
 
-        Display display = filterText.getDisplay();
-        filterText.addDisposeListener(e -> {
+        Display display = filterControl.getDisplay();
+        filterControl.addDisposeListener(e -> {
             if (pendingFilterTask[0] != null && !display.isDisposed()) {
                 display.timerExec(-1, pendingFilterTask[0]);
             }
         });
     }
+
+    private static String getFilterPattern(Control filterControl)
+    {
+        if (filterControl == null || filterControl.isDisposed())
+            return ""; //$NON-NLS-1$
+        if (filterControl instanceof Text)
+            return ((Text) filterControl).getText();
+        if (filterControl instanceof StyledText)
+            return ((StyledText) filterControl).getText();
+        return ""; //$NON-NLS-1$
+    }
+
+    private static void addFilterModifyListener(Control filterControl, ModifyListener listener)
+    {
+        if (filterControl instanceof Text)
+            ((Text) filterControl).addModifyListener(listener);
+        else if (filterControl instanceof StyledText)
+            ((StyledText) filterControl).addModifyListener(listener);
+    }
     private static void selectFirstVisibleItem(Control control) {
         if (control == null || control.isDisposed()) return;
-        if (control instanceof Tree) {
-            Tree tree = (Tree) control;
-            if (tree.getItemCount() > 0) {
-                TreeItem first = tree.getItem(0);
-                TreeItem terminal = getFirstTerminalItem(first);
-                if (terminal != null) {
-                    tree.setSelection(terminal);
-                    tree.showItem(terminal);
-                    Event selectionEvent = new Event();
-                    selectionEvent.widget = tree;
-                    selectionEvent.item = terminal;
-                    tree.notifyListeners(SWT.Selection, selectionEvent);
-                }
-            }
+        if (!(control instanceof Tree))
+            return;
+        Tree tree = (Tree) control;
+        if (tree.getItemCount() <= 0)
+            return;
+        try
+        {
+            TreeItem first = tree.getItem(0);
+            if (first == null || first.isDisposed())
+                return;
+            TreeItem terminal = getFirstTerminalItem(first);
+            if (terminal == null || terminal.isDisposed())
+                return;
+            tree.setSelection(terminal);
+            tree.showItem(terminal);
+            Event selectionEvent = new Event();
+            selectionEvent.widget = tree;
+            selectionEvent.item = terminal;
+            tree.notifyListeners(SWT.Selection, selectionEvent);
         }
+        catch (RuntimeException ignored) {}
     }
     
     private static TreeItem getFirstTerminalItem(TreeItem item) {
@@ -255,23 +472,115 @@ private static void applySmartSearch(TreeViewer viewer, Text filterText) {
         return getFirstTerminalItem(children[0]);
     }
     
+    private static IBaseLabelProvider resolveNativeLabelProvider(TreeViewer viewer, Object dialog,
+            IBaseLabelProvider viewerLp)
+    {
+        if (viewerLp instanceof StyledCellLabelProvider)
+            return viewerLp;
+        if (treeUsesAefViewModels(viewer))
+            return viewerLp;
+
+        Object[] roots = { dialog, viewer };
+        for (Object root : roots)
+        {
+            if (root == null)
+                continue;
+            for (String field : new String[] { "treeComponent", "treeViewer", "fTreeViewer" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            {
+                Object comp = Global.getField(root, field);
+                if (comp == null)
+                    continue;
+                Object lp = Global.invoke(comp, "getLabelProvider"); //$NON-NLS-1$
+                if (lp instanceof StyledCellLabelProvider)
+                    return (IBaseLabelProvider) lp;
+            }
+        }
+        return viewerLp;
+    }
+
+    private static void restoreCheckStateProvider(TreeViewer viewer, Object dialog)
+    {
+        if (viewer == null || dialog == null)
+            return;
+        for (String field : new String[] { "treeComponent", "treeViewer" }) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            Object comp = Global.getField(dialog, field);
+            if (comp == null)
+                continue;
+            Object csp = Global.invoke(comp, "getCheckStateProvider"); //$NON-NLS-1$
+            if (csp instanceof ICheckStateProvider)
+            {
+                ICheckStateProvider checkState = (ICheckStateProvider) csp;
+                if (viewer instanceof CheckboxTreeViewer)
+                    ((CheckboxTreeViewer) viewer).setCheckStateProvider(checkState);
+                else
+                    Global.invoke(viewer, "setCheckStateProvider", checkState); //$NON-NLS-1$
+                return;
+            }
+        }
+    }
+
+    private static boolean isAefRenderedTree(TreeViewer viewer, String dialogName, IBaseLabelProvider rawLp)
+    {
+        if (dialogName != null && (dialogName.contains("LwtDialog") || dialogName.contains("aef2"))) //$NON-NLS-1$ //$NON-NLS-2$
+            return true;
+        if (rawLp != null && LabelProvider.class.getName().equals(rawLp.getClass().getName()))
+            return treeUsesAefViewModels(viewer);
+        return false;
+    }
+
+    private static boolean treeUsesAefViewModels(TreeViewer viewer)
+    {
+        Object cp = viewer.getContentProvider();
+        if (!(cp instanceof org.eclipse.jface.viewers.ITreeContentProvider))
+            return false;
+        org.eclipse.jface.viewers.ITreeContentProvider tcp =
+                (org.eclipse.jface.viewers.ITreeContentProvider) cp;
+        Object[] roots = tcp.getElements(viewer.getInput());
+        if (roots == null || roots.length == 0)
+            return false;
+        return AefTreeItemHighlight.isAefTreeItem(roots[0]);
+    }
+
+    private static SmartLabelHighlight installHighlightProvider(TreeViewer viewer, IBaseLabelProvider rawLp,
+            ILabelProvider baseLp, IStyledLabelProvider innerStyledLp, String initialPattern, String dialogName)
+    {
+        if (isAefRenderedTree(viewer, dialogName, rawLp))
+            return new AefTreeItemHighlight(initialPattern);
+
+        if (rawLp instanceof StyledCellLabelProvider && !(rawLp instanceof SmartStyledCellLabelWrapper))
+        {
+            SmartStyledCellLabelWrapper wrapper = new SmartStyledCellLabelWrapper((StyledCellLabelProvider) rawLp);
+            wrapper.setHighlightPattern(initialPattern);
+            viewer.setLabelProvider(wrapper);
+            return wrapper;
+        }
+
+        SmartOutlineLabelProvider smartLabelProvider = innerStyledLp != null
+                ? new SmartOutlineLabelProvider(innerStyledLp, null)
+                : new SmartOutlineLabelProvider(null, baseLp);
+        smartLabelProvider.setHighlightPattern(initialPattern);
+
+        if (innerStyledLp != null && rawLp instanceof DelegatingStyledCellLabelProvider)
+            injectStyledStringProvider((DelegatingStyledCellLabelProvider) rawLp, smartLabelProvider);
+        else
+            viewer.setLabelProvider(new DelegatingStyledCellLabelProvider(smartLabelProvider));
+        return smartLabelProvider;
+    }
+
+    private static boolean isTypeTreeDialog(String shellTitle, String dialogName)
+    {
+        if (shellTitle != null && shellTitle.contains(SELECT_TYPE_DIALOG_TITLE))
+            return true;
+        return dialogName.contains("SelectTypeDialog") || dialogName.contains("TypeDescriptionDialog") //$NON-NLS-1$ //$NON-NLS-2$
+                || dialogName.contains("LwtDialog"); //$NON-NLS-1$
+    }
+
     private static ILabelProvider createLabelProviderAdapter(IBaseLabelProvider rawLp) {
         return new ILabelProvider() {
             @Override
             public String getText(Object element) {
-                if (rawLp instanceof ILabelProvider) {
-                    return ((ILabelProvider) rawLp).getText(element);
-                }
-                if (rawLp instanceof DelegatingStyledCellLabelProvider) {
-                    IStyledLabelProvider styledProvider = ((DelegatingStyledCellLabelProvider) rawLp).getStyledStringProvider();
-                    if (styledProvider != null) {
-                        org.eclipse.jface.viewers.StyledString ss = styledProvider.getStyledText(element);
-                        return ss != null ? ss.getString() : "";
-                    }
-                }
-                Object text = Global.invoke(rawLp, "getText", element);
-                if (text instanceof String) return (String) text;
-                return element != null ? element.toString() : "";
+                return SmartTreeElementLabels.resolve(element, rawLp);
             }
 
             @Override
@@ -307,6 +616,25 @@ private static void applySmartSearch(TreeViewer viewer, Text filterText) {
         }
     }
     
+    private static Control findFilterControl(Composite parent, Object dialog)
+    {
+        if (dialog == null && parent instanceof Shell)
+            dialog = findDialog((Shell) parent);
+        if (dialog != null)
+        {
+            StyledText fromDialog = styledTextFromSearchBox(findSearchBox(dialog));
+            if (fromDialog != null)
+                return fromDialog;
+        }
+
+        StyledText styled = findStyledTextWidget(parent);
+        if (styled != null)
+            return styled;
+
+        Text text = findTextWidget(parent);
+        return text;
+    }
+
     private static Text findTextWidget(Composite parent) {
         for (Control control : parent.getChildren()) {
             if (control instanceof Text) return (Text) control;
@@ -314,6 +642,38 @@ private static void applySmartSearch(TreeViewer viewer, Text filterText) {
                 Text result = findTextWidget((Composite) control);
                 if (result != null) return result;
             }
+        }
+        return null;
+    }
+
+    private static StyledText findStyledTextWidget(Composite parent)
+    {
+        for (Control control : parent.getChildren()) {
+            if (control instanceof StyledText)
+                return (StyledText) control;
+            if (control.getClass().getName().contains("SearchBox")) //$NON-NLS-1$
+            {
+                StyledText text = styledTextFromSearchBox(control);
+                if (text != null)
+                    return text;
+            }
+            if (control instanceof Composite) {
+                StyledText result = findStyledTextWidget((Composite) control);
+                if (result != null) return result;
+            }
+        }
+        return null;
+    }
+
+    private static StyledText styledTextFromSearchBox(Object searchBox)
+    {
+        if (searchBox == null)
+            return null;
+        for (String field : new String[] { "text", "searchText", "styledText" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            Object text = Global.getField(searchBox, field);
+            if (text instanceof StyledText)
+                return (StyledText) text;
         }
         return null;
     }

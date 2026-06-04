@@ -1,9 +1,14 @@
 package tormozit;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import org.eclipse.jface.resource.JFaceResources;
 import org.eclipse.jface.viewers.StyledString;
 import org.eclipse.jface.viewers.StyledString.Styler;
+import org.eclipse.jface.viewers.ViewerCell;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.custom.StyleRange;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.FontData;
@@ -68,6 +73,47 @@ public final class SmartMatchHighlight
         Styler styler = styler();
         for (SmartMatcher.HighlightRange range : ranges)
             styled.setStyle(range.offset, range.length, styler);
+    }
+
+    /** Добавляет стили подсветки к уже отрисованной ячейке (после штатного label provider). */
+    public static void appendMatchRanges(ViewerCell cell, Iterable<SmartMatcher.HighlightRange> ranges)
+    {
+        if (cell == null || ranges == null)
+            return;
+        String text = cell.getText();
+        if (text == null || text.isEmpty())
+            return;
+
+        StyleRange[] added = toStyleRanges(text, ranges);
+        if (added.length == 0)
+            return;
+
+        StyleRange[] existing = cell.getStyleRanges();
+        if (existing == null || existing.length == 0)
+        {
+            cell.setStyleRanges(added);
+            return;
+        }
+        StyleRange[] merged = new StyleRange[existing.length + added.length];
+        System.arraycopy(existing, 0, merged, 0, existing.length);
+        System.arraycopy(added, 0, merged, existing.length, added.length);
+        cell.setStyleRanges(merged);
+    }
+
+    private static StyleRange[] toStyleRanges(String text, Iterable<SmartMatcher.HighlightRange> ranges)
+    {
+        Color fg = foreground();
+        Font font = boldFont();
+        List<StyleRange> list = new ArrayList<>();
+        for (SmartMatcher.HighlightRange range : ranges)
+        {
+            if (range.offset < 0 || range.length <= 0 || range.offset + range.length > text.length())
+                continue;
+            StyleRange sr = new StyleRange(range.offset, range.length, fg, null);
+            sr.font = font;
+            list.add(sr);
+        }
+        return list.toArray(new StyleRange[0]);
     }
 
     private static Color foreground()

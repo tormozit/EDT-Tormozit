@@ -65,21 +65,8 @@ public class GetRef extends AbstractHandler
         SUBFOLDER_TO_RU.put("Recalculations", "Перерасчет");
     }
 
-    private static final Map<String, String> BSL_TO_MODULE_RU = new LinkedHashMap<>();
-    static
-    {
-        BSL_TO_MODULE_RU.put("ObjectModule.bsl",    "МодульОбъекта");
-        BSL_TO_MODULE_RU.put("ManagerModule.bsl",   "МодульМенеджера");
-        BSL_TO_MODULE_RU.put("RecordSetModule.bsl", "МодульНабораЗаписей");
-        BSL_TO_MODULE_RU.put("Module.bsl",          "Модуль");
-    }
-
     private static final Set<String> TOP_LEVEL_CONTAINERS = new HashSet<>(Arrays.asList(
         "CommonModules", "CommonForms", "CommonTemplates", "CommonPictures", "CommonCommands"
-    ));
-
-    private static final Set<String> MODULE_TYPE_SUFFIXES = new HashSet<>(Arrays.asList(
-        "МодульОбъекта", "МодульМенеджера", "МодульНабораЗаписей", "Модуль", "Форма"
     ));
 
     private static final Pattern METHOD_START = Pattern.compile(
@@ -224,68 +211,6 @@ public class GetRef extends AbstractHandler
     }
 
     // =========================================================================
-    // Прямое имя модуля (порт ирОбщий.ПрямоеИмяМодуляИзПолного)
-    // =========================================================================
-
-    /**
-     * Преобразует полное имя модуля в «прямое» имя для документирующих ссылок.
-     * Точный порт функции {@code ирОбщий.ПрямоеИмяМодуляИзПолного} из приложения ИР.
-     *
-     * <pre>
-     *   "Справочник.Валюты.МодульОбъекта"         → "СправочникОбъект.Валюты"
-     *   "Справочник.Валюты.МодульМенеджера"        → "Справочники.Валюты"
-     *   "Обработка.Код.МодульКоманды"              → "Обработка.Код"
-     *   "ОбщийМодуль.МойМодуль"                   → "МойМодуль"
-     *   "ОбщийМодуль.МойМодуль.Модуль"             → "МойМодуль"
-     *   "Тип.Объект.Форма.Форма.Модуль"            → "Тип.Объект"   (убирает Форма+Модуль)
-     * </pre>
-     *
-     * @return прямое имя модуля или пустая строка если имя не определяется
-     */
-    private static String getDirectModuleName(String modulePath)
-    {
-        if (modulePath == null || modulePath.isBlank()) return ""; //$NON-NLS-1$
-
-        String[] arr = modulePath.split("\\.", -1); //$NON-NLS-1$
-        if (arr.length == 1) return ""; // Внешний модуль //$NON-NLS-1$
-
-        List<String> parts = new ArrayList<>(Arrays.asList(arr));
-        int last = parts.size() - 1;
-
-        if (last >= 1 && "Форма".equals(parts.get(last))) //$NON-NLS-1$
-        {
-            // ...Форма → убрать (ТолькоВычисляемое = Ложь)
-            parts.remove(last);
-        }
-        else if ("МодульОбъекта".equals(parts.get(last))) //$NON-NLS-1$
-        {
-            parts.remove(last);
-            parts.set(0, parts.get(0) + "Объект"); // "Справочник" → "СправочникОбъект" //$NON-NLS-1$
-        }
-        else if ("МодульКоманды".equals(parts.get(last))) //$NON-NLS-1$
-        {
-            parts.remove(last);
-        }
-        else if ("МодульМенеджера".equals(parts.get(last))) //$NON-NLS-1$
-        {
-            parts.remove(last);
-            // ИмяТипаМДМножественноеИзЕдинЛкс: "Справочник" → "Справочники"
-            String ruPlural = MdTypeMapping.ruToRuPlural(parts.get(0));
-            if (ruPlural != null) parts.set(0, ruPlural);
-        }
-        else if ("ОбщийМодуль".equals(parts.get(0))) //$NON-NLS-1$
-        {
-            parts.remove(0);
-        }
-
-        // Убрать завершающий "Модуль" (общий финальный шаг)
-        if (!parts.isEmpty() && "Модуль".equals(parts.get(parts.size() - 1))) //$NON-NLS-1$
-            parts.remove(parts.size() - 1);
-
-        return String.join(".", parts); //$NON-NLS-1$
-    }
-
-    // =========================================================================
     // Конвертация пути файла → путь модуля для ссылок
     // =========================================================================
 
@@ -342,7 +267,7 @@ public class GetRef extends AbstractHandler
         if (lastDot < 0) return modulePath;
         if (modulePath.indexOf('.') == lastDot) return modulePath;
         String last = modulePath.substring(lastDot + 1);
-        return MODULE_TYPE_SUFFIXES.contains(last) ? modulePath.substring(0, lastDot) : modulePath;
+        return MdTypeMapping.isModuleTypeSuffix(last) ? modulePath.substring(0, lastDot) : modulePath;
     }
 
     // =========================================================================
@@ -614,7 +539,7 @@ public class GetRef extends AbstractHandler
         {
             if (p.length < 4) return base;
             if (TOP_LEVEL_CONTAINERS.contains(p[0])) return base;
-            String moduleSuffix = BSL_TO_MODULE_RU.get(p[3]);
+            String moduleSuffix = MdTypeMapping.bslFilenameToModuleRu(p[3]);
             return moduleSuffix != null ? base + "." + moduleSuffix : base; //$NON-NLS-1$
         }
         String sectionRu = SUBFOLDER_TO_RU.get(seg2);
@@ -709,7 +634,7 @@ public class GetRef extends AbstractHandler
 
         /**
          * Строит ссылку на метод для документирующих комментариев.
-         * Использует {@link GetRef#getDirectModuleName} — порт функции
+         * Использует {@link MdTypeMapping#directModuleName} — порт функции
          * {@code ирОбщий.ПрямоеИмяМодуляИзПолного} из приложения ИР.
          *
          * <pre>
@@ -724,7 +649,7 @@ public class GetRef extends AbstractHandler
         String getModuleDocRef()
         {
             if (method == null) return null;
-            String directName = getDirectModuleName(moduleRef.modulePath);
+            String directName = MdTypeMapping.directModuleName(moduleRef.modulePath);
             if (directName == null || directName.isBlank()) return null;
             return "см. " + directName + "." + method.name; //$NON-NLS-1$ //$NON-NLS-2$
         }

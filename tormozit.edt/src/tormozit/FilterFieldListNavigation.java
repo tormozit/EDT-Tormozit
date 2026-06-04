@@ -3,6 +3,8 @@ package tormozit;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.KeyAdapter;
 import org.eclipse.swt.events.KeyEvent;
+import org.eclipse.swt.custom.StyledText;
+import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Event;
 import org.eclipse.swt.widgets.Table;
@@ -89,11 +91,23 @@ public final class FilterFieldListNavigation
 
     public static void installTreeNavigation(Text filterText, Tree tree)
     {
-        if (Boolean.TRUE.equals(filterText.getData(INSTALLED_KEY)))
-            return;
-        filterText.setData(INSTALLED_KEY, Boolean.TRUE);
+        installTreeNavigation((Control) filterText, tree);
+    }
 
-        filterText.addKeyListener(new KeyAdapter()
+    public static void installTreeNavigation(StyledText filterText, Tree tree)
+    {
+        installTreeNavigation((Control) filterText, tree);
+    }
+
+    public static void installTreeNavigation(Control filterControl, Tree tree)
+    {
+        if (filterControl == null || tree == null)
+            return;
+        if (Boolean.TRUE.equals(filterControl.getData(INSTALLED_KEY)))
+            return;
+        filterControl.setData(INSTALLED_KEY, Boolean.TRUE);
+
+        filterControl.addKeyListener(new KeyAdapter()
         {
             @Override
             public void keyPressed(KeyEvent e)
@@ -102,22 +116,22 @@ public final class FilterFieldListNavigation
                     return;
                 navigateTree(tree, e.keyCode);
                 e.doit = false;
-                keepFilterFocus(filterText);
+                keepFilterFocus(filterControl);
             }
         });
     }
 
     /** После programmatic selection Tree/Table забирают фокус — возвращаем в поле фильтра. */
-    private static void keepFilterFocus(Text filterText)
+    private static void keepFilterFocus(Control filterControl)
     {
-        if (filterText == null || filterText.isDisposed())
+        if (filterControl == null || filterControl.isDisposed())
             return;
-        Display display = filterText.getDisplay();
+        Display display = filterControl.getDisplay();
         if (display == null || display.isDisposed())
             return;
         display.asyncExec(() -> {
-            if (!filterText.isDisposed())
-                filterText.forceFocus();
+            if (!filterControl.isDisposed())
+                filterControl.forceFocus();
         });
     }
 
