@@ -3,10 +3,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$versionFile = Join-Path $Root 'version.properties'
+$versionFile = Join-Path $Root 'tormozit.edt.site\version.txt'
 
 if (-not (Test-Path $versionFile)) {
-    Write-Error "version.properties not found: $versionFile"
+    Write-Error "version.txt not found: $versionFile"
 }
 
 $release = $null
@@ -17,7 +17,7 @@ Get-Content -LiteralPath $versionFile -Encoding UTF8 | ForEach-Object {
 }
 
 if (-not $release) {
-    Write-Error "comfort.release not found in version.properties (expected format: 1.0.0.10)"
+    Write-Error "comfort.release not found in version.txt (expected format: 1.0.0.10)"
 }
 
 $qualifier = "$release-qualifier"
