@@ -10,6 +10,7 @@
     <startup class="tormozit.MoxelEditorHook"/>
     <startup class="tormozit.BSLEditorMenuHook"/> 
     <startup class="tormozit.TextEditorRightClickCaretHook"/>
+    <startup class="tormozit.FormEditorRightClickSelectHook"/>
     <startup class="tormozit.SmartOutlineHook"/> 
     <startup class="tormozit.NavigatorFilterHook"/>
     <startup class="tormozit.OpenMdObjectHook"/>
