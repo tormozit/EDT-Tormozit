@@ -37,6 +37,8 @@ import org.eclipse.ui.navigator.CommonViewer;
 public final class NavigatorFilterHook implements IStartup
 {
     private static final String PATCHED_KEY = "tormozit.navigatorFilterPatched"; //$NON-NLS-1$
+    private static final String LAST_PATTERN_KEY = "tormozit.navigatorLastPattern"; //$NON-NLS-1$
+    private static final String SEARCH_CACHE_KEY = "tormozit.navigatorSearchCache"; //$NON-NLS-1$
     private static final String STORED_NAV_FILTERS_KEY = "tormozit.storedNavFilters"; //$NON-NLS-1$
     private static final String NAV_SEARCH_FILTER = "NavigatorSearchFilter"; //$NON-NLS-1$
     private static volatile String lastGiveUpReason = ""; //$NON-NLS-1$
@@ -221,12 +223,13 @@ public final class NavigatorFilterHook implements IStartup
             deactivateNavigatorFilters(navigator, viewer);
 
         final IBaseLabelProvider labelBase = rawLp;
+        final NavigatorSearchTextCache searchCache = new NavigatorSearchTextCache();
         ILabelProvider filterLabels = new ILabelProvider()
         {
             @Override
             public String getText(Object element)
             {
-                return NavigatorTreeElementLabels.resolveSearchText(element, labelBase);
+                return searchCache.searchText(element, labelBase);
             }
 
             @Override
@@ -262,7 +265,7 @@ public final class NavigatorFilterHook implements IStartup
         SmartOutlineFilter smartFilter = new SmartOutlineFilter(filterLabels, true, false);
         smartFilter.setPattern(initialPattern);
 
-        SmartLabelHighlight highlight = installNavigatorHighlight(viewer, rawLp, filterLabels, initialPattern);
+        SmartLabelHighlight highlight = installNavigatorHighlight(viewer, rawLp, filterLabels, searchCache, initialPattern);
         if (highlight == null)
         {
             lastGiveUpReason = "highlight=null lp=" + rawLp.getClass().getName(); //$NON-NLS-1$
@@ -281,7 +284,7 @@ public final class NavigatorFilterHook implements IStartup
                 + " pattern=\"" + initialPattern + "\""); //$NON-NLS-1$ //$NON-NLS-2$
         logNativeSearchState(navigator);
 
-        applyFilter(navigator, viewer, smartFilter, highlight, initialPattern);
+        applyFilter(navigator, viewer, smartFilter, highlight, searchCache, initialPattern);
 
         final Runnable[] pending = new Runnable[1];
         final SearchBoxFilterAccess input = searchInput;
@@ -295,7 +298,7 @@ public final class NavigatorFilterHook implements IStartup
                 String pattern = explicitPattern != null ? explicitPattern : input.readPattern();
                 NavigatorFilterDebug.log("modify pattern=\"" + pattern + "\" mode=" + input.mode() //$NON-NLS-1$ //$NON-NLS-2$
                         + (explicitPattern != null ? " explicit" : " read")); //$NON-NLS-1$ //$NON-NLS-2$
-                applyFilter(navigator, viewer, smartFilter, highlight, pattern);
+                applyFilter(navigator, viewer, smartFilter, highlight, searchCache, pattern);
             };
             display.timerExec(150, pending[0]);
         });
@@ -311,16 +314,17 @@ public final class NavigatorFilterHook implements IStartup
         }
 
         tree.setData(PATCHED_KEY, Boolean.TRUE);
+        tree.setData(SEARCH_CACHE_KEY, searchCache);
         return true;
     }
 
     private static SmartLabelHighlight installNavigatorHighlight(CommonViewer viewer, IBaseLabelProvider rawLp,
-            ILabelProvider filterLabels, String initialPattern)
+            ILabelProvider filterLabels, NavigatorSearchTextCache searchCache, String initialPattern)
     {
         if (rawLp instanceof StyledCellLabelProvider)
         {
             NavigatorStyledCellLabelWrapper wrapper =
-                    new NavigatorStyledCellLabelWrapper((StyledCellLabelProvider) rawLp);
+                    new NavigatorStyledCellLabelWrapper((StyledCellLabelProvider) rawLp, searchCache);
             wrapper.setHighlightPattern(initialPattern);
             viewer.setLabelProvider(wrapper);
             return wrapper;
@@ -390,7 +394,7 @@ public final class NavigatorFilterHook implements IStartup
     }
 
     private static void applyFilter(IViewPart navigator, CommonViewer viewer, SmartOutlineFilter smartFilter,
-            SmartLabelHighlight highlight, String pattern)
+            SmartLabelHighlight highlight, NavigatorSearchTextCache searchCache, String pattern)
     {
         if (viewer.getControl() == null || viewer.getControl().isDisposed())
             return;
@@ -398,7 +402,12 @@ public final class NavigatorFilterHook implements IStartup
         if (tree == null || tree.isDisposed())
             return;
         String safePattern = pattern != null ? pattern : ""; //$NON-NLS-1$
+        if (searchCache != null)
+            searchCache.onPatternChanged(safePattern);
         boolean filtering = !safePattern.isEmpty();
+        Object lastObj = tree.getData(LAST_PATTERN_KEY);
+        String lastPattern = lastObj instanceof String ? (String) lastObj : ""; //$NON-NLS-1$
+        boolean clearingFilter = !filtering && !lastPattern.isEmpty();
         IStructuredSelection savedSelection = null;
         if (!filtering && viewer.getSelection() instanceof IStructuredSelection)
             savedSelection = (IStructuredSelection) viewer.getSelection();
@@ -415,7 +424,8 @@ public final class NavigatorFilterHook implements IStartup
             else
             {
                 removeSmartFilter(viewer, smartFilter);
-                resetNavigatorContentState(navigator, viewer);
+                if (clearingFilter)
+                    resetNavigatorContentState(navigator, viewer);
             }
             viewer.refresh();
             // refresh() навигатора может сбросить фильтры
@@ -424,6 +434,7 @@ public final class NavigatorFilterHook implements IStartup
                 ensureSmartFilter(viewer, smartFilter);
                 suppressNativeSearch(navigator, viewer);
                 smartFilter.applyTreeExpansion(viewer);
+                viewer.refresh();
             }
             else
                 restoreTreeStateAfterClear(viewer, smartFilter, savedSelection);
@@ -431,6 +442,7 @@ public final class NavigatorFilterHook implements IStartup
                     + " " + NavigatorFilterDebug.filtersDesc(viewer)); //$NON-NLS-1$
             if (navigator != null)
                 logNativeSearchState(navigator);
+            tree.setData(LAST_PATTERN_KEY, safePattern);
         }
         finally
         {
@@ -518,6 +530,9 @@ public final class NavigatorFilterHook implements IStartup
 
     private static void resetNavigatorContentState(IViewPart navigator, CommonViewer viewer)
     {
+        triggerNativeSearchClear(navigator);
+        clearNavigatorTreePredicate(navigator);
+
         if (viewer != null)
         {
             Tree tree = viewer.getTree();
@@ -531,7 +546,7 @@ public final class NavigatorFilterHook implements IStartup
                         if (filter != null)
                         {
                             Global.invokeVoid(filter, "refresh"); //$NON-NLS-1$
-                            viewer.removeFilter(filter);
+                            viewer.addFilter(filter);
                         }
                     }
                 }
@@ -545,6 +560,42 @@ public final class NavigatorFilterHook implements IStartup
         tryInvokeDeactivateFilter(navigator);
         Global.invokeVoid(navigator, "applyFilterNonBlockingUi", ""); //$NON-NLS-1$ //$NON-NLS-2$
         NavigatorFilterDebug.log("resetContent " + NavigatorFilterDebug.filtersDesc(viewer)); //$NON-NLS-1$
+    }
+
+    /** Сброс штатного SearchPerformer (PredicateFilter + content provider). */
+    private static void triggerNativeSearchClear(IViewPart navigator)
+    {
+        if (navigator == null)
+            return;
+        Object searchPerformer = Global.getField(navigator, "searchPerformer"); //$NON-NLS-1$
+        if (searchPerformer != null)
+            Global.invoke(searchPerformer, "performSearch", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        Object searchBox = Global.getField(navigator, "searchBox"); //$NON-NLS-1$
+        if (searchBox != null)
+            Global.invoke(searchBox, "performSearch", ""); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** Сброс PredicateFilter на AEF-дереве навигатора. */
+    private static void clearNavigatorTreePredicate(IViewPart navigator)
+    {
+        if (navigator == null)
+            return;
+        for (String field : new String[] { "tree", "navigatorTree", "treeComponent", "contentArea" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        {
+            Object treeComp = Global.getField(navigator, field);
+            if (treeComp == null)
+                continue;
+            Object model = Global.invoke(treeComp, "getTreeModel"); //$NON-NLS-1$
+            if (model == null)
+                model = Global.invoke(treeComp, "getModel"); //$NON-NLS-1$
+            if (model == null)
+                continue;
+            Object predicateFilter = Global.invoke(model, "getFilter"); //$NON-NLS-1$
+            if (predicateFilter != null)
+                Global.invoke(predicateFilter, "setPredicate", (Object) null); //$NON-NLS-1$
+            Global.invokeVoid(treeComp, "refresh"); //$NON-NLS-1$
+            break;
+        }
     }
 
     private static void removeNavigatorSearchFiltersFromViewer(CommonViewer viewer)

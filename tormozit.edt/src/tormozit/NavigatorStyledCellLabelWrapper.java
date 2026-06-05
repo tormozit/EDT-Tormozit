@@ -18,17 +18,26 @@ public final class NavigatorStyledCellLabelWrapper extends StyledCellLabelProvid
         implements SmartLabelHighlight, ILabelProvider
 {
     private final StyledCellLabelProvider base;
+    private final NavigatorSearchTextCache searchCache;
     private String highlightPattern = ""; //$NON-NLS-1$
 
     public NavigatorStyledCellLabelWrapper(StyledCellLabelProvider base)
     {
+        this(base, null);
+    }
+
+    public NavigatorStyledCellLabelWrapper(StyledCellLabelProvider base, NavigatorSearchTextCache searchCache)
+    {
         this.base = base;
+        this.searchCache = searchCache;
     }
 
     @Override
     public void setHighlightPattern(String pattern)
     {
         highlightPattern = pattern != null ? pattern : ""; //$NON-NLS-1$
+        if (searchCache != null)
+            searchCache.onPatternChanged(highlightPattern);
     }
 
     @Override
@@ -60,24 +69,20 @@ public final class NavigatorStyledCellLabelWrapper extends StyledCellLabelProvid
             return;
 
         String name = mdObject.getName() != null ? mdObject.getName() : ""; //$NON-NLS-1$
-        String plain = styled.getString();
-        if (!name.isEmpty() && plain.length() >= name.length()
-                && plain.regionMatches(true, 0, name, 0, name.length()))
+
+        NavigatorFuzzySearch.QualifierMatch qualifier = searchCache != null
+                ? searchCache.qualifier(mdObject, highlightPattern, name)
+                : NavigatorFuzzySearch.findQualifierMatch(mdObject, highlightPattern, name);
+        if (qualifier != null && qualifier.text != null && !qualifier.text.isEmpty())
         {
-            SmartMatcher matcher = new SmartMatcher(highlightPattern);
-            SmartMatchHighlight.applyRanges(styled, matcher.getHighlightRanges(name));
+            styled.append("  ", StyledString.QUALIFIER_STYLER); //$NON-NLS-1$
+            styled.append(qualifier.text, StyledString.QUALIFIER_STYLER);
         }
 
-        NavigatorFuzzySearch.QualifierMatch qualifier =
-                NavigatorFuzzySearch.findQualifierMatch(mdObject, highlightPattern, name);
-        if (qualifier == null || qualifier.text == null || qualifier.text.isEmpty())
-            return;
-
-        styled.append("  ", StyledString.QUALIFIER_STYLER); //$NON-NLS-1$
-        int baseOffset = styled.length();
-        styled.append(qualifier.text, StyledString.QUALIFIER_STYLER);
-        for (int[] range : qualifier.ranges)
-            styled.setStyle(baseOffset + range[0], range[1], SmartMatchHighlight.styler());
+        SmartMatcher matcher = new SmartMatcher(highlightPattern);
+        String plain = styled.getString();
+        if (matcher.matches(plain))
+            SmartMatchHighlight.applyRanges(styled, matcher.getHighlightRanges(plain));
     }
 
     private static void applyStyledString(ViewerCell cell, StyledString styled)

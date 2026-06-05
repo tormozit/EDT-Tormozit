@@ -1,12 +1,11 @@
 package tormozit;
 
 import org.eclipse.swt.SWT;
-import org.eclipse.swt.events.KeyAdapter;
-import org.eclipse.swt.events.KeyEvent;
 import org.eclipse.swt.custom.StyledText;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Event;
+import org.eclipse.swt.widgets.Listener;
 import org.eclipse.swt.widgets.Table;
 import org.eclipse.swt.widgets.Text;
 import org.eclipse.swt.widgets.Tree;
@@ -41,24 +40,46 @@ public final class FilterFieldListNavigation
 
     public static void installTableNavigation(Text filterText, Table table, TableIndexListener onIndexChanged)
     {
-        if (Boolean.TRUE.equals(filterText.getData(INSTALLED_KEY)))
-            return;
-        filterText.setData(INSTALLED_KEY, Boolean.TRUE);
+        installTableNavigation((Control) filterText, table, onIndexChanged);
+    }
 
-        filterText.addKeyListener(new KeyAdapter()
-        {
-            @Override
-            public void keyPressed(KeyEvent e)
-            {
-                if (!isNavigationKey(e.keyCode))
-                    return;
-                int newIdx = navigateTable(table, e.keyCode);
-                if (newIdx >= 0 && onIndexChanged != null)
-                    onIndexChanged.onIndexChanged(newIdx);
-                e.doit = false;
-                keepFilterFocus(filterText);
-            }
+    private static void installTableNavigation(Control filterControl, Table table, TableIndexListener onIndexChanged)
+    {
+        if (filterControl == null || table == null)
+            return;
+        if (Boolean.TRUE.equals(filterControl.getData(INSTALLED_KEY)))
+            return;
+        filterControl.setData(INSTALLED_KEY, Boolean.TRUE);
+
+        filterControl.addListener(SWT.KeyDown, event -> {
+            if (!isNavigationKey(event.keyCode))
+                return;
+            int newIdx = navigateTable(table, event.keyCode);
+            if (newIdx >= 0 && onIndexChanged != null)
+                onIndexChanged.onIndexChanged(newIdx);
+            event.doit = false;
+            keepFilterFocus(filterControl);
         });
+        filterControl.addListener(SWT.Traverse, event -> {
+            if (!isNavigationKey(event.keyCode))
+                return;
+            event.doit = false;
+            event.detail = SWT.TRAVERSE_NONE;
+        });
+    }
+
+    private static void handleTableNavigation(Control filterControl, Table table,
+            TableIndexListener onIndexChanged, Event event)
+    {
+        if (!isNavigationKey(event.keyCode))
+            return;
+        int newIdx = navigateTable(table, event.keyCode);
+        if (newIdx >= 0 && onIndexChanged != null)
+            onIndexChanged.onIndexChanged(newIdx);
+        event.doit = false;
+        if (event.type == SWT.Traverse)
+            event.detail = SWT.TRAVERSE_NONE;
+        keepFilterFocus(filterControl);
     }
 
     /**
@@ -107,18 +128,30 @@ public final class FilterFieldListNavigation
             return;
         filterControl.setData(INSTALLED_KEY, Boolean.TRUE);
 
-        filterControl.addKeyListener(new KeyAdapter()
-        {
-            @Override
-            public void keyPressed(KeyEvent e)
-            {
-                if (!isNavigationKey(e.keyCode))
-                    return;
-                navigateTree(tree, e.keyCode);
-                e.doit = false;
-                keepFilterFocus(filterControl);
-            }
+        filterControl.addListener(SWT.KeyDown, event -> {
+            if (!isNavigationKey(event.keyCode))
+                return;
+            navigateTree(tree, event.keyCode);
+            event.doit = false;
+            keepFilterFocus(filterControl);
         });
+        filterControl.addListener(SWT.Traverse, event -> {
+            if (!isNavigationKey(event.keyCode))
+                return;
+            event.doit = false;
+            event.detail = SWT.TRAVERSE_NONE;
+        });
+    }
+
+    private static void handleTreeNavigation(Control filterControl, Tree tree, Event event)
+    {
+        if (!isNavigationKey(event.keyCode))
+            return;
+        navigateTree(tree, event.keyCode);
+        event.doit = false;
+        if (event.type == SWT.Traverse)
+            event.detail = SWT.TRAVERSE_NONE;
+        keepFilterFocus(filterControl);
     }
 
     /** После programmatic selection Tree/Table забирают фокус — возвращаем в поле фильтра. */

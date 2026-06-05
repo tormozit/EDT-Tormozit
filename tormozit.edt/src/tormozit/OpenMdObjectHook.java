@@ -12,6 +12,7 @@ import org.eclipse.swt.SWT;
 import org.eclipse.jface.viewers.TableViewer;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Event;
+import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Listener;
 import org.eclipse.swt.widgets.Shell;
@@ -40,8 +41,6 @@ public class OpenMdObjectHook implements IStartup {
             public void handleEvent(Event event) {
                 if (!(event.widget instanceof Shell)) return;
                 Shell shell = (Shell) event.widget;
-                if (shell.getData(PATCHED_KEY) != null) return;
-
                 Object dialog = shell.getData();
                 String dialogName = dialog != null ? dialog.getClass().getName() : "";
                 String shellName = shell.getClass().getName();
@@ -49,6 +48,9 @@ public class OpenMdObjectHook implements IStartup {
                 boolean isMdDialog = dialogName.contains("OpenMdObjectSelectionDialog")
                                   || shellName.contains("OpenMdObjectSelectionDialog");
                 if (!isMdDialog) return;
+
+                if (shell.getData(PATCHED_KEY) != null) return;
+                shell.setData(PATCHED_KEY, Boolean.TRUE); // ставим сразу, до asyncExec
 
                 display.asyncExec(() -> {
                     if (!shell.isDisposed()) tryPatchDialog(shell, dialog);
@@ -108,9 +110,12 @@ public class OpenMdObjectHook implements IStartup {
                 filterText.removeListener(SWT.KeyDown, l);
             }
 
-            Table listTable = getDialogTable(dialog);
+            Table listTable = getDialogTable(dialog, shell);
             if (listTable != null) {
                 FilterFieldListNavigation.installTableNavigation(filterText, listTable);
+                OpenMdObjectDebug.log("tableNav OK items=" + listTable.getItemCount());
+            } else {
+                OpenMdObjectDebug.log("tableNav SKIP table not found");
             }
 
             final Runnable[] pendingTask = new Runnable[1];
@@ -201,13 +206,20 @@ public class OpenMdObjectHook implements IStartup {
         }
     }
 
-    private static Table getDialogTable(Object dialog)
+    private static Table getDialogTable(Object dialog, Shell shell)
     {
-        Object viewerObj = Global.getField(dialog, "tableViewer");
-        if (viewerObj == null)
-            viewerObj = Global.getField(dialog, "fTableViewer");
-        if (viewerObj instanceof TableViewer)
-            return ((TableViewer) viewerObj).getTable();
+        for (String field : new String[] { "tableViewer", "fTableViewer", "list" }) //$NON-NLS-1$
+        {
+            Object viewerObj = Global.getField(dialog, field);
+            if (viewerObj instanceof TableViewer)
+                return ((TableViewer) viewerObj).getTable();
+        }
+        if (shell != null && !shell.isDisposed())
+        {
+            Table fromShell = Global.findControl((Composite) shell, Table.class, t -> true);
+            if (fromShell != null)
+                return fromShell;
+        }
         return null;
     }
 

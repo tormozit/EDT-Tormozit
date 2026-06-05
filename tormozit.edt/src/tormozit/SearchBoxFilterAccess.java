@@ -128,7 +128,7 @@ final class SearchBoxFilterAccess
 
     void disableNativeAutoSearch()
     {
-        // Слушатель ставит attachSearchListenerProxy — здесь ничего не сбрасываем
+        // Нативный поиск перехватывается proxy в attachSearchListenerProxy (performSearch → null).
     }
 
     static String describe(Object searchBox)

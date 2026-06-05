@@ -19,6 +19,7 @@ public class SmartOutlineFilter extends ViewerFilter {
     
     private final Map<Object, Integer> namePremiumCache = new HashMap<>();
     private final Map<Object, Integer> paramPremiumCache = new HashMap<>();
+    private final Map<Object, Boolean> subtreeMatchMemo = new HashMap<>();
 
     public SmartOutlineFilter(ILabelProvider labelProvider) {
         this(labelProvider, false, false);
@@ -42,6 +43,7 @@ public class SmartOutlineFilter extends ViewerFilter {
     public void refreshPattern(String newPattern) {
         namePremiumCache.clear(); 
         paramPremiumCache.clear();
+        subtreeMatchMemo.clear();
         setPattern(newPattern);
     }
 
@@ -117,22 +119,13 @@ public class SmartOutlineFilter extends ViewerFilter {
 
     private boolean collectExpandPath(ITreeContentProvider cp, Object element, Set<Object> toExpand)
     {
-        String text = labelProvider.getText(element);
-        if (!cp.hasChildren(element))
-            return matcher.matches(text);
-
-        boolean descendant = false;
+        if (!hasMatchInSubtree(cp, element))
+            return false;
         for (Object child : cp.getChildren(element))
-        {
-            if (collectExpandPath(cp, child, toExpand))
-                descendant = true;
-        }
-        if (descendant || matcher.matches(text))
-        {
+            collectExpandPath(cp, child, toExpand);
+        if (cp.hasChildren(element))
             toExpand.add(element);
-            return true;
-        }
-        return false;
+        return true;
     }
 
     @Override
@@ -153,7 +146,9 @@ public class SmartOutlineFilter extends ViewerFilter {
         }
         else if (pruneEmptyBranches && !matcher.isEmpty && treeViewer != null)
         {
-            if (!matcher.matches(text) && !hasMatchingDescendant(treeViewer, element))
+            Object cp = treeViewer.getContentProvider();
+            if (cp instanceof ITreeContentProvider
+                    && !hasMatchInSubtree((ITreeContentProvider) cp, element))
                 return false;
         }
 
@@ -165,25 +160,32 @@ public class SmartOutlineFilter extends ViewerFilter {
         return true;
     }
 
-    private boolean hasMatchingDescendant(TreeViewer viewer, Object parent)
+    /** Есть совпадение в узле или любом потомке (мемоизация — один проход на ветку). */
+    private boolean hasMatchInSubtree(ITreeContentProvider cp, Object element)
     {
-        Object cp = viewer.getContentProvider();
-        if (!(cp instanceof ITreeContentProvider))
-            return false;
-        ITreeContentProvider tcp = (ITreeContentProvider) cp;
-        for (Object child : tcp.getChildren(parent))
+        Boolean memo = subtreeMatchMemo.get(element);
+        if (memo != null)
+            return memo.booleanValue();
+
+        String text = labelProvider.getText(element);
+        boolean self = matcher.matches(text);
+        if (!cp.hasChildren(element))
         {
-            String text = labelProvider.getText(child);
-            if (!tcp.hasChildren(child))
+            subtreeMatchMemo.put(element, self);
+            return self;
+        }
+
+        boolean childMatch = false;
+        for (Object child : cp.getChildren(element))
+        {
+            if (hasMatchInSubtree(cp, child))
             {
-                if (matcher.matches(text))
-                    return true;
-            }
-            else if (matcher.matches(text) || hasMatchingDescendant(viewer, child))
-            {
-                return true;
+                childMatch = true;
+                break;
             }
         }
-        return false;
+        boolean result = self || childMatch;
+        subtreeMatchMemo.put(element, result);
+        return result;
     }
 }

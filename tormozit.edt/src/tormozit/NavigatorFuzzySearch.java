@@ -1,18 +1,12 @@
 package tormozit;
 
-import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-
-import org.eclipse.emf.ecore.EClass;
-import org.eclipse.emf.ecore.EObject;
-import org.eclipse.emf.ecore.EStructuralFeature;
-import org.osgi.framework.Bundle;
-import org.osgi.framework.BundleContext;
+import java.util.TreeSet;
 
 import com._1c.g5.v8.dt.common.FuzzyPattern;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
@@ -22,11 +16,6 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
  */
 public final class NavigatorFuzzySearch
 {
-    private static final String HELPER =
-            "com._1c.g5.v8.dt.internal.navigator.ui.filters.FuzzySearchHelper"; //$NON-NLS-1$
-
-    private static volatile Method getSearchPaths;
-
     private static final String[] TOOL_TIP_METHODS = {
             "getToolTip", "getTooltip" //$NON-NLS-1$ //$NON-NLS-2$
     };
@@ -40,18 +29,17 @@ public final class NavigatorFuzzySearch
 
         List<String> texts = new ArrayList<>();
         addToken(texts, mdObject.getName());
-        texts.addAll(hiddenAttributeTexts(mdObject));
+        texts.addAll(collectHiddenTexts(mdObject));
         return texts;
     }
 
-    /** Скрытые поля объекта (без имени), без атрибутов предков в EMF-цепочке. */
+    /** Скрытые поля объекта (без имени) — прямые геттеры и extension, без EMF-обхода. */
     public static List<String> hiddenAttributeTexts(MdObject mdObject)
     {
-        return new ArrayList<>(collectOwnHiddenTexts(mdObject, true));
+        return new ArrayList<>(collectHiddenTexts(mdObject));
     }
 
-    /** Только поля самого объекта — для серого квалификатора справа от имени. */
-    private static Set<String> collectOwnHiddenTexts(MdObject mdObject, boolean includeOwnPaths)
+    private static Set<String> collectHiddenTexts(MdObject mdObject)
     {
         if (mdObject == null)
             return Collections.emptySet();
@@ -60,77 +48,10 @@ public final class NavigatorFuzzySearch
         addToken(texts, mdObject.getComment());
         appendTextValue(texts, mdObject.getSynonym());
         addToken(texts, localizedSynonym(mdObject));
-        if (includeOwnPaths)
-            collectOwnPathTexts(texts, mdObject);
         appendToolTipFeatures(texts, mdObject);
         appendExtensionTexts(texts, mdObject);
-        if (mdObject instanceof EObject)
-            collectEmfFeatureTexts(texts, (EObject) mdObject);
         appendFeature(texts, mdObject, "getExplanation"); //$NON-NLS-1$
         return texts;
-    }
-
-    /** Пути FuzzySearchHelper только для EMF-типа текущего объекта, не предка. */
-    private static void collectOwnPathTexts(Set<String> texts, MdObject mdObject)
-    {
-        if (!(mdObject instanceof EObject))
-            return;
-
-        EObject object = (EObject) mdObject;
-        for (Object path : getSearchPaths(mdObject))
-        {
-            if (isOwnSearchPath(object, path))
-                appendPathTexts(texts, path);
-        }
-    }
-
-    private static boolean isOwnSearchPath(EObject object, Object path)
-    {
-        if (object == null || path == null)
-            return false;
-
-        Object feature = Global.getField(path, "feature"); //$NON-NLS-1$
-        if (!(feature instanceof EStructuralFeature))
-            return false;
-
-        EStructuralFeature structuralFeature = (EStructuralFeature) feature;
-        EClass featureClass = structuralFeature.getEContainingClass();
-        EClass ownClass = object.eClass();
-        if (featureClass == null || ownClass == null)
-            return false;
-
-        if (featureClass == ownClass)
-            return true;
-        for (EClass superType : ownClass.getEAllSuperTypes())
-        {
-            if (featureClass == superType)
-                return true;
-        }
-        return false;
-    }
-
-    private static void appendPathTexts(Set<String> texts, Object path)
-    {
-        if (path == null)
-            return;
-
-        Object values = Global.getField(path, "values"); //$NON-NLS-1$
-        if (values instanceof Iterable<?>)
-        {
-            for (Object value : (Iterable<?>) values)
-                appendTextValue(texts, value);
-        }
-        addToken(texts, (String) Global.getField(path, "synonim")); //$NON-NLS-1$
-        addToken(texts, (String) Global.invoke(path, "getSynonym")); //$NON-NLS-1$
-        addToken(texts, (String) Global.getField(path, "name")); //$NON-NLS-1$
-        addToken(texts, (String) Global.getField(path, "prefix")); //$NON-NLS-1$
-
-        Object prefixes = Global.getField(path, "prefixes"); //$NON-NLS-1$
-        if (prefixes instanceof Iterable<?>)
-        {
-            for (Object prefix : (Iterable<?>) prefixes)
-                appendTextValue(texts, prefix);
-        }
     }
 
     /** Подсказка на объекте и в extension (у реквизитов — {@code getExtension().getTooltip()}). */
@@ -151,39 +72,6 @@ public final class NavigatorFuzzySearch
         appendFeature(texts, extension, "getExplanation"); //$NON-NLS-1$
         appendFeature(texts, extension, "getHelp"); //$NON-NLS-1$
         appendFeature(texts, extension, "getComment"); //$NON-NLS-1$
-        if (extension instanceof EObject)
-            collectEmfFeatureTexts(texts, (EObject) extension);
-    }
-
-    private static void collectEmfFeatureTexts(Set<String> texts, EObject object)
-    {
-        if (object == null || object.eClass() == null)
-            return;
-
-        for (EStructuralFeature feature : object.eClass().getEAllStructuralFeatures())
-        {
-            String featureName = feature.getName();
-            if (!isHiddenSearchFeature(featureName))
-                continue;
-            appendTextValue(texts, object.eGet(feature, false));
-        }
-    }
-
-    private static boolean isHiddenSearchFeature(String featureName)
-    {
-        if (featureName == null || featureName.isEmpty())
-            return false;
-        if ("name".equals(featureName)) //$NON-NLS-1$
-            return false;
-
-        String lower = featureName.toLowerCase();
-        return lower.contains("synonym") //$NON-NLS-1$
-                || lower.contains("synonim") //$NON-NLS-1$
-                || lower.contains("comment") //$NON-NLS-1$
-                || lower.contains("tooltip") //$NON-NLS-1$
-                || lower.contains("explanation") //$NON-NLS-1$
-                || lower.contains("hint") //$NON-NLS-1$
-                || lower.contains("help"); //$NON-NLS-1$
     }
 
     public static String joinSearchTexts(MdObject mdObject)
@@ -204,7 +92,7 @@ public final class NavigatorFuzzySearch
         String safeName = objectName != null ? objectName.trim() : ""; //$NON-NLS-1$
         QualifierMatch best = null;
 
-        for (String hidden : collectOwnHiddenTexts(mdObject, false))
+        for (String hidden : collectHiddenTexts(mdObject))
         {
             QualifierMatch candidate = tryQualifier(hidden, pattern, safeName);
             if (candidate != null && (best == null || candidate.score > best.score))
@@ -225,12 +113,14 @@ public final class NavigatorFuzzySearch
         if (matcher.isEmpty)
             return null;
 
-        if (!matcher.matches(text))
-            return null;
-
+        // Многословный паттерн: в квалификаторе достаточно фрагментов из этого поля,
+        // не совпадающих с именем (остальные токены могут быть только в имени).
         List<String> hiddenFragments = matcher.fragmentsInNotIn(text, objectName);
         if (!hiddenFragments.isEmpty())
             return buildQualifierMulti(text, hiddenFragments);
+
+        if (!matcher.matches(text))
+            return null;
 
         if (matcher.getFragments().length == 1)
         {
@@ -246,85 +136,64 @@ public final class NavigatorFuzzySearch
         List<int[]> ranges = readMatchRanges(match, source.length());
         if (ranges.isEmpty())
             return null;
-
-        int[] primary = ranges.get(0);
-        int start = primary[0];
-        int end = primary[0] + primary[1];
-
-        int fragStart = Math.max(0, start - 12);
-        int fragEnd = Math.min(source.length(), end + 16);
-        while (fragStart > 0 && !Character.isWhitespace(source.charAt(fragStart - 1)))
-            fragStart--;
-        while (fragEnd < source.length() && !Character.isWhitespace(source.charAt(fragEnd)))
-            fragEnd++;
-
-        String fragment = source.substring(fragStart, fragEnd).trim();
-        if (fragment.isEmpty())
-            return null;
-
-        StringBuilder display = new StringBuilder("... "); //$NON-NLS-1$
-        int offsetShift = display.length();
-        display.append(fragment);
-        boolean trailing = fragEnd < source.length();
-        if (trailing)
-            display.append(" ..."); //$NON-NLS-1$
-
-        String displayStr = display.toString();
-        List<int[]> displayRanges = new ArrayList<>();
-        for (int[] range : ranges)
-        {
-            int relStart = range[0] - fragStart + offsetShift;
-            int relLen = range[1];
-            if (relStart >= 0 && relStart + relLen <= displayStr.length())
-                displayRanges.add(new int[] { relStart, relLen });
-        }
-        if (displayRanges.isEmpty())
-            return null;
-
-        return new QualifierMatch(displayStr, displayRanges, primary[1]);
+        return buildQualifierFromRanges(source, ranges);
     }
 
-    /** Окно вокруг вхождений фрагментов, подсветка каждого фрагмента в сером квалификаторе. */
+    /** Слова с вхождением + по одному соседнему слову слева/справа. */
     private static QualifierMatch buildQualifierMulti(String source, List<String> fragments)
     {
         if (source == null || fragments == null || fragments.isEmpty())
             return null;
 
-        int anchorStart = source.length();
-        int anchorEnd = 0;
+        List<int[]> ranges = new ArrayList<>();
         for (String frag : fragments)
         {
             int[] span = findFragmentSpan(source, frag);
-            if (span == null)
-                continue;
-            anchorStart = Math.min(anchorStart, span[0]);
-            anchorEnd = Math.max(anchorEnd, span[0] + span[1]);
+            if (span != null)
+                ranges.add(span);
         }
-        if (anchorStart >= source.length())
+        if (ranges.isEmpty())
+            return null;
+        return buildQualifierFromRanges(source, ranges);
+    }
+
+    private static QualifierMatch buildQualifierFromRanges(String source, List<int[]> matchRanges)
+    {
+        if (source == null || matchRanges == null || matchRanges.isEmpty())
             return null;
 
-        int fragStart = Math.max(0, anchorStart - 12);
-        int fragEnd = Math.min(source.length(), anchorEnd + 16);
-        while (fragStart > 0 && !Character.isWhitespace(source.charAt(fragStart - 1)))
-            fragStart--;
-        while (fragEnd < source.length() && !Character.isWhitespace(source.charAt(fragEnd)))
-            fragEnd++;
-
-        String fragment = source.substring(fragStart, fragEnd).trim();
-        if (fragment.isEmpty())
+        List<WordSpan> words = parseWords(source);
+        if (words.isEmpty())
             return null;
+
+        Set<Integer> included = collectIncludedWordIndices(words, source, matchRanges);
+        if (included.isEmpty())
+            return null;
+
+        List<Integer> sorted = new ArrayList<>(included);
+        Collections.sort(sorted);
+        List<int[]> runs = groupConsecutiveIndices(sorted);
 
         StringBuilder display = new StringBuilder("... "); //$NON-NLS-1$
-        int offsetShift = display.length();
-        display.append(fragment);
-        if (fragEnd < source.length())
+        List<DisplaySegment> segments = new ArrayList<>();
+        for (int r = 0; r < runs.size(); r++)
+        {
+            if (r > 0)
+                display.append(" ... "); //$NON-NLS-1$
+
+            int[] run = runs.get(r);
+            int charStart = words.get(run[0]).start;
+            int charEnd = words.get(run[1]).end;
+            segments.add(new DisplaySegment(charStart, charEnd, display.length()));
+            display.append(source, charStart, charEnd);
+        }
+
+        int lastWord = sorted.get(sorted.size() - 1);
+        if (words.get(lastWord).end < source.length())
             display.append(" ..."); //$NON-NLS-1$
 
         String displayStr = display.toString();
-        SmartMatcher highlight = new SmartMatcher(joinFragments(fragments));
-        List<int[]> displayRanges = new ArrayList<>();
-        for (SmartMatcher.HighlightRange range : highlight.getHighlightRanges(displayStr))
-            displayRanges.add(new int[] { range.offset, range.length });
+        List<int[]> displayRanges = mapMatchRangesToDisplay(matchRanges, segments);
         if (displayRanges.isEmpty())
             return null;
 
@@ -332,6 +201,117 @@ public final class NavigatorFuzzySearch
         for (int[] range : displayRanges)
             score += range[1];
         return new QualifierMatch(displayStr, displayRanges, score);
+    }
+
+    private static List<WordSpan> parseWords(String source)
+    {
+        List<WordSpan> words = new ArrayList<>();
+        int index = 0;
+        while (index < source.length())
+        {
+            while (index < source.length() && Character.isWhitespace(source.charAt(index)))
+                index++;
+            if (index >= source.length())
+                break;
+            int start = index;
+            while (index < source.length() && !Character.isWhitespace(source.charAt(index)))
+                index++;
+            words.add(new WordSpan(start, index));
+        }
+        return words;
+    }
+
+    private static Set<Integer> collectIncludedWordIndices(List<WordSpan> words, String source,
+            List<int[]> matchRanges)
+    {
+        Set<Integer> included = new TreeSet<>();
+        for (int[] range : matchRanges)
+        {
+            int rangeStart = range[0];
+            int rangeEnd = range[0] + range[1];
+            for (int wordIndex = 0; wordIndex < words.size(); wordIndex++)
+            {
+                WordSpan word = words.get(wordIndex);
+                if (word.end <= rangeStart || word.start >= rangeEnd)
+                    continue;
+
+                included.add(wordIndex);
+                if (wordIndex > 0)
+                    included.add(wordIndex - 1);
+                if (wordIndex < words.size() - 1)
+                    included.add(wordIndex + 1);
+            }
+        }
+        return included;
+    }
+
+    private static List<int[]> groupConsecutiveIndices(List<Integer> sorted)
+    {
+        List<int[]> runs = new ArrayList<>();
+        int runStart = sorted.get(0);
+        int runEnd = sorted.get(0);
+        for (int i = 1; i < sorted.size(); i++)
+        {
+            int value = sorted.get(i);
+            if (value == runEnd + 1)
+                runEnd = value;
+            else
+            {
+                runs.add(new int[] { runStart, runEnd });
+                runStart = runEnd = value;
+            }
+        }
+        runs.add(new int[] { runStart, runEnd });
+        return runs;
+    }
+
+    private static List<int[]> mapMatchRangesToDisplay(List<int[]> matchRanges, List<DisplaySegment> segments)
+    {
+        List<int[]> displayRanges = new ArrayList<>();
+        for (int[] range : matchRanges)
+        {
+            int matchStart = range[0];
+            int matchEnd = range[0] + range[1];
+            for (DisplaySegment segment : segments)
+            {
+                if (matchEnd <= segment.sourceStart || matchStart >= segment.sourceEnd)
+                    continue;
+
+                int overlapStart = Math.max(matchStart, segment.sourceStart);
+                int overlapEnd = Math.min(matchEnd, segment.sourceEnd);
+                int displayStart = segment.displayStart + (overlapStart - segment.sourceStart);
+                int displayLen = overlapEnd - overlapStart;
+                if (displayLen > 0)
+                    displayRanges.add(new int[] { displayStart, displayLen });
+            }
+        }
+        return displayRanges;
+    }
+
+    private static final class WordSpan
+    {
+        final int start;
+        final int end;
+
+        WordSpan(int start, int end)
+        {
+            this.start = start;
+            this.end = end;
+        }
+    }
+
+    private static final class DisplaySegment
+    {
+        final int sourceStart;
+        final int sourceEnd;
+        final int displayStart;
+
+        DisplaySegment(int sourceStart, int sourceEnd, int displayStart)
+        {
+            this.sourceStart = sourceStart;
+            this.sourceEnd = sourceEnd;
+            this.displayStart = displayStart;
+        }
     }
 
     private static int[] findFragmentSpan(String source, String fragment)
@@ -349,32 +329,6 @@ public final class NavigatorFuzzySearch
         if (ranges.isEmpty())
             return null;
         return ranges.get(0);
-    }
-
-    private static String joinFragments(List<String> fragments)
-    {
-        StringBuilder sb = new StringBuilder();
-        for (String frag : fragments)
-            appendToken(sb, frag);
-        return sb.toString();
-    }
-
-    @SuppressWarnings("unchecked")
-    private static List<Object> getSearchPaths(MdObject mdObject)
-    {
-        if (mdObject == null)
-            return Collections.emptyList();
-        try
-        {
-            Method method = resolveGetSearchPaths();
-            if (method == null)
-                return Collections.emptyList();
-            Object result = method.invoke(null, mdObject, Boolean.valueOf(isRu()));
-            if (result instanceof List<?>)
-                return (List<Object>) result;
-        }
-        catch (Exception ignored) {}
-        return Collections.emptyList();
     }
 
     private static FuzzyPattern.Match fuzzyMatch(String pattern, String sample)
@@ -417,42 +371,6 @@ public final class NavigatorFuzzySearch
     {
         Object len = Global.invoke(range, "getLength"); //$NON-NLS-1$
         return len instanceof Integer ? (Integer) len : 0;
-    }
-
-    private static Method resolveGetSearchPaths()
-    {
-        if (getSearchPaths == null)
-        {
-            try
-            {
-                Class<?> helper = loadEdtClass(HELPER);
-                if (helper != null)
-                    getSearchPaths = helper.getMethod("getSearchPaths", MdObject.class, boolean.class); //$NON-NLS-1$
-            }
-            catch (ClassNotFoundException | NoSuchMethodException ignored) {}
-        }
-        return getSearchPaths;
-    }
-
-    private static Class<?> loadEdtClass(String name) throws ClassNotFoundException
-    {
-        Activator activator = Activator.getDefault();
-        if (activator != null)
-        {
-            BundleContext context = activator.getBundle().getBundleContext();
-            if (context != null)
-            {
-                for (Bundle bundle : context.getBundles())
-                {
-                    try
-                    {
-                        return bundle.loadClass(name);
-                    }
-                    catch (ClassNotFoundException ignored) {}
-                }
-            }
-        }
-        return Class.forName(name);
     }
 
     private static String localizedSynonym(MdObject mdObject)
