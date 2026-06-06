@@ -75,4 +75,14 @@ $siteTextNew = [regex]::Replace(
 )
 [System.IO.File]::WriteAllText($sitePath, $siteTextNew, (New-Object System.Text.UTF8Encoding($false)))
 
-Write-Host "Updated: MANIFEST.MF, feature.xml, site.xml"
+# Update site/pom.xml version to match release (OSGi format required by Tycho)
+$sitePomPath = Join-Path $PSScriptRoot 'pom.xml'
+$sitePomText = [System.IO.File]::ReadAllText($sitePomPath, [System.Text.Encoding]::UTF8)
+$sitePomPattern = '(<artifactId>comfort\.site</artifactId>\s*<version>)[^<]+(</version>)'
+if ([regex]::IsMatch($sitePomText, $sitePomPattern)) {
+    $sitePomNew = [regex]::Replace($sitePomText, $sitePomPattern, "`${1}$release`${2}")
+    [System.IO.File]::WriteAllText($sitePomPath, $sitePomNew, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Host "Updated: site/pom.xml version -> $release"
+}
+
+Write-Host "Updated: MANIFEST.MF, feature.xml, site.xml, site/pom.xml"

@@ -19,6 +19,9 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      - name: Sync version
+        run: pwsh site/sync-version.ps1
+
       - name: Read release version
         id: version
         run: |
