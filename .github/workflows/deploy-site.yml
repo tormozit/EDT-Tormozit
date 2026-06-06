@@ -28,6 +28,9 @@ jobs:
           VER=$(grep 'comfort.release=' site/version.txt | cut -d= -f2)
           echo "release_version=$VER" >> $GITHUB_OUTPUT
 
+      - name: Remove stale target/ module if present
+        run: rm -rf target/
+
       - name: Build with Maven
         run: mvn -B clean package
 
