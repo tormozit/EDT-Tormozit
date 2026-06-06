@@ -1,6 +1,6 @@
 name: Deploy p2 Update Site with History
 
-# Тег v<версия> (например v1.0.0.10) — один раз на линейку версии.
+# Тег v<<версия> (например v1.0.0.10) — один раз на линейку версии.
 # Повторные сборки: push в master или Actions → Run workflow (НЕ "Re-run jobs" — он берёт старый коммит!).
 on:
   workflow_dispatch:
@@ -31,6 +31,14 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
+
+      - name: Cache Maven dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
 
       - name: Validate tag matches version.txt
         if: github.ref_type == 'tag'
@@ -104,5 +112,5 @@ jobs:
           clean: true
           clean-exclude: |
             [0-9]*.[0-9]*.[0-9]*.[0-9]*/
-            [0-9]*.[0-9]*.[0-9]*.[0-9]*-[0-9]*/
+            [0-9]*.[0-9]*.[0-9]*-[0-9]*/
           commit-message: "Add update site ${{ steps.version.outputs.release_version }}"
