@@ -84,6 +84,7 @@
           <configuration>
             <encoding>UTF-8</encoding>
             <useProjectSettings>false</useProjectSettings>
+            <validateClasspath>false</validateClasspath>
           </configuration>
         </plugin>
         <plugin>
