@@ -57,6 +57,11 @@
                   <id>org.apache.felix.scr</id>
                   <versionRange>0.0.0</versionRange>
                 </requirement>
+                <requirement>
+                  <type>eclipse-plugin</type>
+                  <id>org.eclipse.jdt.annotation</id>
+                  <versionRange>0.0.0</versionRange>
+                </requirement>
               </extraRequirements>
             </dependency-resolution>
           </configuration>
@@ -113,5 +118,26 @@
       </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <profile>
+      <id>ci</id>
+      <build>
+        <pluginManagement>
+          <plugins>
+            <plugin>
+              <groupId>org.eclipse.tycho</groupId>
+              <artifactId>target-platform-configuration</artifactId>
+              <configuration>
+                <target>
+                  <file>${maven.multiModuleProjectDirectory}/tp/tp.ci.target</file>
+                </target>
+              </configuration>
+            </plugin>
+          </plugins>
+        </pluginManagement>
+      </build>
+    </profile>
+  </profiles>
 
 </project>
