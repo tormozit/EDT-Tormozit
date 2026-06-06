@@ -1,15 +1,2 @@
 .tmp*
 # PDE update site build output (не коммитить — пересобирается локально)
-site/features/
-site/plugins/
-site/content.jar
-site/artifacts.jar
-site/*.zip
-
-# Maven/Tycho build output
-/target/
-plugin/target/
-feature/target/
-site/target/
-tp/target/
-
