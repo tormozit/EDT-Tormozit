@@ -12,12 +12,14 @@ on:
 
 jobs:
   build-and-deploy:
-    runs-on: ubuntu-latest
+    # EDT target — win32; slicer + platform.support требуют Windows (на Linux planner ломается).
+    runs-on: windows-latest
     steps:
       - name: Checkout source
         uses: actions/checkout@v4.2.2
 
       - name: Build info
+        shell: bash
         run: |
           echo "Commit: $GITHUB_SHA"
           echo "Ref: $GITHUB_REF (type: $GITHUB_REF_TYPE)"
@@ -42,6 +44,7 @@ jobs:
 
       - name: Validate tag matches version.txt
         if: github.ref_type == 'tag'
+        shell: bash
         run: |
           TAG_VER="${GITHUB_REF_NAME#v}"
           FILE_VER=$(grep 'comfort.release=' site/version.txt | cut -d= -f2 | tr -d '[:space:]')
@@ -55,6 +58,7 @@ jobs:
         run: pwsh site/sync-version.ps1
 
       - name: Verify Maven modules
+        shell: bash
         run: |
           if grep -q '<module>target</module>' pom.xml; then
             echo "ERROR: pom.xml references removed target/ module."
@@ -72,6 +76,7 @@ jobs:
 
       - name: Read built version
         id: version
+        shell: bash
         run: |
           JAR=$(ls site/target/repository/features/tormozit.comfort.feature_*.jar | head -1)
           VER=$(basename "$JAR" .jar | sed 's/tormozit.comfort.feature_//')
@@ -86,6 +91,7 @@ jobs:
         continue-on-error: true
 
       - name: Prepare version folder
+        shell: bash
         run: |
           mkdir -p deploy
           cp -r site/target/repository "deploy/${{ steps.version.outputs.release_version }}"
@@ -102,7 +108,7 @@ jobs:
           fi
 
       - name: Generate composite metadata
-        run: python3 .github/workflows/generate_composite.py
+        run: python .github/workflows/generate_composite.py
 
       - name: Deploy to GitHub Pages
         uses: JamesIves/github-pages-deploy-action@v4.7.3
