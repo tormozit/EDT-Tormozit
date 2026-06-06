@@ -1,0 +1,24 @@
+name: Publish p2 site
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version
+        id: ver
+        run: |
+          VER=$(grep 'comfort.release=' site/version.txt | cut -d= -f2 | tr -d '[:space:]')
+          echo "version=$VER" >> $GITHUB_OUTPUT
+
+      - name: Deploy to GitHub Pages
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: site/target/repository
+          target-folder: ${{ steps.ver.outputs.version }}
+          branch: gh-pages
+          clean: false
