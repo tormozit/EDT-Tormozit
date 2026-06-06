@@ -32,6 +32,7 @@ function Set-Utf8NoBomContent {
     [System.IO.File]::WriteAllLines($Path, $Lines, $utf8NoBom)
 }
 
+# plugin/META-INF/MANIFEST.MF
 $manifestPath = Join-Path $Root 'plugin\META-INF\MANIFEST.MF'
 $manifestLines = Get-Content -LiteralPath $manifestPath -Encoding UTF8
 $manifestUpdated = $false
@@ -47,6 +48,7 @@ if (-not $manifestUpdated) {
 }
 Set-Utf8NoBomContent -Path $manifestPath -Lines $manifestLines
 
+# feature/feature.xml
 $featurePath = Join-Path $Root 'feature\feature.xml'
 $featureText = [System.IO.File]::ReadAllText($featurePath, [System.Text.Encoding]::UTF8)
 $featurePattern = '(<feature\b[\s\S]*?\sversion=")[^"]+(")'
@@ -61,6 +63,7 @@ $featureTextNew = [regex]::Replace(
 )
 [System.IO.File]::WriteAllText($featurePath, $featureTextNew, (New-Object System.Text.UTF8Encoding($false)))
 
+# site/site.xml
 $sitePath = Join-Path $PSScriptRoot 'site.xml'
 $siteText = [System.IO.File]::ReadAllText($sitePath, [System.Text.Encoding]::UTF8)
 $siteJar = "features/tormozit.comfort.feature_${release}-qualifier.jar"
@@ -75,14 +78,24 @@ $siteTextNew = [regex]::Replace(
 )
 [System.IO.File]::WriteAllText($sitePath, $siteTextNew, (New-Object System.Text.UTF8Encoding($false)))
 
-# Update site/pom.xml version to match release (OSGi format required by Tycho)
+# site/pom.xml
 $sitePomPath = Join-Path $PSScriptRoot 'pom.xml'
 $sitePomText = [System.IO.File]::ReadAllText($sitePomPath, [System.Text.Encoding]::UTF8)
 $sitePomPattern = '(<artifactId>comfort\.site</artifactId>\s*<version>)[^<]+(</version>)'
 if ([regex]::IsMatch($sitePomText, $sitePomPattern)) {
     $sitePomNew = [regex]::Replace($sitePomText, $sitePomPattern, "`${1}$release`${2}")
     [System.IO.File]::WriteAllText($sitePomPath, $sitePomNew, (New-Object System.Text.UTF8Encoding($false)))
-    Write-Host "Updated: site/pom.xml version -> $release"
+    Write-Host "Updated: site/pom.xml -> $release"
 }
 
-Write-Host "Updated: MANIFEST.MF, feature.xml, site.xml, site/pom.xml"
+# target/pom.xml
+$targetPomPath = Join-Path $Root 'target\pom.xml'
+$targetPomText = [System.IO.File]::ReadAllText($targetPomPath, [System.Text.Encoding]::UTF8)
+$targetPomPattern = '(<artifactId>default</artifactId>\s*<version>)[^<]+(</version>)'
+if ([regex]::IsMatch($targetPomText, $targetPomPattern)) {
+    $targetPomNew = [regex]::Replace($targetPomText, $targetPomPattern, "`${1}$release`${2}")
+    [System.IO.File]::WriteAllText($targetPomPath, $targetPomNew, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Host "Updated: target/pom.xml -> $release"
+}
+
+Write-Host "Done. All versions synced to $release"

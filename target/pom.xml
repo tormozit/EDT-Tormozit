@@ -11,5 +11,6 @@
     <relativePath>../pom.xml</relativePath>
   </parent>
   <artifactId>default</artifactId>
+  <version>1.0.0.10</version>
   <packaging>eclipse-target-definition</packaging>
 </project>
