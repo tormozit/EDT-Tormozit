@@ -16,6 +16,7 @@ import org.eclipse.jface.viewers.StructuredSelection;
 import org.eclipse.jface.viewers.StyledCellLabelProvider;
 import org.eclipse.jface.viewers.TreeViewer;
 import org.eclipse.jface.viewers.ViewerFilter;
+import org.eclipse.jface.resource.ImageDescriptor;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.ModifyEvent;
 import org.eclipse.swt.events.ModifyListener;
@@ -23,6 +24,7 @@ import org.eclipse.swt.custom.StyledText;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.layout.RowLayout;
+import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
@@ -512,6 +514,22 @@ private static void applySmartSearch(TreeViewer viewer, Control filterControl, S
         }
     }
 
+    /** Иконка ✕ из {@code SearchBox} в плагине {@code com._1c.g5.v8.dt.common.ui}. */
+    private static Image loadClearImage()
+    {
+        try
+        {
+            // Загружаем через ImageDescriptor из того же OSGi-bundle, что и SearchBox
+            Class<?> sbCls = Class.forName(
+                    "com._1c.g5.v8.dt.common.ui.controls.search.SearchBox"); //$NON-NLS-1$
+            java.net.URL url = sbCls.getResource("icons/clear.png"); //$NON-NLS-1$
+            if (url != null)
+                return ImageDescriptor.createFromURL(url).createImage(false);
+        }
+        catch (Exception ignored) {}
+        return null;
+    }
+
     private static void installClearFilterButton(Control filterControl, TreeViewer viewer, Shell shell)
     {
         if (filterControl == null || filterControl.isDisposed())
@@ -523,8 +541,26 @@ private static void applySmartSearch(TreeViewer viewer, Control filterControl, S
         if (parent == null || parent.isDisposed())
             return;
 
+        Image clearImg = loadClearImage();
+
         Button clear = new Button(parent, SWT.PUSH);
-        clear.setText("Очистить"); //$NON-NLS-1$
+        clear.setData("org.eclipse.e4.ui.css.id", "tormozit-clear-button"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (clearImg != null)
+        {
+            clear.setImage(clearImg);
+            clear.setToolTipText("Очистить фильтр"); //$NON-NLS-1$
+            // Освобождаем изображение при dispose кнопки
+            clear.addDisposeListener(e -> clearImg.dispose());
+        }
+        else
+        {
+            clear.setText("✕"); //$NON-NLS-1$
+            clear.setToolTipText("Очистить фильтр"); //$NON-NLS-1$
+        }
+        // Кнопка не должна забирать фокус из поля фильтра
+        clear.addListener(SWT.MouseDown, e -> e.doit = false);
+        clear.setData("__noFocus", Boolean.TRUE); //$NON-NLS-1$
+
         org.eclipse.swt.widgets.Layout layout = parent.getLayout();
         if (layout instanceof GridLayout)
         {
@@ -551,6 +587,9 @@ private static void applySmartSearch(TreeViewer viewer, Control filterControl, S
             if (viewer != null && viewer.getSelection() instanceof IStructuredSelection)
                 filterControl.setData(PENDING_CLEAR_SELECTION_KEY, viewer.getSelection());
             setFilterText(filterControl, ""); //$NON-NLS-1$
+            // Возвращаем фокус в поле фильтра после очистки
+            if (!filterControl.isDisposed())
+                filterControl.forceFocus();
         });
 
         parent.layout(true, true);

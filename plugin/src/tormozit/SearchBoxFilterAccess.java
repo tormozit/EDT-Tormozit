@@ -169,6 +169,10 @@ final class SearchBoxFilterAccess
 
     private static Control findTextControl(Object searchBox)
     {
+        if (searchBox instanceof StyledText)
+            return (Control) searchBox;
+        if (searchBox instanceof Text)
+            return (Control) searchBox;
         for (String field : new String[] { "text", "searchText", "styledText", "searchTextWidget" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         {
             Object text = Global.getField(searchBox, field);

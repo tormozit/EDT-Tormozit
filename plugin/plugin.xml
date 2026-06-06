@@ -13,6 +13,7 @@
     <startup class="tormozit.FormEditorHook"/>
     <startup class="tormozit.SmartOutlineHook"/> 
     <startup class="tormozit.NavigatorFilterHook"/>
+    <startup class="tormozit.InfobasesViewHook"/>
     <startup class="tormozit.OpenMdObjectHook"/>
     <startup class="tormozit.MenuTooltipStatusLineHook"/>
     <startup class="tormozit.RecentPlacesTracker"/>
