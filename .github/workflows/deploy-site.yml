@@ -11,10 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v4.7.0
         with:
           java-version: '17'
           distribution: 'temurin'
@@ -29,7 +29,7 @@ jobs:
         run: mvn -B clean package
 
       - name: Checkout existing gh-pages
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
         with:
           ref: gh-pages
           path: gh-pages
@@ -55,7 +55,7 @@ jobs:
         run: python3 .github/workflows/generate_composite.py
 
       - name: Deploy to GitHub Pages
-        uses: JamesIves/github-pages-deploy-action@v4
+        uses: JamesIves/github-pages-deploy-action@v4.7.3
         with:
           folder: deploy
           branch: gh-pages

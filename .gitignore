@@ -6,5 +6,6 @@ site/content.jar
 site/artifacts.jar
 site/*.zip
 
-# Maven/Tycho build output
+# Maven/Tycho build output (but not the root /target which is the target-platform project)
 **/target/
+!/target/
