@@ -4,10 +4,10 @@ name: Deploy p2 Update Site with History
 # Повторные сборки: push в master или Actions → Run workflow (НЕ "Re-run jobs" — он берёт старый коммит!).
 on:
   workflow_dispatch:
-  push:
-    branches:
+#  push:
+#    branches:
 #     - master
-    tags:
+#    tags:
 #     - 'v[0-9]*.[0-9]*.[0-9]*.[0-9]*'
 
 jobs:
