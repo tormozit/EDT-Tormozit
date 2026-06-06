@@ -24,7 +24,7 @@
 
   <modules>
     <module>target</module>
-    <module>project</module>
+    <module>plugin</module>
     <module>feature</module>
     <module>site</module>
   </modules>
