@@ -119,25 +119,4 @@
     </plugins>
   </build>
 
-  <profiles>
-    <profile>
-      <id>ci</id>
-      <build>
-        <pluginManagement>
-          <plugins>
-            <plugin>
-              <groupId>org.eclipse.tycho</groupId>
-              <artifactId>target-platform-configuration</artifactId>
-              <configuration>
-                <target>
-                  <file>${maven.multiModuleProjectDirectory}/tp/tp.ci.target</file>
-                </target>
-              </configuration>
-            </plugin>
-          </plugins>
-        </pluginManagement>
-      </build>
-    </profile>
-  </profiles>
-
 </project>
