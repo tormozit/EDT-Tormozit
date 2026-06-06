@@ -65,11 +65,11 @@ jobs:
             echo "You are on an old commit ($GITHUB_SHA). Use 'Run workflow' on master, not 'Re-run jobs'."
             exit 1
           fi
-          if ! grep -q 'tp/tp.target' pom.xml; then
-            echo "ERROR: pom.xml must reference tp/tp.target as target platform file."
+          if ! grep -q 'target/tp.target' pom.xml; then
+            echo "ERROR: pom.xml must reference target/tp.target as target platform file."
             exit 1
           fi
-          test -f tp/tp.target || (echo "ERROR: tp/tp.target not found" && exit 1)
+          test -f target/tp.target || (echo "ERROR: target/tp.target not found" && exit 1)
 
       - name: Build with Maven
         run: mvn -B clean package

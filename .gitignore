@@ -3,6 +3,6 @@
 site/target/
 plugin/target/
 feature/target/
-tp/target/
+target/target/
 
 # P2 update site (site/features/, plugins/, *.jar) — коммитить для publish.yml

@@ -23,7 +23,7 @@
   </properties>
 
   <modules>
-    <module>tp</module>
+    <module>target</module>
     <module>plugin</module>
     <module>feature</module>
     <module>site</module>
@@ -41,7 +41,7 @@
             <executionEnvironment>JavaSE-17</executionEnvironment>
             <includePackedArtifacts>false</includePackedArtifacts>
             <target>
-              <file>${maven.multiModuleProjectDirectory}/tp/tp.target</file>
+              <file>${maven.multiModuleProjectDirectory}/target/tp.target</file>
             </target>
             <environments>
               <environment>
