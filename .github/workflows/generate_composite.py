@@ -90,7 +90,21 @@ def main() -> None:
         latest = children[0]
 
     for child in children:
-        publish_p2_files(os.path.join(deploy_dir, child))
+        child_dir = os.path.join(deploy_dir, child)
+        publish_p2_files(child_dir)
+        version_index = f"""<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>EDT Comfort {child}</title></head>
+<body>
+  <h1>EDT Comfort — версия {child}</h1>
+  <p>URL для EDT «Установить новое ПО»:</p>
+  <p><code>https://tormozit.github.io/EDT.Comfort/{child}/</code></p>
+  <p><a href="../">← Все версии</a></p>
+</body>
+</html>
+"""
+        with open(os.path.join(child_dir, "index.html"), "w", encoding="utf-8") as f:
+            f.write(version_index)
 
     if latest:
         latest_dir = os.path.join(deploy_dir, latest)

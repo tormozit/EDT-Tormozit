@@ -13,10 +13,6 @@
       (c) tormozit
    </copyright>
 
-   <license url="">
-      MIT
-   </license>
-
    <plugin
          id="tormozit.comfort"
          version="0.0.0"
