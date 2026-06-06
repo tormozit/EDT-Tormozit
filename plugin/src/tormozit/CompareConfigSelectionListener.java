@@ -15,7 +15,6 @@ import org.eclipse.jface.viewers.StructuredSelection;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.IViewPart;
-import org.eclipse.ui.IWorkbenchPage;
 import org.eclipse.ui.navigator.CommonNavigator;
 import org.eclipse.jdt.annotation.Nullable;
 
@@ -64,8 +63,7 @@ public class CompareConfigSelectionListener implements ISelectionChangedListener
             }
             
             // Оповещаем навигатор
-            IWorkbenchPage page = editor.getSite().getPage();
-            IViewPart view = page.findView("com._1c.g5.v8.dt.ui2.navigator"); // ID Навигатора EDT
+            IViewPart view = Global.getViewById(Global.NAVIGATOR_VIEW_ID);
             if (view instanceof CommonNavigator) {
                 CommonNavigator navigator = (CommonNavigator) view;
                  if (ifForced || isLinkingEnabled(navigator)) {
