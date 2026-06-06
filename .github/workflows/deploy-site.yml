@@ -20,13 +20,8 @@ jobs:
           distribution: 'temurin'
 
       - name: Sync version
-        run: pwsh site/sync-version.ps1
-
-      - name: Read release version
         id: version
-        run: |
-          VER=$(grep 'comfort.release=' site/version.txt | cut -d= -f2)
-          echo "release_version=$VER" >> $GITHUB_OUTPUT
+        run: pwsh site/sync-version.ps1
 
       - name: Remove stale target/ module if present
         run: rm -rf target/
@@ -68,4 +63,5 @@ jobs:
           clean: true
           clean-exclude: |
             [0-9]*.[0-9]*.[0-9]*.[0-9]*/
+            [0-9]*.[0-9]*.[0-9]*.[0-9]*.[0-9]*/
           commit-message: "Add update site ${{ steps.version.outputs.release_version }}"

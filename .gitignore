@@ -6,7 +6,12 @@ site/content.jar
 site/artifacts.jar
 site/*.zip
 
-# Maven/Tycho build output — исключаем вложенные target/, но не корневую
+# Maven/Tycho build output
+/target/
 plugin/target/
 feature/target/
 site/target/
+tp/target/
+
+# Полный номер сборки (генерируется sync-version.ps1)
+site/build-version.txt

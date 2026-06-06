@@ -4,6 +4,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $versionFile = Join-Path $PSScriptRoot 'version.txt'
+$buildVersionFile = Join-Path $PSScriptRoot 'build-version.txt'
 
 if (-not (Test-Path $versionFile)) {
     Write-Error "version.txt not found: $versionFile"
@@ -20,8 +21,9 @@ if (-not $release) {
     Write-Error "comfort.release not found in version.txt (expected format: 1.0.0.10)"
 }
 
-$qualifier = "$release-qualifier"
-Write-Host "Sync version: $qualifier"
+$buildStamp = Get-Date -Format 'yyyyMMddHHmmss'
+$fullVersion = "$release.$buildStamp"
+Write-Host "Sync version: $fullVersion (base $release + $buildStamp)"
 
 function Set-Utf8NoBomContent {
     param(
@@ -38,7 +40,7 @@ $manifestLines = Get-Content -LiteralPath $manifestPath -Encoding UTF8
 $manifestUpdated = $false
 for ($i = 0; $i -lt $manifestLines.Count; $i++) {
     if ($manifestLines[$i] -match '^Bundle-Version:\s') {
-        $manifestLines[$i] = "Bundle-Version: $qualifier"
+        $manifestLines[$i] = "Bundle-Version: $fullVersion"
         $manifestUpdated = $true
         break
     }
@@ -58,7 +60,7 @@ if (-not [regex]::IsMatch($featureText, $featurePattern)) {
 $featureTextNew = [regex]::Replace(
     $featureText,
     $featurePattern,
-    "`${1}$qualifier`${2}",
+    "`${1}$fullVersion`${2}",
     1
 )
 [System.IO.File]::WriteAllText($featurePath, $featureTextNew, (New-Object System.Text.UTF8Encoding($false)))
@@ -66,7 +68,7 @@ $featureTextNew = [regex]::Replace(
 # site/site.xml
 $sitePath = Join-Path $PSScriptRoot 'site.xml'
 $siteText = [System.IO.File]::ReadAllText($sitePath, [System.Text.Encoding]::UTF8)
-$siteJar = "features/tormozit.comfort.feature_${release}-qualifier.jar"
+$siteJar = "features/tormozit.comfort.feature_${fullVersion}.jar"
 $sitePattern = 'url="features/tormozit\.comfort\.feature_[^"]+\.jar"'
 if (-not [regex]::IsMatch($siteText, $sitePattern)) {
     Write-Error "feature url not found in site.xml"
@@ -78,7 +80,7 @@ $siteTextNew = [regex]::Replace(
 )
 [System.IO.File]::WriteAllText($sitePath, $siteTextNew, (New-Object System.Text.UTF8Encoding($false)))
 
-# site/pom.xml
+# site/pom.xml — фиксированная база, без метки времени
 $sitePomPath = Join-Path $PSScriptRoot 'pom.xml'
 $sitePomText = [System.IO.File]::ReadAllText($sitePomPath, [System.Text.Encoding]::UTF8)
 $sitePomPattern = '(<artifactId>comfort\.site</artifactId>\s*<version>)[^<]+(</version>)'
@@ -88,7 +90,7 @@ if ([regex]::IsMatch($sitePomText, $sitePomPattern)) {
     Write-Host "Updated: site/pom.xml -> $release"
 }
 
-# tp/pom.xml
+# tp/pom.xml — фиксированная база, без метки времени
 $tpPomPath = Join-Path $Root 'tp\pom.xml'
 $tpPomText = [System.IO.File]::ReadAllText($tpPomPath, [System.Text.Encoding]::UTF8)
 $tpPomPattern = '(<artifactId>tp</artifactId>\s*<version>)[^<]+(</version>)'
@@ -108,4 +110,14 @@ if ([regex]::IsMatch($rootPomText, $rootPomPattern)) {
     Write-Host "Updated: pom.xml (root tp reference) -> $release"
 }
 
-Write-Host "Done. All versions synced to $release"
+Set-Utf8NoBomContent -Path $buildVersionFile -Lines @(
+    "# Сгенерировано sync-version.ps1, не редактировать вручную.",
+    "comfort.build=$fullVersion"
+)
+Write-Host "Updated: build-version.txt -> $fullVersion"
+
+if ($env:GITHUB_OUTPUT) {
+    "release_version=$fullVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+}
+
+Write-Host "Done. Bundle/feature version: $fullVersion; Maven base: $release"
