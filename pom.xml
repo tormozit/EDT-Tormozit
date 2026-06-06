@@ -23,7 +23,7 @@
   </properties>
 
   <modules>
-    <module>target</module>
+    <module>tp</module>
     <module>plugin</module>
     <module>feature</module>
     <module>site</module>
@@ -43,8 +43,8 @@
             <target>
               <artifact>
                 <groupId>tormozit</groupId>
-                <artifactId>default</artifactId>
-                <version>1.0-SNAPSHOT</version>
+                <artifactId>tp</artifactId>
+                <version>1.0.0.10</version>
               </artifact>
             </target>
             <environments>

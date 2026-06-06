@@ -88,14 +88,24 @@ if ([regex]::IsMatch($sitePomText, $sitePomPattern)) {
     Write-Host "Updated: site/pom.xml -> $release"
 }
 
-# target/pom.xml
-$targetPomPath = Join-Path $Root 'target\pom.xml'
-$targetPomText = [System.IO.File]::ReadAllText($targetPomPath, [System.Text.Encoding]::UTF8)
-$targetPomPattern = '(<artifactId>default</artifactId>\s*<version>)[^<]+(</version>)'
-if ([regex]::IsMatch($targetPomText, $targetPomPattern)) {
-    $targetPomNew = [regex]::Replace($targetPomText, $targetPomPattern, "`${1}$release`${2}")
-    [System.IO.File]::WriteAllText($targetPomPath, $targetPomNew, (New-Object System.Text.UTF8Encoding($false)))
-    Write-Host "Updated: target/pom.xml -> $release"
+# tp/pom.xml
+$tpPomPath = Join-Path $Root 'tp\pom.xml'
+$tpPomText = [System.IO.File]::ReadAllText($tpPomPath, [System.Text.Encoding]::UTF8)
+$tpPomPattern = '(<artifactId>tp</artifactId>\s*<version>)[^<]+(</version>)'
+if ([regex]::IsMatch($tpPomText, $tpPomPattern)) {
+    $tpPomNew = [regex]::Replace($tpPomText, $tpPomPattern, "`${1}$release`${2}")
+    [System.IO.File]::WriteAllText($tpPomPath, $tpPomNew, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Host "Updated: tp/pom.xml -> $release"
+}
+
+# pom.xml (root) — update tp version reference in target-platform-configuration
+$rootPomPath = Join-Path $Root 'pom.xml'
+$rootPomText = [System.IO.File]::ReadAllText($rootPomPath, [System.Text.Encoding]::UTF8)
+$rootPomPattern = '(<artifactId>tp</artifactId>\s*<version>)[^<]+(</version>)'
+if ([regex]::IsMatch($rootPomText, $rootPomPattern)) {
+    $rootPomNew = [regex]::Replace($rootPomText, $rootPomPattern, "`${1}$release`${2}")
+    [System.IO.File]::WriteAllText($rootPomPath, $rootPomNew, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Host "Updated: pom.xml (root tp reference) -> $release"
 }
 
 Write-Host "Done. All versions synced to $release"
