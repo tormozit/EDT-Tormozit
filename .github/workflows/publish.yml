@@ -1,6 +1,6 @@
 name: Publish p2 site
 
-# Локально: Eclipse Build All в site/ (или mvn package) → закоммитить
+# Локально: Eclipse Build All в site/ → закоммитить
 # site/features/, site/plugins/, site/content.jar, site/artifacts.jar → Run workflow.
 on:
   workflow_dispatch:
@@ -14,6 +14,8 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Read version
         id: ver
@@ -33,34 +35,42 @@ jobs:
           ls -la site/features/ site/plugins/ 2>/dev/null || true
           ls -la site/*.jar 2>/dev/null || true
 
-      - name: Checkout existing gh-pages
-        uses: actions/checkout@v4
-        with:
-          ref: gh-pages
-          path: gh-pages
-        continue-on-error: true
+      - name: Stash p2 artifacts
+        run: |
+          mkdir -p p2-staging
+          for item in features plugins content.jar artifacts.jar p2.index; do
+            if [ -e "site/$item" ]; then
+              cp -r "site/$item" p2-staging/
+            fi
+          done
+          ls -laR p2-staging
 
       - name: Prepare deploy folder
         run: |
-          mkdir -p "deploy/${{ steps.ver.outputs.version }}"
-          for item in features plugins content.jar artifacts.jar p2.index; do
-            if [ -e "site/$item" ]; then
-              cp -r "site/$item" "deploy/${{ steps.ver.outputs.version }}/"
-            fi
-          done
+          set -euo pipefail
+          VER="${{ steps.ver.outputs.version }}"
+          mkdir -p "deploy/$VER"
+          cp -r p2-staging/. "deploy/$VER/"
 
-          if [ -d gh-pages ]; then
-            for dir in gh-pages/*/; do
+          if git fetch origin gh-pages 2>/dev/null && git rev-parse --verify origin/gh-pages >/dev/null 2>&1; then
+            mkdir -p /tmp/old-pages
+            git archive origin/gh-pages | tar -x -C /tmp/old-pages
+            shopt -s nullglob
+            for dir in /tmp/old-pages/*/; do
               name=$(basename "$dir")
-              if [[ "$name" != "p2.index" && "$name" != "compositeContent.jar" && "$name" != "compositeArtifacts.jar" && "$name" != "index.html" ]]; then
-                if [ ! -d "deploy/$name" ]; then
-                  cp -r "$dir" "deploy/$name"
-                fi
+              case "$name" in
+                p2.index|compositeContent.jar|compositeArtifacts.jar|index.html) continue ;;
+              esac
+              if [ ! -d "deploy/$name" ]; then
+                cp -r "$dir" "deploy/$name"
               fi
             done
+          else
+            echo "No gh-pages branch yet — first publish."
           fi
 
-          ls -laR deploy
+          ls -la deploy
+          ls -la "deploy/$VER"
 
       - name: Generate composite metadata
         run: python3 .github/workflows/generate_composite.py
