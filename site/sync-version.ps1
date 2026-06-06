@@ -99,14 +99,4 @@ if ([regex]::IsMatch($tpPomText, $tpPomPattern)) {
     Write-Host "Updated: tp/pom.xml -> $release"
 }
 
-# pom.xml (root) — update tp version reference in target-platform-configuration
-$rootPomPath = Join-Path $Root 'pom.xml'
-$rootPomText = [System.IO.File]::ReadAllText($rootPomPath, [System.Text.Encoding]::UTF8)
-$rootPomPattern = '(<artifactId>tp</artifactId>\s*<version>)[^<]+(</version>)'
-if ([regex]::IsMatch($rootPomText, $rootPomPattern)) {
-    $rootPomNew = [regex]::Replace($rootPomText, $rootPomPattern, "`${1}$release`${2}")
-    [System.IO.File]::WriteAllText($rootPomPath, $rootPomNew, (New-Object System.Text.UTF8Encoding($false)))
-    Write-Host "Updated: pom.xml (root tp reference) -> $release"
-}
-
 Write-Host "Done. OSGi version template: $qualifier (timestamp подставится при сборке)"

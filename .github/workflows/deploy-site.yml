@@ -22,8 +22,13 @@ jobs:
       - name: Sync version
         run: pwsh site/sync-version.ps1
 
-      - name: Remove stale target/ module if present
-        run: rm -rf target/
+      - name: Verify Maven modules
+        run: |
+          if grep -q '<module>target</module>' pom.xml; then
+            echo "ERROR: pom.xml still references removed target/ module — push latest master"
+            exit 1
+          fi
+          test -f tp/tp.target || (echo "ERROR: tp/tp.target not found" && exit 1)
 
       - name: Build with Maven
         run: mvn -B clean package

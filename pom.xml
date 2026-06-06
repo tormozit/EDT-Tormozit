@@ -41,11 +41,7 @@
             <executionEnvironment>JavaSE-17</executionEnvironment>
             <includePackedArtifacts>false</includePackedArtifacts>
             <target>
-              <artifact>
-                <groupId>tormozit</groupId>
-                <artifactId>tp</artifactId>
-                <version>1.0.0.10</version>
-              </artifact>
+              <file>${maven.multiModuleProjectDirectory}/tp/tp.target</file>
             </target>
             <environments>
               <environment>
