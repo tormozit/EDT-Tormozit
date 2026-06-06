@@ -51,20 +51,11 @@
               </environment>
             </environments>
             <dependency-resolution>
+              <optionalDependencies>ignore</optionalDependencies>
               <extraRequirements>
                 <requirement>
                   <type>eclipse-plugin</type>
                   <id>org.apache.felix.scr</id>
-                  <versionRange>0.0.0</versionRange>
-                </requirement>
-                <requirement>
-                  <type>eclipse-plugin</type>
-                  <id>org.eclipse.jdt.annotation</id>
-                  <versionRange>0.0.0</versionRange>
-                </requirement>
-                <requirement>
-                  <type>eclipse-plugin</type>
-                  <id>org.eclipse.jdt.core.compiler.batch</id>
                   <versionRange>0.0.0</versionRange>
                 </requirement>
               </extraRequirements>

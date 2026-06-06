@@ -1,31 +1,14 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <!--
-   Target platform для Maven/Tycho и Eclipse.
-   Без com._1c.g5.v8.dt.rcp/product — они тянут полный RCP-стек и ломают headless CI.
+   Один репозиторий EDT, planner — согласованный набор Eclipse+1C без смешивания версий.
+   Без rcp/product/platform.support.
 -->
 <?pde version="3.8"?><target name="1C:EDT Ruby Platform" sequenceNumber="1">
 <locations>
-
-<!-- EDT: только SDK feature + thirdparty -->
-<location includeAllPlatforms="false" includeConfigurePhase="true" includeMode="slicer" includeSource="true" type="InstallableUnit">
+<location includeAllPlatforms="false" includeConfigurePhase="true" includeMode="planner" includeSource="true" type="InstallableUnit">
 <repository id="dt_repository" location="https://edt.1c.ru/downloads/releases/ruby/2025.2/"/>
 <unit id="com._1c.g5.v8.dt.feature.feature.group" version="0.0.0"/>
 <unit id="com._1c.g5.v8.dt.thirdparty.feature.group" version="0.0.0"/>
 </location>
-
-<!-- Eclipse bundles, которых нет в slicer-наборе EDT -->
-<location includeAllPlatforms="false" includeConfigurePhase="true" includeMode="slicer" includeSource="true" type="InstallableUnit">
-<repository id="eclipse_repository" location="https://download.eclipse.org/releases/2024-12/"/>
-<unit id="org.eclipse.jdt.annotation" version="0.0.0"/>
-<unit id="org.eclipse.jdt.core.compiler.batch" version="0.0.0"/>
-<unit id="org.eclipse.platform.feature.group" version="0.0.0"/>
-<unit id="org.eclipse.e4.rcp.feature.group" version="0.0.0"/>
-</location>
-
-<location includeAllPlatforms="false" includeConfigurePhase="true" includeMode="slicer" includeSource="true" type="InstallableUnit">
-<unit id="org.eclipse.license.feature.group" version="0.0.0"/>
-<repository location="https://download.eclipse.org/cbi/updates/license/2.0.2.v20181016-2210"/>
-</location>
-
 </locations>
 </target>
