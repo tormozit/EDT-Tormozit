@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project name="Sync version" default="sync">
+	<property name="site.dir" location="${basedir}/site"/>
+
+	<target name="sync">
+		<delete dir="${site.dir}/plugins" failonerror="false" quiet="true"/>
+		<delete dir="${site.dir}/features" failonerror="false" quiet="true"/>
+		<delete file="${site.dir}/content.jar" failonerror="false" quiet="true"/>
+		<delete file="${site.dir}/artifacts.jar" failonerror="false" quiet="true"/>
+		<delete failonerror="false" quiet="true">
+			<fileset dir="${site.dir}" includes="*.zip"/>
+		</delete>
+
+		<exec executable="powershell.exe" failonerror="true">
+			<arg value="-NoProfile"/>
+			<arg value="-ExecutionPolicy"/>
+			<arg value="Bypass"/>
+			<arg value="-File"/>
+			<arg path="${basedir}/site/sync-version.ps1"/>
+		</exec>
+
+		<eclipse.refreshLocal resource="/plugin" depth="infinite"/>
+		<eclipse.refreshLocal resource="/feature" depth="infinite"/>
+		<eclipse.refreshLocal resource="/site" depth="infinite"/>
+
+		<eclipse.incrementalBuild project="plugin" kind="full"/>
+		<eclipse.incrementalBuild project="feature" kind="full"/>
+	</target>
+</project>
