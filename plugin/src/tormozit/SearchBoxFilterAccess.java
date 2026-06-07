@@ -113,10 +113,11 @@ final class SearchBoxFilterAccess
 
     boolean attachPatternListener(IViewPart navigator, Consumer<String> onPatternChange)
     {
-        return attachPatternListener(navigator, null, onPatternChange);
+        return attachPatternListener(navigator, null, null, onPatternChange);
     }
 
-    boolean attachPatternListener(IViewPart navigator, Object nativeListener, Consumer<String> onPatternChange)
+    boolean attachPatternListener(IViewPart navigator, Object nativeListener, Object propertyPage,
+            Consumer<String> onPatternChange)
     {
         boolean attached = false;
         ModifyListener onModify = e -> onPatternChange.accept(null);
@@ -140,7 +141,7 @@ final class SearchBoxFilterAccess
             }
         }
         // Резерв: performSearch (в т.ч. очистка) — observable иногда молчит
-        if (attachSearchListenerProxy(navigator, nativeListener, onPatternChange))
+        if (attachSearchListenerProxy(navigator, nativeListener, propertyPage, onPatternChange))
             attached = true;
         return attached;
     }
@@ -266,13 +267,13 @@ final class SearchBoxFilterAccess
         return null;
     }
 
-    private boolean attachSearchListenerProxy(IViewPart navigator, Object nativeListener,
+    private boolean attachSearchListenerProxy(IViewPart navigator, Object nativeListener, Object propertyPage,
             Consumer<String> onPatternChange)
     {
         Object delegate = nativeListener;
         if (delegate == null && navigator != null)
             delegate = Global.getField(navigator, "searchPerformer"); //$NON-NLS-1$
-        Object proxy = createSearchListener(onPatternChange, delegate);
+        Object proxy = createSearchListener(onPatternChange, delegate, propertyPage);
         if (proxy == null)
             return false;
         Global.invoke(searchBox, "setSearchListener", proxy); //$NON-NLS-1$
@@ -298,7 +299,7 @@ final class SearchBoxFilterAccess
         }
     }
 
-    private static Object createSearchListener(Consumer<String> onSearch, Object nativeDelegate)
+    private static Object createSearchListener(Consumer<String> onSearch, Object nativeDelegate, Object propertyPage)
     {
         try
         {
@@ -309,8 +310,11 @@ final class SearchBoxFilterAccess
                         {
                             String pattern = patternFromPerformSearchArgs(args);
                             runOnUiThread(onSearch, pattern);
-                            // Очистка: нативный searchPerformer сбрасывает FilteredNavigatorContentProvider
-                            if (pattern.isEmpty() && nativeDelegate != null)
+                            // Нативный performSearch("") пересобирает палитру и очищает Comfort UI.
+                            boolean comfortActive = propertyPage != null
+                                    && PropertySheetComfortUi.isInstalled(propertyPage)
+                                    && PropertySheetComfortUi.hasRows(propertyPage);
+                            if (pattern.isEmpty() && nativeDelegate != null && !comfortActive)
                                 return method.invoke(nativeDelegate, args);
                             return null;
                         }

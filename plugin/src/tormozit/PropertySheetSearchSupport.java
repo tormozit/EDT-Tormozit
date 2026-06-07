@@ -25,15 +25,16 @@ final class PropertySheetSearchSupport
 
     private PropertySheetSearchSupport() {}
 
-    /** Синхронизация «Новой» вкладки после смены источника — без refreshChildren нативной палитры. */
+    /** Синхронизация «Новой» вкладки после смены модели — только refresh comfort UI, без restoreNativeTransform. */
     static void prepareComfortSync(Object page)
     {
         if (page == null)
             return;
         String pattern = readCurrentPattern(page);
-        apply(page, pattern, false);
-        PropertySheetDebug.uiVerbose("prepareComfortSync page=" + PropertySheetDebug.safe(page) //$NON-NLS-1$
-                + " pattern=" + PropertySheetDebug.quote(pattern)); //$NON-NLS-1$
+        SmartMatcher matcher = new SmartMatcher(pattern != null ? pattern : ""); //$NON-NLS-1$
+        PropertySheetDebug.sync("prepareComfortSync scheduleRefresh pattern=" //$NON-NLS-1$
+                + PropertySheetDebug.quote(pattern));
+        PropertySheetComfortCoordinator.scheduleRefresh(page, matcher);
     }
 
     static void apply(Object page, String pattern)
@@ -92,20 +93,22 @@ final class PropertySheetSearchSupport
             return;
         }
 
+        boolean comfortActive = PropertySheetComfortUi.isInstalled(page) && PropertySheetComfortUi.hasRows(page);
         if (matcher.isEmpty)
         {
-            if (refreshNative)
+            if (refreshNative && !comfortActive)
                 clearNativeFilterPreference(page);
             NATIVE_TRANSFORMS.remove(page);
             restoreNativeTransform(page, paletteComponent, scene);
-            if (refreshNative)
+            if (refreshNative && !comfortActive)
             {
                 Global.invoke(page, "setFilterText", ""); //$NON-NLS-1$ //$NON-NLS-2$
                 refreshPalette(paletteComponent);
                 forceRestoreAfterClear(page, paletteComponent, scene, matcher);
             }
             scheduleUiSync(page, matcher);
-            PropertySheetDebug.uiVerbose("apply empty sync refreshNative=" + refreshNative); //$NON-NLS-1$
+            PropertySheetDebug.uiVerbose("apply empty sync refreshNative=" + refreshNative //$NON-NLS-1$
+                    + " comfortActive=" + comfortActive); //$NON-NLS-1$
             return;
         }
 
@@ -113,7 +116,7 @@ final class PropertySheetSearchSupport
         if (renderer == null)
             return;
 
-        if (refreshNative)
+        if (refreshNative && !comfortActive)
             clearNativeFilterPreference(page);
         else
             NATIVE_TRANSFORMS.remove(page);
@@ -128,7 +131,7 @@ final class PropertySheetSearchSupport
         Object wrapped = wrapTransformation(page, baseTransform, matcher, scene);
         NATIVE_TRANSFORMS.putIfAbsent(page, baseTransform);
         Global.invoke(renderer, "setTreeTransformation", wrapped); //$NON-NLS-1$
-        if (refreshNative)
+        if (refreshNative && !comfortActive)
             refreshPalette(paletteComponent);
         scheduleUiSync(page, matcher);
 

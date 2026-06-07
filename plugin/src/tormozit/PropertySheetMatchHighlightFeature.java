@@ -184,14 +184,19 @@ final class PropertySheetMatchHighlightFeature implements PropertySheetUiFeature
                     {
                         if (rh.matcher == null || rh.matcher.isEmpty || !rh.matcher.matches(rh.text))
                             continue;
-                        Point origin = PropertySheetControlInterop.lwtHighlightOrigin(host, rh.propertyName);
+                        Point origin = resolveLwtHighlightOrigin(host, rh);
                         Rectangle band = PropertySheetControlInterop.lwtRowBand(host, rh.propertyName);
                         if (band != null)
                         {
                             if (origin.x < band.x)
                                 origin.x = band.x;
-                            if (origin.y < band.y - 2 || origin.y > band.y + band.height + 2)
-                                origin.y = band.y + Math.max(0, (band.height - 13) / 2);
+                            if (rh.light == null)
+                            {
+                                int textHeight = PropertySheetControlInterop.lwtTextHeight(rh.light,
+                                        host instanceof Composite ? (Composite) host : null);
+                                if (origin.y < band.y - 2 || origin.y > band.y + band.height + 2)
+                                    origin.y = band.y + Math.max(0, (band.height - textHeight) / 2);
+                            }
                         }
                         Rectangle prevClip = e.gc.getClipping();
                         if (band != null)
@@ -206,10 +211,22 @@ final class PropertySheetMatchHighlightFeature implements PropertySheetUiFeature
             host.setData(LWT_HOOK_KEY, Boolean.TRUE);
         }
         host.redraw();
-        Point origin = PropertySheetControlInterop.lwtHighlightOrigin(host, propertyName);
+        Point origin = resolveLwtHighlightOrigin(host, entry);
         PropertySheetDebug.feature("highlight lwt " + PropertySheetDebug.quote(text) //$NON-NLS-1$
                 + " origin=(" + origin.x + "," + origin.y + ")" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 + " ctrl=" + PropertySheetDebug.controlBrief(host)); //$NON-NLS-1$
+    }
+
+    private static Point resolveLwtHighlightOrigin(Control host, LwtRowHighlight rh)
+    {
+        if (rh != null && rh.light != null && host instanceof Composite)
+        {
+            Point exact = PropertySheetControlInterop.lwtLabelDrawOrigin(rh.light, (Composite) host);
+            if (exact != null)
+                return exact;
+        }
+        return PropertySheetControlInterop.lwtHighlightOrigin(host,
+                rh != null ? rh.propertyName : null);
     }
 
     private static void purgeStaleHighlights(PropertySheetUiContext ctx)

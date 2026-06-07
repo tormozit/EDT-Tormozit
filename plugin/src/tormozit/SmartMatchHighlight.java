@@ -15,8 +15,11 @@ import org.eclipse.swt.graphics.FontData;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.TextStyle;
+import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
+import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.Scrollable;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.themes.ITheme;
 
@@ -135,9 +138,9 @@ public final class SmartMatchHighlight
 
         Font prevFont = gc.getFont();
         Color prevFg = gc.getForeground();
-        Font bold = boldFontFrom(baseFont != null ? baseFont : prevFont);
+        Font measureFont = baseFont != null && !baseFont.isDisposed() ? baseFont : prevFont;
+        Font bold = boldFontFrom(measureFont);
         gc.setForeground(foreground());
-        gc.setFont(bold);
         try
         {
             for (SmartMatcher.HighlightRange range : ranges)
@@ -146,7 +149,9 @@ public final class SmartMatchHighlight
                     continue;
                 String prefix = text.substring(0, range.offset);
                 String match = text.substring(range.offset, range.offset + range.length);
+                gc.setFont(measureFont);
                 int x = baseX + gc.textExtent(prefix, SWT.DRAW_TRANSPARENT | SWT.DRAW_DELIMITER).x;
+                gc.setFont(bold);
                 gc.drawText(match, x, baseY, true);
             }
         }
@@ -164,9 +169,41 @@ public final class SmartMatchHighlight
         Font font = control.getFont();
         if (font != null)
             gc.setFont(font);
-        Point ext = gc.textExtent(text);
-        int x = 4;
-        int y = Math.max(0, (control.getSize().y - ext.y) / 2);
+
+        String measureText = text;
+        if (control instanceof Label)
+        {
+            String labelText = ((Label) control).getText();
+            if (labelText != null && !labelText.isEmpty())
+                measureText = labelText;
+        }
+
+        Point ext = gc.textExtent(measureText);
+        int w = control.getSize().x;
+        int h = control.getSize().y;
+        int originX = 0;
+        int originY = 0;
+        if (control instanceof Scrollable)
+        {
+            Rectangle area = ((Scrollable) control).getClientArea();
+            if (area.width > 0)
+                w = area.width;
+            if (area.height > 0)
+                h = area.height;
+            originX = area.x;
+            originY = area.y;
+        }
+
+        int x = originX;
+        if (control instanceof Label)
+        {
+            int style = ((Label) control).getStyle();
+            if ((style & SWT.CENTER) != 0)
+                x = originX + Math.max(0, (w - ext.x) / 2);
+            else if ((style & SWT.RIGHT) != 0)
+                x = originX + Math.max(0, w - ext.x);
+        }
+        int y = originY + Math.max(0, (h - ext.y) / 2);
         return new Point(x, y);
     }
 

@@ -35,6 +35,8 @@ import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
 import org.eclipse.swt.widgets.Text;
 
+import tormozit.PropertySheetComfortValueControls.Kind;
+
 /**
  * Собственный SWT-список свойств вместо LWT-палитры EDT.
  * Строится из {@code ITreeTransformation}, поддерживает фильтр, выделение, подсветку и copy-menu.
@@ -72,6 +74,18 @@ final class PropertySheetComfortUi
         Session session = SESSIONS.get(page);
         return session != null && !session.rows.isEmpty()
                 && session.content != null && !session.content.isDisposed();
+    }
+
+    static boolean isComfortPushInProgress(Object page)
+    {
+        Session session = SESSIONS.get(page);
+        return session != null && session.comfortPushInProgress;
+    }
+
+    static boolean isComfortRefreshSuppressed(Object page)
+    {
+        Session session = SESSIONS.get(page);
+        return session != null && session.suppressFullRefreshUntil > System.currentTimeMillis();
     }
 
     static boolean install(Object page, SmartMatcher matcher)
@@ -202,13 +216,16 @@ final class PropertySheetComfortUi
             if (session.entrySignature.isEmpty())
                 session.entrySignature = signature;
         }
-        if (!entries.isEmpty() && signature.equals(session.entrySignature) && !session.rows.isEmpty())
+        if (session.comfortPushInProgress)
         {
-            if (sourceChanged)
-            {
-                session.sourceKey = sourceKey;
-                invalidateLookupCaches(session);
-            }
+            scheduleDeferredRefresh(session, active);
+            PropertySheetDebug.syncVerbose("refresh DEFER pushInProgress rows=" + session.rows.size()); //$NON-NLS-1$
+            return true;
+        }
+        if (session.suppressFullRefreshUntil > System.currentTimeMillis()
+                && !entries.isEmpty() && !session.rows.isEmpty())
+        {
+            PropertySheetDebug.sync("refresh SUPPRESS rebuild rows=" + session.rows.size()); //$NON-NLS-1$
             updateRowValues(session, entries);
             restoreSelection(session);
             applyHighlights(session);
@@ -216,9 +233,34 @@ final class PropertySheetComfortUi
                 relayoutContent(session);
             return true;
         }
+        PropertySheetDebug.sync("refresh entries=" + entries.size() //$NON-NLS-1$
+                + " rows=" + session.rows.size() //$NON-NLS-1$
+                + " sigMatch=" + signature.equals(session.entrySignature) //$NON-NLS-1$
+                + " sourceChanged=" + sourceChanged); //$NON-NLS-1$
+        if (!entries.isEmpty() && signature.equals(session.entrySignature) && !session.rows.isEmpty()
+                && nativeLinksMostlyAlive(session))
+        {
+            if (sourceChanged)
+            {
+                session.sourceKey = sourceKey;
+                invalidateLookupCaches(session);
+            }
+            PropertySheetDebug.syncVerbose("refresh UPDATE values (structure unchanged)"); //$NON-NLS-1$
+            updateRowValues(session, entries);
+            restoreSelection(session);
+            applyHighlights(session);
+            if (isComfortTabSelected(session))
+                relayoutContent(session);
+            return true;
+        }
+        if (!entries.isEmpty() && signature.equals(session.entrySignature) && !session.rows.isEmpty())
+            PropertySheetDebug.sync("refresh REBUILD native links disposed alive=" //$NON-NLS-1$
+                    + countAliveNativeLinks(session) + "/" + session.rows.size()); //$NON-NLS-1$
         session.sourceKey = sourceKey;
         if (sourceChanged)
             invalidateLookupCaches(session);
+        PropertySheetDebug.sync("refresh REBUILD entries=" + entries.size() //$NON-NLS-1$
+                + " prevRows=" + session.rows.size()); //$NON-NLS-1$
         boolean hasRows = rebuild(session, entries);
         if (!hasRows && session.mirrorShown)
         {
@@ -279,13 +321,12 @@ final class PropertySheetComfortUi
         PropertySheetDebug.uiVerbose("comfortUi data entries=" + entries.size()); //$NON-NLS-1$
         if (entries.isEmpty() && !session.rows.isEmpty())
         {
-            PropertySheetDebug.uiVerbose("comfortUi KEEP previous rows=" + session.rows.size() //$NON-NLS-1$
-                    + " because new entries=0"); //$NON-NLS-1$
+            PropertySheetDebug.sync("rebuild KEEP rows=" + session.rows.size() + " (entries=0)"); //$NON-NLS-1$ //$NON-NLS-2$
             return true;
         }
         if (entries.isEmpty())
         {
-            PropertySheetDebug.uiVerbose("comfortUi WAIT data entries=0, native stays visible"); //$NON-NLS-1$
+            PropertySheetDebug.sync("rebuild WAIT entries=0 rows=" + session.rows.size()); //$NON-NLS-1$
             return false;
         }
 
@@ -330,7 +371,7 @@ final class PropertySheetComfortUi
             session.paletteRows.clear();
             session.paletteRows.addAll(oldPaletteRows);
             newContent.dispose();
-            PropertySheetDebug.uiVerbose("comfortUi REBUILD abort keep previous rows=" + oldRows.size()); //$NON-NLS-1$
+            PropertySheetDebug.sync("rebuild ABORT restored rows=" + oldRows.size()); //$NON-NLS-1$
             return !oldRows.isEmpty();
         }
 
@@ -343,7 +384,20 @@ final class PropertySheetComfortUi
         PropertySheetDebug.uiVerbose("comfortUi mirror values nativeValues=" + nativeValues //$NON-NLS-1$
                 + " nonEmpty=" + nonEmptyValues); //$NON-NLS-1$
         session.entrySignature = entryStructureSignature(entries);
+        scheduleEditableStateRefresh(session);
         return true;
+    }
+
+    private static void scheduleEditableStateRefresh(Session session)
+    {
+        if (session == null || session.content == null || session.content.isDisposed())
+            return;
+        org.eclipse.swt.widgets.Display display = session.content.getDisplay();
+        if (display == null || display.isDisposed())
+            return;
+        display.asyncExec(() -> refreshRowEditableStates(session));
+        display.timerExec(120, () -> refreshRowEditableStates(session));
+        display.timerExec(350, () -> refreshRowEditableStates(session));
     }
 
     private static boolean isComfortTabSelected(Session session)
@@ -485,6 +539,475 @@ final class PropertySheetComfortUi
         return sb.toString();
     }
 
+    private static void pushComfortToNative(Session session, ComfortRow row, String triggerProperty)
+    {
+        if (session == null || row == null || row.created == null)
+            return;
+        if (session.comfortPushInProgress)
+            return;
+        session.comfortPushInProgress = true;
+        session.suppressFullRefreshUntil = System.currentTimeMillis() + 3_000L;
+        try
+        {
+            Object scene = Global.invoke(session.page, "getScene"); //$NON-NLS-1$
+            Object renderer = scene != null ? Global.invoke(scene, "getRenderer") : null; //$NON-NLS-1$
+            Control nativeValue = row.nativeValueControl;
+            if ((nativeValue == null || nativeValue.isDisposed()) && row.created != null
+                    && row.created.kind == PropertySheetComfortValueControls.Kind.BOOLEAN)
+            {
+                if (renderer != null && row.valueView != null)
+                    nativeValue = PropertySheetControlInterop.resolveCheckboxNative(renderer, row.valueView,
+                            row.propertyName);
+                if ((nativeValue == null || nativeValue.isDisposed()) && scene != null)
+                    nativeValue = PropertySheetControlInterop.resolveNameControl(scene, row.valueViewModel,
+                            row.valueView, row.propertyName);
+                if (nativeValue != null && !nativeValue.isDisposed())
+                {
+                    nativeValue = PropertySheetComfortValueControls.bindNativePushTarget(nativeValue,
+                            PropertySheetComfortValueControls.Kind.BOOLEAN);
+                    row.nativeValueControl = nativeValue;
+                    PropertySheetDebug.sync("comfort→native BIND " + PropertySheetDebug.quote(row.propertyName) //$NON-NLS-1$
+                            + " native=" + PropertySheetDebug.controlBrief(nativeValue)); //$NON-NLS-1$
+                }
+            }
+            if (nativeValue == null || nativeValue.isDisposed())
+            {
+                PropertySheetDebug.sync("comfort→native MISS native " //$NON-NLS-1$
+                        + PropertySheetDebug.quote(row.propertyName)
+                        + " view=" + PropertySheetDebug.safe(row.valueView)); //$NON-NLS-1$
+            }
+            PropertySheetComfortValueControls.applyToNative(session, row.created, nativeValue,
+                    row.valueViewModel, row.propertyName, row.valueView, renderer);
+            scheduleContextualEditableRefresh(session, triggerProperty);
+        }
+        finally
+        {
+            session.comfortPushInProgress = false;
+        }
+    }
+
+    private static void pullNativeToComfort(Session session, ComfortRow row)
+    {
+        if (session == null || row == null || row.created == null || row.propertyName == null)
+            return;
+        if (row.updatingFromNative || session.comfortPushInProgress)
+        {
+            PropertySheetDebug.syncVerbose("native→comfort SKIP echo " //$NON-NLS-1$
+                    + PropertySheetDebug.quote(row.propertyName));
+            return;
+        }
+        String display = readNativeValueForRow(row);
+        if (display.isEmpty() && row.created.kind == PropertySheetComfortValueControls.Kind.BOOLEAN)
+        {
+            PropertySheetDebug.sync("native→comfort MISS boolean " //$NON-NLS-1$
+                    + PropertySheetDebug.quote(row.propertyName)
+                    + " native=" + PropertySheetDebug.controlBrief(row.nativeValueControl)); //$NON-NLS-1$
+            return;
+        }
+        if (display.isEmpty() && (row.nativeValueControl == null || row.nativeValueControl.isDisposed()))
+        {
+            PropertySheetDebug.sync("native→comfort MISS disposed " //$NON-NLS-1$
+                    + PropertySheetDebug.quote(row.propertyName));
+            return;
+        }
+        Control nativeValue = row.nativeValueControl;
+        PropertySheetDebug.sync("native→comfort " + PropertySheetDebug.quote(row.propertyName) //$NON-NLS-1$
+                + " kind=" + row.created.kind //$NON-NLS-1$
+                + " value=" + PropertySheetDebug.quote(display)); //$NON-NLS-1$
+        row.updatingFromNative = true;
+        try
+        {
+            PropertySheetComfortValueControls.applyDisplay(row.created, display, row.valueViewModel, row.valueView,
+                    nativeValue, session.nativeContent, row.propertyName, session.page);
+        }
+        finally
+        {
+            row.updatingFromNative = false;
+        }
+        scheduleContextualEditableRefresh(session, row.propertyName);
+    }
+
+    private static String readNativeValueForRow(ComfortRow row)
+    {
+        if (row == null)
+            return ""; //$NON-NLS-1$
+        if (row.created != null && row.created.kind == PropertySheetComfortValueControls.Kind.BOOLEAN)
+        {
+            String fromNative = readNativeBooleanText(row.nativeValueControl);
+            if (!fromNative.isEmpty())
+                return fromNative;
+            Boolean fromView = PropertySheetControlInterop.booleanSelectionFromView(row.valueView,
+                    row.valueViewModel);
+            if (fromView != null)
+                return fromView.booleanValue() ? "true" : "false"; //$NON-NLS-1$ //$NON-NLS-2$
+            return ""; //$NON-NLS-1$
+        }
+        if (row.nativeValueControl == null || row.nativeValueControl.isDisposed())
+            return ""; //$NON-NLS-1$
+        return readBestNativeValueText(row.nativeValueControl);
+    }
+
+    private static String readNativeBooleanText(Control nativeValue)
+    {
+        if (nativeValue == null || nativeValue.isDisposed())
+            return ""; //$NON-NLS-1$
+        if (nativeValue instanceof org.eclipse.swt.widgets.Button
+                && (((org.eclipse.swt.widgets.Button) nativeValue).getStyle() & SWT.CHECK) != 0)
+            return ((org.eclipse.swt.widgets.Button) nativeValue).getSelection() ? "true" : "false"; //$NON-NLS-1$ //$NON-NLS-2$
+        Object selected = Global.invoke(nativeValue, "getSelection"); //$NON-NLS-1$
+        if (selected instanceof Boolean)
+            return ((Boolean) selected).booleanValue() ? "true" : "false"; //$NON-NLS-1$ //$NON-NLS-2$
+        for (String method : new String[] { "isChecked", "getChecked", "isSelected" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            Object checked = Global.invoke(nativeValue, method);
+            if (checked instanceof Boolean)
+                return ((Boolean) checked).booleanValue() ? "true" : "false"; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return ""; //$NON-NLS-1$
+    }
+
+    private static void scheduleContextualEditableRefresh(Session session, String triggerProperty)
+    {
+        if (session == null || session.content == null || session.content.isDisposed())
+            return;
+        org.eclipse.swt.widgets.Display display = session.content.getDisplay();
+        if (display == null || display.isDisposed())
+            return;
+        if (session.contextualRefreshRunnable != null)
+            display.timerExec(-1, session.contextualRefreshRunnable);
+        final String trigger = triggerProperty;
+        session.contextualRefreshRunnable = () -> {
+            session.contextualRefreshRunnable = null;
+            if (!session.comfortPushInProgress)
+                refreshContextualEditableStates(session, trigger);
+        };
+        display.timerExec(80, session.contextualRefreshRunnable);
+    }
+
+    private static void refreshContextualEditableStates(Session session, String triggerProperty)
+    {
+        if (session == null || session.rows.isEmpty())
+            return;
+        java.util.Set<String> affected = contextualAffectedFields(triggerProperty);
+        PropertySheetDebug.syncVerbose("contextualRefresh trigger=" + PropertySheetDebug.quote(triggerProperty) //$NON-NLS-1$
+                + " affected=" + affected.size());
+        for (ComfortRow row : session.rows)
+        {
+            if (row == null || row.created == null || row.propertyName == null)
+                continue;
+            if (triggerProperty != null && !affected.isEmpty() && !affected.contains(row.propertyName))
+                continue;
+            Object valueView = row.valueView;
+            Control nativeValue = row.nativeValueControl;
+            boolean editable = PropertySheetComfortValueControls.resolveEditableForRow(session.page,
+                    row.valueViewModel, valueView, nativeValue, session.nativeContent, row.propertyName);
+            editable = applyContextualEditable(session, row.propertyName, editable);
+            row.updatingFromNative = true;
+            try
+            {
+                PropertySheetComfortValueControls.applyEditableState(row.created, editable, row.valueViewModel,
+                        valueView, nativeValue);
+            }
+            finally
+            {
+                row.updatingFromNative = false;
+            }
+        }
+    }
+
+    private static java.util.Set<String> contextualAffectedFields(String triggerProperty)
+    {
+        java.util.Set<String> out = new java.util.HashSet<>();
+        if (triggerProperty == null || triggerProperty.isEmpty())
+            return out;
+        out.add(triggerProperty);
+        if ("Иерархический".equals(triggerProperty)) //$NON-NLS-1$
+        {
+            out.add("Вид иерархии"); //$NON-NLS-1$
+            out.add("Ограничивать кол-во уровней"); //$NON-NLS-1$
+            out.add("Количество уровней"); //$NON-NLS-1$
+            out.add("Размещать группы сверху"); //$NON-NLS-1$
+        }
+        if ("Ограничивать кол-во уровней".equals(triggerProperty)) //$NON-NLS-1$
+            out.add("Количество уровней"); //$NON-NLS-1$
+        if ("Владельцы".equals(triggerProperty)) //$NON-NLS-1$
+            out.add("Использование подчинения"); //$NON-NLS-1$
+        return out;
+    }
+
+    private static Control resolveNativeBind(Session session, String propertyName,
+            PropertySheetPaletteRow rowSource, PropertySheetPaletteRow scannerRow, Object valueVm,
+            Object valueView, PropertySheetComfortValueControls.Kind expectedKind)
+    {
+        PropertySheetComfortValueControls.Kind kind = expectedKind;
+        Control raw = null;
+        String via = ""; //$NON-NLS-1$
+        if (rowSource != null)
+        {
+            raw = nativeValueControl(rowSource, valueView, kind);
+            if (raw != null)
+                via = "paletteRow"; //$NON-NLS-1$
+        }
+        if (raw == null && scannerRow != null && scannerRow != rowSource)
+        {
+            raw = nativeValueControl(scannerRow, valueView, kind);
+            if (raw != null)
+                via = "scannerRow"; //$NON-NLS-1$
+        }
+        if (raw == null && valueView != null)
+        {
+            raw = PropertySheetControlInterop.unwrapToSwtControl(valueView);
+            if (raw != null)
+                via = "valueView.swt"; //$NON-NLS-1$
+        }
+        if (raw == null && valueView != null && session != null && session.page != null)
+        {
+            Object scene = Global.invoke(session.page, "getScene"); //$NON-NLS-1$
+            Object renderer = scene != null ? Global.invoke(scene, "getRenderer") : null; //$NON-NLS-1$
+            if (renderer != null)
+            {
+                raw = PropertySheetControlInterop.unwrapBoundLightControl(renderer, valueView, propertyName);
+                if (raw != null)
+                    via = "renderer.bound"; //$NON-NLS-1$
+                if (raw == null && kind == PropertySheetComfortValueControls.Kind.BOOLEAN)
+                {
+                    raw = PropertySheetControlInterop.resolveCheckboxNative(renderer, valueView, propertyName);
+                    if (raw != null)
+                        via = "renderer.lightCheckbox"; //$NON-NLS-1$
+                }
+            }
+        }
+        if (raw == null && valueVm != null && session != null && session.page != null)
+        {
+            Object scene = Global.invoke(session.page, "getScene"); //$NON-NLS-1$
+            raw = PropertySheetControlInterop.resolveNameControl(scene, valueVm, valueView, propertyName);
+            if (raw != null)
+                via = "resolveNameControl"; //$NON-NLS-1$
+        }
+        if (raw == null && kind == PropertySheetComfortValueControls.Kind.BOOLEAN)
+        {
+            if (rowSource != null && rowSource.rowComposite != null)
+                raw = findCheckInRow(rowSource.rowComposite);
+            if (raw == null && scannerRow != null && scannerRow.rowComposite != null)
+                raw = findCheckInRow(scannerRow.rowComposite);
+            if (raw != null)
+                via = "rowComposite.check"; //$NON-NLS-1$
+        }
+        if (raw == null && session != null && session.nativeContent != null
+                && !session.nativeContent.isDisposed() && propertyName != null)
+        {
+            Composite root = nativePaletteRoot(session.nativeContent);
+            Control nameControl = root != null ? findControlByExactText(root, propertyName) : null;
+            if (nameControl != null)
+            {
+                Composite row = PropertySheetUiContext.fieldRowOf(nameControl);
+                if (row != null)
+                {
+                    raw = kind == PropertySheetComfortValueControls.Kind.BOOLEAN
+                            ? findCheckInRow(row) : findEditableValueControl(row, kind);
+                    if (raw != null)
+                        via = "nativePalette.byName"; //$NON-NLS-1$
+                }
+            }
+        }
+        if (kind == null && raw != null)
+            kind = PropertySheetComfortValueControls.detectKind(valueVm, valueView, raw, ""); //$NON-NLS-1$
+        Control bound = PropertySheetComfortValueControls.bindNativePushTarget(raw, kind);
+        if (bound == null)
+        {
+            PropertySheetDebug.sync("bindNative MISS " + PropertySheetDebug.quote(propertyName) //$NON-NLS-1$
+                    + " kind=" + kind //$NON-NLS-1$
+                    + " vm=" + PropertySheetDebug.safe(valueVm) //$NON-NLS-1$
+                    + " view=" + PropertySheetDebug.safe(valueView) //$NON-NLS-1$
+                    + " palette=" + (rowSource != null) //$NON-NLS-1$
+                    + " scanner=" + (scannerRow != null)); //$NON-NLS-1$
+        }
+        else
+        {
+            PropertySheetDebug.sync("bindNative OK " + PropertySheetDebug.quote(propertyName) //$NON-NLS-1$
+                    + " via=" + via //$NON-NLS-1$
+                    + " kind=" + kind //$NON-NLS-1$
+                    + " native=" + PropertySheetDebug.controlBrief(bound)); //$NON-NLS-1$
+        }
+        return bound;
+    }
+
+    private static Control findCheckInRow(Composite row)
+    {
+        if (row == null || row.isDisposed())
+            return null;
+        for (Control child : row.getChildren())
+        {
+            if (child == null || child.isDisposed())
+                continue;
+            if (child instanceof org.eclipse.swt.widgets.Button
+                    && (((org.eclipse.swt.widgets.Button) child).getStyle() & SWT.CHECK) != 0)
+                return child;
+            String cn = child.getClass().getName();
+            if (cn.contains("Check") || cn.contains("Boolean") || cn.contains("Toggle")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                return child;
+            if (child instanceof Composite)
+            {
+                Control nested = findCheckInRow((Composite) child);
+                if (nested != null)
+                    return nested;
+            }
+        }
+        return null;
+    }
+
+    private static boolean nativeLinksMostlyAlive(Session session)
+    {
+        if (session == null || session.rows.isEmpty())
+            return true;
+        int withNative = 0;
+        int alive = countAliveNativeLinks(session);
+        for (ComfortRow row : session.rows)
+        {
+            if (row != null && row.nativeValueControl != null)
+                withNative++;
+        }
+        if (withNative == 0)
+            return true;
+        return alive * 2 >= withNative;
+    }
+
+    private static int countAliveNativeLinks(Session session)
+    {
+        if (session == null)
+            return 0;
+        int alive = 0;
+        for (ComfortRow row : session.rows)
+        {
+            if (row != null && row.nativeValueControl != null && !row.nativeValueControl.isDisposed())
+                alive++;
+        }
+        return alive;
+    }
+
+    private static void scheduleDeferredRefresh(Session session, SmartMatcher matcher)
+    {
+        if (session == null || session.content == null || session.content.isDisposed())
+            return;
+        org.eclipse.swt.widgets.Display display = session.content.getDisplay();
+        if (display == null || display.isDisposed())
+            return;
+        SmartMatcher active = matcher != null ? matcher : session.matcher;
+        if (session.deferredRefreshRunnable != null)
+            display.timerExec(-1, session.deferredRefreshRunnable);
+        session.deferredRefreshRunnable = () -> {
+            session.deferredRefreshRunnable = null;
+            refresh(session.page, active);
+        };
+        display.timerExec(150, session.deferredRefreshRunnable);
+    }
+
+    private static void refreshRowEditableStates(Session session)
+    {
+        if (session == null || session.rows.isEmpty())
+            return;
+        PropertySheetDebug.valueControlVerbose("refreshRowEditableStates rows=" + session.rows.size()); //$NON-NLS-1$
+        for (ComfortRow row : session.rows)
+        {
+            if (row == null || row.created == null || row.propertyName == null)
+                continue;
+            Object valueView = row.valueView;
+            Control nativeValue = row.nativeValueControl;
+            PropertySheetDebug.valueControlVerbose("refreshEditable " + PropertySheetDebug.quote(row.propertyName) //$NON-NLS-1$
+                    + " kind=" + row.created.kind //$NON-NLS-1$
+                    + " native=" + PropertySheetDebug.controlBrief(nativeValue)); //$NON-NLS-1$
+            boolean editable = PropertySheetComfortValueControls.resolveEditableForRow(session.page,
+                    row.valueViewModel, valueView, nativeValue, session.nativeContent,
+                    row.propertyName);
+            editable = applyContextualEditable(session, row.propertyName, editable);
+            row.updatingFromNative = true;
+            try
+            {
+                PropertySheetComfortValueControls.applyEditableState(row.created, editable, row.valueViewModel,
+                        valueView, nativeValue);
+            }
+            finally
+            {
+                row.updatingFromNative = false;
+            }
+        }
+    }
+
+    private static boolean applyContextualEditable(Session session, String propertyName, boolean editable)
+    {
+        if (!editable || session == null || propertyName == null)
+            return editable;
+        if (isHierarchyDependentField(propertyName))
+        {
+            Boolean hierarchical = comfortRowBoolean(session, "Иерархический"); //$NON-NLS-1$
+            if (hierarchical != null && !hierarchical.booleanValue())
+            {
+                PropertySheetDebug.valueControl("contextual " + PropertySheetDebug.quote(propertyName) //$NON-NLS-1$
+                        + " → false (Иерархический=false)"); //$NON-NLS-1$
+                return false;
+            }
+        }
+        if ("Количество уровней".equals(propertyName)) //$NON-NLS-1$
+        {
+            Boolean limit = comfortRowBoolean(session, "Ограничивать кол-во уровней"); //$NON-NLS-1$
+            if (limit != null && !limit.booleanValue())
+            {
+                PropertySheetDebug.valueControlVerbose("contextual " + PropertySheetDebug.quote(propertyName) //$NON-NLS-1$
+                        + " → false (Ограничивать=false)"); //$NON-NLS-1$
+                return false;
+            }
+        }
+        if ("Использование подчинения".equals(propertyName)) //$NON-NLS-1$
+        {
+            Boolean owners = comfortRowHasDisplayContent(session, "Владельцы"); //$NON-NLS-1$
+            if (owners != null && !owners.booleanValue())
+            {
+                PropertySheetDebug.valueControl("contextual " + PropertySheetDebug.quote(propertyName) //$NON-NLS-1$
+                        + " → false (Владельцы пусто)"); //$NON-NLS-1$
+                return false;
+            }
+        }
+        return editable;
+    }
+
+    private static Boolean comfortRowHasDisplayContent(Session session, String propertyName)
+    {
+        if (session == null || propertyName == null)
+            return null;
+        for (ComfortRow row : session.rows)
+        {
+            if (row == null || row.created == null || !propertyName.equals(row.propertyName))
+                continue;
+            String value = PropertySheetComfortValueControls.readDisplayValue(row.created.control, row.created.kind);
+            return Boolean.valueOf(value != null && !value.trim().isEmpty());
+        }
+        return null;
+    }
+
+    private static boolean isHierarchyDependentField(String propertyName)
+    {
+        return "Вид иерархии".equals(propertyName) //$NON-NLS-1$
+                || "Ограничивать кол-во уровней".equals(propertyName) //$NON-NLS-1$
+                || "Количество уровней".equals(propertyName) //$NON-NLS-1$
+                || "Размещать группы сверху".equals(propertyName); //$NON-NLS-1$
+    }
+
+    private static Boolean comfortRowBoolean(Session session, String propertyName)
+    {
+        if (session == null || propertyName == null)
+            return null;
+        for (ComfortRow row : session.rows)
+        {
+            if (row == null || row.created == null || !propertyName.equals(row.propertyName))
+                continue;
+            if (row.created.kind != PropertySheetComfortValueControls.Kind.BOOLEAN)
+                continue;
+            if (row.created.control instanceof org.eclipse.swt.widgets.Button)
+                return Boolean.valueOf(((org.eclipse.swt.widgets.Button) row.created.control).getSelection());
+        }
+        return null;
+    }
+
     private static void updateRowValues(Session session, List<PropertySheetViewModelTree.Entry> entries)
     {
         if (session.scannerRows.isEmpty())
@@ -496,9 +1019,13 @@ final class PropertySheetComfortUi
                     && entry.name != null && !entry.name.isEmpty())
                 byName.putIfAbsent(entry.name, entry);
         }
+        PropertySheetDebug.syncVerbose("updateRowValues rows=" + session.rows.size() //$NON-NLS-1$
+                + " entries=" + byName.size());
         for (ComfortRow row : session.rows)
         {
             if (row == null || row.created == null || row.propertyName == null)
+                continue;
+            if (row.updatingFromNative || session.comfortPushInProgress)
                 continue;
             PropertySheetViewModelTree.Entry entry = byName.get(row.propertyName);
             if (entry == null)
@@ -511,8 +1038,18 @@ final class PropertySheetComfortUi
             Control nativeValue = row.nativeValueControl;
             String nativeText = readNativeFieldValue(session, entry.name, nativeValue, pair);
             String display = PropertySheetViewModelTree.resolveEntryDisplay(session.page, entry, nativeText);
-            PropertySheetComfortValueControls.applyDisplay(row.created, display, valueVm, valueView, nativeValue);
+            row.updatingFromNative = true;
+            try
+            {
+                PropertySheetComfortValueControls.applyDisplay(row.created, display, valueVm, valueView,
+                        nativeValue, session.nativeContent, row.propertyName, session.page);
+            }
+            finally
+            {
+                row.updatingFromNative = false;
+            }
         }
+        refreshRowEditableStates(session);
     }
 
     private static void enforceVisible(Session session)
@@ -536,7 +1073,7 @@ final class PropertySheetComfortUi
         label.setText(entry.name);
         label.setFont(session.content.getFont());
         GridDataFactory.fillDefaults().grab(true, false).span(2, 1).indent(4, 6).applyTo(label);
-        ComfortRow row = new ComfortRow(entry.name, "", label, null, null, null, null); //$NON-NLS-1$
+        ComfortRow row = new ComfortRow(entry.name, "", label, null, null, null, null, null); //$NON-NLS-1$
         styleSection(label);
         return row;
     }
@@ -576,15 +1113,18 @@ final class PropertySheetComfortUi
                     + " fieldRow=" + PropertySheetDebug.typeName(entry.viewModel)); //$NON-NLS-1$
         }
         PropertySheetPaletteRow rowSource = nativeRow != null ? nativeRow : scannerRow;
-        Control nativeValue = nativeValueControl(rowSource, valueView);
-        if (nativeValue == null && scannerRow != null && scannerRow != nativeRow)
-            nativeValue = nativeValueControl(scannerRow, valueView);
-        if (nativeValue == null && valueVm != null)
-        {
-            Object scene = Global.invoke(session.page, "getScene"); //$NON-NLS-1$
-            nativeValue = PropertySheetControlInterop.resolveNameControl(scene, valueVm,
-                    valueView, entry.name);
-        }
+        PropertySheetComfortValueControls.Kind expectedKind =
+                PropertySheetComfortValueControls.kindFromViewPublic(valueView);
+        if (expectedKind == null && valueVm != null)
+            expectedKind = PropertySheetComfortValueControls.detectKind(valueVm, valueView, null, ""); //$NON-NLS-1$
+        Control nativeValue = resolveNativeBind(session, entry.name, rowSource, scannerRow, valueVm, valueView,
+                expectedKind);
+        if (expectedKind == null && nativeValue != null)
+            expectedKind = PropertySheetComfortValueControls.detectKind(valueVm, valueView, nativeValue, ""); //$NON-NLS-1$
+        if (valueView == null && rowSource != null)
+            valueView = rowSource.lwtView;
+        if (valueView == null && scannerRow != null)
+            valueView = scannerRow.lwtView;
         String nativeText = readNativeFieldValue(session, entry.name, nativeValue, pair);
         if (nativeText.isEmpty() && rowSource != null)
             nativeText = readNativeFieldValue(session, entry.name,
@@ -605,16 +1145,84 @@ final class PropertySheetComfortUi
         }
         String display = PropertySheetViewModelTree.resolveEntryDisplay(session.page, resolvedEntry, nativeText);
         PropertySheetComfortValueControls.Created created = PropertySheetComfortValueControls.create(
-                rowComposite, resolvedEntry, nativeValue, display, pair.path, valueWidth);
+                rowComposite, resolvedEntry, nativeValue, display, pair.path, valueWidth, session.nativeContent,
+                session.page);
 
         ComfortRow row = new ComfortRow(entry.name, created.displayValue, nameLabel, created,
-                rowComposite, nativeValue, valueVm);
+                rowComposite, nativeValue, valueVm, valueView);
         wireRow(session, row);
         session.paletteRows.add(new PropertySheetPaletteRow(nameLabel, rowComposite,
                 new Control[] { nameLabel, created.control }, entry.name));
         return row;
     }
 
+    /**
+     * Wire AEF model change listener для LWT-чекбоксов (нет SWT-кнопки).
+     * AEF IValue«слушает» изменения через {@code addChangeListener}/{@code addValueListener}.
+     * Через Proxy на {@code IValueChangedListener}/{@code IChangeListener}.
+     */
+    private static void wireModelChangeListener(ComfortRow row, Runnable onNativeChange)
+    {
+        Object valueVm = row.valueViewModel;
+        if (valueVm == null)
+            return;
+        Object model = Global.invoke(valueVm, "getModel"); //$NON-NLS-1$
+        if (model == null)
+            return;
+        // Пробуем addChangeListener и addValueListener
+        tryWireListenerOnTarget(model, onNativeChange);
+        tryWireListenerOnTarget(valueVm, onNativeChange);
+        PropertySheetDebug.sync("wireModelListener " //$NON-NLS-1$
+                + PropertySheetDebug.quote(row.propertyName)
+                + " model=" + PropertySheetDebug.safe(model)); //$NON-NLS-1$
+    }
+
+    private static final String MODEL_LISTENER_WIRED_KEY = "tormozit.ps.modelListenerWired"; //$NON-NLS-1$
+
+    private static void tryWireListenerOnTarget(Object target, Runnable onNativeChange)
+    {
+        if (target == null)
+            return;
+        // Проверяем addChangeListener(IChangeListener) и addValueListener(IValueChangedListener)
+        for (String addMethod : new String[] {
+                "addChangeListener", "addValueListener", "addListener", "addObserver" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        })
+        {
+            java.lang.reflect.Method[] methods = target.getClass().getMethods();
+            for (java.lang.reflect.Method m : methods)
+            {
+                if (!m.getName().equals(addMethod))
+                    continue;
+                java.lang.Class<?>[] params = m.getParameterTypes();
+                if (params.length != 1)
+                    continue;
+                java.lang.Class<?> listenerType = params[0];
+                if (!listenerType.isInterface())
+                    continue;
+                // Создаём Proxy-слушатель
+                try
+                {
+                    Object proxy = java.lang.reflect.Proxy.newProxyInstance(
+                            listenerType.getClassLoader(),
+                            new java.lang.Class<?>[] { listenerType },
+                            (p, method, args) -> {
+                                // Игнорируем Object-методы
+                                String mn = method.getName();
+                                if ("equals".equals(mn) || "hashCode".equals(mn) || "toString".equals(mn))
+                                    return java.lang.reflect.Proxy.getInvocationHandler(p);
+                                // Любой вызов = событие изменения
+                                onNativeChange.run();
+                                return null;
+                            });
+                    m.invoke(target, proxy);
+                    PropertySheetDebug.syncVerbose("wireModelListener OK " //$NON-NLS-1$
+                            + addMethod + " on " + PropertySheetDebug.safe(target)); //$NON-NLS-1$
+                    return; // достаточно одного listener
+                }
+                catch (Throwable ignored) {}
+            }
+        }
+    }
     private static void wireRow(Session session, ComfortRow row)
     {
         MouseAdapter click = new MouseAdapter()
@@ -631,11 +1239,18 @@ final class PropertySheetComfortUi
         row.nameLabel.addMouseListener(click);
         if (row.valueControl() != null)
             row.valueControl().addMouseListener(click);
+        PropertySheetComfortValueControls.wireNativeMirror(row.nativeValueControl, row.valueView,
+                row.created.kind, () -> pullNativeToComfort(session, row));
+        // Дополнительный wire для LWT BOOLEAN через AEF model listener
+        if (row.created.kind == PropertySheetComfortValueControls.Kind.BOOLEAN
+                && (row.nativeValueControl == null || row.nativeValueControl.isDisposed()))
+        {
+            wireModelChangeListener(row, () -> pullNativeToComfort(session, row));
+        }
         PropertySheetComfortValueControls.wireChange(row.created, () -> {
             if (row.updatingFromNative)
                 return;
-            PropertySheetComfortValueControls.applyToNative(session, row.created, row.nativeValueControl,
-                    row.valueViewModel, row.propertyName);
+            pushComfortToNative(session, row, row.propertyName);
         });
 
         Menu menu = new Menu(row.rowComposite.getShell(), SWT.POP_UP);
@@ -936,6 +1551,152 @@ final class PropertySheetComfortUi
         return PropertySheetControlInterop.controlText(control);
     }
 
+    static Boolean readNativePaletteEditable(Control nativeContent, String propertyName, Control nativeValue)
+    {
+        if (propertyName == null || propertyName.isEmpty())
+            return null;
+        if (nativeValue != null && !nativeValue.isDisposed())
+        {
+            Boolean fromValue = readNativeValueEditable(nativeValue);
+            if (fromValue != null)
+            {
+                PropertySheetDebug.valueControl("paletteEditable " + PropertySheetDebug.quote(propertyName) //$NON-NLS-1$
+                        + " → " + fromValue + " (nativeValue)"); //$NON-NLS-1$ //$NON-NLS-2$
+                return fromValue;
+            }
+        }
+        if (nativeContent == null || nativeContent.isDisposed())
+            return null;
+        Composite root = nativePaletteRoot(nativeContent);
+        if (root == null)
+            return null;
+        Control nameControl = findControlByExactText(root, propertyName);
+        if (nameControl == null)
+            return null;
+        Composite row = PropertySheetUiContext.fieldRowOf(nameControl);
+        if (row == null)
+        {
+            PropertySheetDebug.valueControlVerbose("paletteEditable " + PropertySheetDebug.quote(propertyName) //$NON-NLS-1$
+                    + " → null (no row)"); //$NON-NLS-1$
+            return null;
+        }
+        Boolean enabled = readRowValueEnabled(row, nameControl);
+        PropertySheetDebug.valueControl("paletteEditable " + PropertySheetDebug.quote(propertyName) //$NON-NLS-1$
+                + " → " + (enabled != null ? enabled : "null")); //$NON-NLS-1$ //$NON-NLS-2$
+        return enabled;
+    }
+
+    private static Boolean readNativeValueEditable(Control nativeValue)
+    {
+        if (nativeValue == null || nativeValue.isDisposed())
+            return null;
+        Boolean direct = readControlEnabledState(nativeValue);
+        if (direct != null)
+            return direct;
+        Composite row = PropertySheetUiContext.fieldRowOf(nativeValue);
+        if (row == null)
+            row = nativeValue instanceof Composite ? (Composite) nativeValue : null;
+        if (row == null)
+            return null;
+        return readRowValueEnabled(row, null);
+    }
+
+    private static Boolean readRowValueEnabled(Composite row, Control nameControl)
+    {
+        if (row == null || row.isDisposed())
+            return null;
+        Boolean result = null;
+        for (Control child : row.getChildren())
+        {
+            if (child == null || child.isDisposed() || child == nameControl)
+                continue;
+            if (PropertySheetUiContext.isFilterAreaControl(child))
+                continue;
+            Boolean enabled = child instanceof Composite
+                    ? readActionBarTextEditable((Composite) child) : null;
+            if (enabled == null)
+                enabled = readControlEnabledState(child);
+            if (enabled == null)
+                continue;
+            result = result == null ? enabled : Boolean.valueOf(result.booleanValue() && enabled.booleanValue());
+        }
+        return result;
+    }
+
+    private static Boolean readActionBarTextEditable(Composite composite)
+    {
+        if (composite == null || composite.isDisposed())
+            return null;
+        Text text = null;
+        boolean hasButtons = false;
+        boolean anyButtonEnabled = false;
+        for (Control child : composite.getChildren())
+        {
+            if (child instanceof Text && text == null)
+                text = (Text) child;
+            else if (child instanceof org.eclipse.swt.widgets.Button
+                    && (((org.eclipse.swt.widgets.Button) child).getStyle() & SWT.PUSH) != 0)
+            {
+                hasButtons = true;
+                if (child.getEnabled())
+                    anyButtonEnabled = true;
+            }
+        }
+        if (text == null || !hasButtons)
+            return null;
+        if (!composite.getEnabled())
+            return Boolean.FALSE;
+        if (anyButtonEnabled || (text.getEditable() && text.getEnabled()))
+            return Boolean.TRUE;
+        return null;
+    }
+
+    private static Boolean readControlEnabledState(Control control)
+    {
+        if (control == null || control.isDisposed())
+            return null;
+        if (control instanceof Composite)
+        {
+            Boolean actionBar = readActionBarTextEditable((Composite) control);
+            if (actionBar != null)
+                return actionBar;
+        }
+        if (control instanceof Text)
+            return Boolean.valueOf(((Text) control).getEditable() && control.getEnabled());
+        if (control instanceof CCombo || control instanceof org.eclipse.swt.widgets.Combo
+                || control instanceof org.eclipse.swt.widgets.Spinner)
+            return Boolean.valueOf(control.getEnabled());
+        if (control instanceof org.eclipse.swt.widgets.Button
+                && (((org.eclipse.swt.widgets.Button) control).getStyle() & SWT.CHECK) != 0)
+            return Boolean.valueOf(control.getEnabled());
+        if (control instanceof Composite)
+        {
+            Text nestedText = null;
+            boolean hasPushButtons = false;
+            Boolean nestedEnabled = null;
+            for (Control child : ((Composite) control).getChildren())
+            {
+                if (child instanceof Text && nestedText == null)
+                    nestedText = (Text) child;
+                else if (child instanceof org.eclipse.swt.widgets.Button
+                        && (((org.eclipse.swt.widgets.Button) child).getStyle() & SWT.PUSH) != 0)
+                    hasPushButtons = true;
+                Boolean childEnabled = readControlEnabledState(child);
+                if (childEnabled != null)
+                    nestedEnabled = nestedEnabled == null ? childEnabled
+                            : Boolean.valueOf(nestedEnabled.booleanValue() && childEnabled.booleanValue());
+            }
+            if (nestedText != null && !nestedText.isDisposed())
+            {
+                if (hasPushButtons && !nestedText.getEditable())
+                    return null;
+                return Boolean.valueOf(nestedText.getEditable() && nestedText.getEnabled());
+            }
+            return nestedEnabled;
+        }
+        return null;
+    }
+
     private static Composite nativePaletteRoot(Control nativeContent)
     {
         if (nativeContent == null || nativeContent.isDisposed())
@@ -970,8 +1731,13 @@ final class PropertySheetComfortUi
 
     private static Control nativeValueControl(PropertySheetPaletteRow nativeRow, Object valueView)
     {
-        PropertySheetComfortValueControls.Kind viewKind =
-                PropertySheetComfortValueControls.kindFromViewPublic(valueView);
+        return nativeValueControl(nativeRow, valueView,
+                PropertySheetComfortValueControls.kindFromViewPublic(valueView));
+    }
+
+    private static Control nativeValueControl(PropertySheetPaletteRow nativeRow, Object valueView,
+            PropertySheetComfortValueControls.Kind viewKind)
+    {
         if (nativeRow == null || nativeRow.rowControls == null)
             return null;
         for (Control control : nativeRow.rowControls)
@@ -991,7 +1757,17 @@ final class PropertySheetComfortUi
         if (control == null || control.isDisposed() || PropertySheetUiContext.isFilterAreaControl(control))
             return null;
         boolean preferLink = viewKind == PropertySheetComfortValueControls.Kind.HYPERLINK;
-        if (!preferLink && control instanceof Text)
+        boolean preferCombo = viewKind == PropertySheetComfortValueControls.Kind.COMBO;
+        boolean preferActionBar = viewKind == PropertySheetComfortValueControls.Kind.ACTION_BAR;
+        boolean preferBoolean = viewKind == PropertySheetComfortValueControls.Kind.BOOLEAN;
+        if (preferBoolean && control instanceof org.eclipse.swt.widgets.Button
+                && (((org.eclipse.swt.widgets.Button) control).getStyle() & SWT.CHECK) != 0)
+            return control;
+        if (preferCombo && (control instanceof CCombo || control instanceof org.eclipse.swt.widgets.Combo))
+            return control;
+        if (preferActionBar && control instanceof Composite && isActionBarComposite((Composite) control))
+            return control;
+        if (!preferLink && !preferCombo && control instanceof Text)
             return control;
         if (preferLink && control instanceof org.eclipse.swt.widgets.Link)
             return control;
@@ -999,16 +1775,31 @@ final class PropertySheetComfortUi
             return control;
         if (control instanceof Composite)
         {
+            Composite composite = (Composite) control;
+            if (preferBoolean)
+            {
+                Control check = findCheckInRow(composite);
+                if (check != null)
+                    return check;
+            }
+            if (preferCombo)
+            {
+                Control combo = findComboInComposite(composite);
+                if (combo != null)
+                    return combo;
+            }
+            if (preferActionBar && isActionBarComposite(composite))
+                return composite;
             Control textFallback = null;
             Control linkFallback = null;
-            for (Control child : ((Composite) control).getChildren())
+            for (Control child : composite.getChildren())
             {
                 Control found = findEditableValueControl(child, viewKind);
                 if (found == null)
                     continue;
                 if (found instanceof Text)
                 {
-                    if (!preferLink)
+                    if (!preferLink && !preferCombo)
                         return found;
                     if (textFallback == null)
                         textFallback = found;
@@ -1022,6 +1813,8 @@ final class PropertySheetComfortUi
                         linkFallback = found;
                     continue;
                 }
+                if (!preferLink && isLinkLikeControl(found))
+                    continue;
                 return found;
             }
             return preferLink ? (linkFallback != null ? linkFallback : textFallback) : textFallback;
@@ -1029,6 +1822,41 @@ final class PropertySheetComfortUi
         if (control instanceof org.eclipse.swt.widgets.Link)
             return preferLink ? control : null;
         return isWritableValueControl(control) ? control : null;
+    }
+
+    private static Control findComboInComposite(Composite composite)
+    {
+        if (composite == null || composite.isDisposed())
+            return null;
+        for (Control child : composite.getChildren())
+        {
+            if (child instanceof CCombo || child instanceof org.eclipse.swt.widgets.Combo)
+                return child;
+            if (child instanceof Composite)
+            {
+                Control nested = findComboInComposite((Composite) child);
+                if (nested != null)
+                    return nested;
+            }
+        }
+        return null;
+    }
+
+    private static boolean isActionBarComposite(Composite composite)
+    {
+        if (composite == null || composite.isDisposed())
+            return false;
+        boolean hasText = false;
+        boolean hasPush = false;
+        for (Control child : composite.getChildren())
+        {
+            if (child instanceof Text)
+                hasText = true;
+            else if (child instanceof org.eclipse.swt.widgets.Button
+                    && (((org.eclipse.swt.widgets.Button) child).getStyle() & SWT.PUSH) != 0)
+                hasPush = true;
+        }
+        return hasText && hasPush;
     }
 
     private static boolean isWritableValueControl(Control control)
@@ -1045,6 +1873,16 @@ final class PropertySheetComfortUi
         return cn.contains("Text") || cn.contains("Combo") || cn.contains("Spinner") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 || cn.contains("Check") || cn.contains("Boolean") || cn.contains("Hyperlink") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 || cn.contains("Link"); //$NON-NLS-1$
+    }
+
+    private static boolean isLinkLikeControl(Control control)
+    {
+        if (control == null || control.isDisposed())
+            return false;
+        if (control instanceof org.eclipse.swt.widgets.Link)
+            return true;
+        String cn = control.getClass().getName();
+        return cn.contains("Hyperlink") || cn.contains("LinkView") || cn.contains("LwtLink"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
     private static final class Session implements SessionAccessor
@@ -1069,6 +1907,10 @@ final class PropertySheetComfortUi
         String entrySignature = ""; //$NON-NLS-1$
         String sourceKey = ""; //$NON-NLS-1$
         int lastAppliedWidth = -1;
+        boolean comfortPushInProgress;
+        long suppressFullRefreshUntil;
+        Runnable contextualRefreshRunnable;
+        Runnable deferredRefreshRunnable;
 
         Session(Object page, Composite host, Composite deck, Control nativeContent,
                 org.eclipse.swt.custom.ScrolledComposite scrolled, Composite content,
@@ -1099,17 +1941,16 @@ final class PropertySheetComfortUi
         @Override
         public Control resolveNativeValueControl(String propertyName, Object valueVm)
         {
-            PropertySheetPaletteRow row = nativeRows.get(propertyName);
-            Object valueView = row != null ? row.lwtView : null;
-            if (valueView == null && valueVm != null && page != null)
-                valueView = PropertySheetViewModelTree.resolveValueView(page, valueVm);
-            Control control = nativeValueControl(row, valueView);
-            if (control != null)
-                return control;
-            if (valueVm == null)
-                return null;
-            Object scene = page != null ? Global.invoke(page, "getScene") : null; //$NON-NLS-1$
-            return PropertySheetControlInterop.resolveNameControl(scene, valueVm, valueView, propertyName);
+            if (propertyName != null)
+            {
+                for (ComfortRow row : rows)
+                {
+                    if (row != null && propertyName.equals(row.propertyName)
+                            && row.nativeValueControl != null && !row.nativeValueControl.isDisposed())
+                        return row.nativeValueControl;
+                }
+            }
+            return null;
         }
     }
 
@@ -1120,13 +1961,15 @@ final class PropertySheetComfortUi
         final Label nameLabel;
         final PropertySheetComfortValueControls.Created created;
         final Composite rowComposite;
-        final Control nativeValueControl;
+        Control nativeValueControl;
         final Object valueViewModel;
+        /** AEF view со «Старой» вкладки — фиксируется при создании проекции. */
+        final Object valueView;
         boolean updatingFromNative;
 
         ComfortRow(String propertyName, String valueText, Label nameLabel,
                 PropertySheetComfortValueControls.Created created, Composite rowComposite,
-                Control nativeValueControl, Object valueViewModel)
+                Control nativeValueControl, Object valueViewModel, Object valueView)
         {
             this.propertyName = propertyName;
             this.valueText = valueText;
@@ -1135,6 +1978,7 @@ final class PropertySheetComfortUi
             this.rowComposite = rowComposite;
             this.nativeValueControl = nativeValueControl;
             this.valueViewModel = valueViewModel;
+            this.valueView = valueView;
         }
 
         Control valueControl()

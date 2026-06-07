@@ -9,7 +9,7 @@ import org.eclipse.swt.widgets.Control;
  * <ul>
  *   <li>Отключить всё: {@code -Dtormozit.propertySheet.debug=false}</li>
  *   <li>По умолчанию — только проблемы ({@code INCOMPLETE}, {@code GIVE UP}, {@code FAIL})</li>
- *   <li>Подробный scan/ui: {@code -Dtormozit.propertySheet.debug.verbose=true}</li>
+ *   <li>Подробный scan/ui/sync: {@code -Dtormozit.propertySheet.debug.verbose=true}</li>
  *   <li>Resolve/trace (очень шумно): {@code -Dtormozit.propertySheet.debug.trace=true}</li>
  * </ul>
  */
@@ -77,6 +77,19 @@ public final class PropertySheetDebug
     {
         if (isVerbose())
             valueControl(msg);
+    }
+
+    /** Синхронизация «Новая» ↔ «Старая» — всегда при включённом debug. */
+    static void sync(String msg)
+    {
+        if (ENABLED)
+            Global.log("[PropertySheet] [sync] " + msg); //$NON-NLS-1$
+    }
+
+    static void syncVerbose(String msg)
+    {
+        if (isVerbose())
+            sync(msg);
     }
 
     static void scan(String msg)

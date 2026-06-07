@@ -6,12 +6,19 @@ import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.eclipse.swt.SWT;
+import org.eclipse.swt.custom.CCombo;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
+import org.eclipse.swt.widgets.Button;
+import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
+import org.eclipse.swt.widgets.Event;
 import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.Spinner;
+import org.eclipse.swt.widgets.Text;
 
 /** SWT-обёртка для AEF/LWT-контролов ({@code LightLabel}, {@code SwtLightControl}). */
 final class PropertySheetControlInterop
@@ -105,6 +112,7 @@ final class PropertySheetControlInterop
             return false;
         String cn = value.getClass().getName();
         return cn.contains("LightLabel") || cn.contains("LightText") //$NON-NLS-1$ //$NON-NLS-2$
+                || cn.contains("Checkbox") || cn.contains("CheckBox") //$NON-NLS-1$ //$NON-NLS-2$
                 || cn.contains("ILightControl") || cn.contains(".lwt."); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
@@ -223,10 +231,63 @@ final class PropertySheetControlInterop
             return null;
         Object light = Global.getField(view, "lightControl"); //$NON-NLS-1$
         if (light == null)
+            light = Global.getField(view, "checkbox"); //$NON-NLS-1$
+        if (light == null)
             light = Global.getField(view, "lightLabel"); //$NON-NLS-1$
+        if (light == null)
+        {
+            for (String method : new String[] { "getControl", "getLightControl", "getCheckbox" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            {
+                light = Global.invoke(view, method);
+                if (light != null)
+                    break;
+            }
+        }
         if (light == null)
             light = lightNativeFromView(view);
         return light;
+    }
+
+    private static List<Object> lightCheckboxTargets(Object view)
+    {
+        List<Object> out = new ArrayList<>();
+        addLightTarget(out, lightControlFromView(view));
+        addLightTarget(out, Global.getField(view, "checkbox")); //$NON-NLS-1$
+        for (String method : new String[] { "getControl", "getLightControl", "getCheckbox" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            addLightTarget(out, Global.invoke(view, method));
+        addLightTarget(out, lightNativeFromView(view));
+        return out;
+    }
+
+    private static void addLightTarget(List<Object> out, Object light)
+    {
+        if (light == null || out.contains(light))
+            return;
+        out.add(light);
+    }
+
+    /** SWT push-target для LwtCheckboxView через {@code bindNativeControl} + {@code SwtLightControl}. */
+    static Control resolveCheckboxNative(Object renderer, Object valueView, String propertyName)
+    {
+        if (valueView == null)
+            return null;
+        for (Object light : lightCheckboxTargets(valueView))
+        {
+            if (renderer != null)
+            {
+                Control fromBound = unwrapBoundLightControl(renderer, light, propertyName);
+                if (fromBound != null)
+                    return fromBound;
+            }
+            Control bridged = bridgeSwtLightControlOnly(light);
+            if (bridged != null && !bridged.isDisposed())
+            {
+                Button check = findSwtCheckButton(bridged);
+                if (check != null)
+                    return check;
+            }
+        }
+        return null;
     }
 
     private static void logResolveFail(String propertyName, Object view, String step,
@@ -834,12 +895,19 @@ final class PropertySheetControlInterop
             return new Point(0, 0);
         if (propertyName != null && !propertyName.isEmpty())
         {
-            Object perRow = nameControl.getData(LWT_ORIGIN_KEY + '.' + propertyName); //$NON-NLS-1$
-            if (perRow instanceof Point)
-                return (Point) perRow;
             Object perView = nameControl.getData(LWT_VIEW_KEY + '.' + propertyName); //$NON-NLS-1$
             if (perView != null && nameControl instanceof Composite)
                 return lwtLabelPaintOrigin(perView, (Composite) nameControl);
+            Object perLight = nameControl.getData(LWT_LIGHT_KEY + '.' + propertyName); //$NON-NLS-1$
+            if (perLight != null && nameControl instanceof Composite)
+            {
+                Point exact = lwtLabelDrawOrigin(perLight, (Composite) nameControl);
+                if (exact != null)
+                    return exact;
+            }
+            Object perRow = nameControl.getData(LWT_ORIGIN_KEY + '.' + propertyName); //$NON-NLS-1$
+            if (perRow instanceof Point)
+                return (Point) perRow;
             // Для именованной строки не используем общий origin host-а (он от другой строки).
             if (nameControl instanceof Composite)
                 return fallbackLabelOrigin((Composite) nameControl);
@@ -898,7 +966,7 @@ final class PropertySheetControlInterop
      * Точка начала текста как в {@code LightLabel.paint}: {@code x = bounds.x + marginLeft},
      * {@code y = bounds.y + (bounds.height - textHeight) / 2}, с переводом LWT→SWT.
      */
-    private static Point lwtLabelDrawOrigin(Object light, Composite fieldRow)
+    static Point lwtLabelDrawOrigin(Object light, Composite fieldRow)
     {
         Object bounds = Global.invoke(light, "getBounds"); //$NON-NLS-1$
         if (!(bounds instanceof org.eclipse.swt.graphics.Rectangle))
@@ -1023,7 +1091,7 @@ final class PropertySheetControlInterop
         return null;
     }
 
-    private static int lwtTextHeight(Object light, Composite fieldRow)
+    static int lwtTextHeight(Object light, Composite fieldRow)
     {
         Object cached = Global.getField(light, "cachedExtent"); //$NON-NLS-1$
         if (cached instanceof Point && ((Point) cached).y > 0)
@@ -1081,7 +1149,19 @@ final class PropertySheetControlInterop
     {
         if (fieldRow == null || fieldRow.isDisposed())
             return 2;
-        return Math.max(2, (fieldRow.getSize().y - 13) / 2);
+        GC gc = new GC(fieldRow);
+        try
+        {
+            org.eclipse.swt.graphics.Font font = fieldRow.getFont();
+            if (font != null)
+                gc.setFont(font);
+            int textHeight = gc.textExtent("Ay").y; //$NON-NLS-1$
+            return Math.max(2, (fieldRow.getSize().y - textHeight) / 2);
+        }
+        finally
+        {
+            gc.dispose();
+        }
     }
 
     private static int fieldRowLabelOriginX(Composite fieldRow)
@@ -1344,6 +1424,459 @@ final class PropertySheetControlInterop
         return ""; //$NON-NLS-1$
     }
 
+    /** Редактируемость value-контрола через AEF renderer (предпочтительно для LWT). */
+    static Boolean readEditableFromRenderer(Object page, Object valueVm, Object valueView)
+    {
+        if (page == null || valueVm == null)
+            return null;
+        Object scene = Global.invoke(page, "getScene"); //$NON-NLS-1$
+        Object renderer = scene != null ? Global.invoke(scene, "getRenderer") : null; //$NON-NLS-1$
+        if (renderer == null)
+            return null;
+        Boolean fromNative = readRendererNativeEditable(renderer, valueVm);
+        if (fromNative != null)
+            return fromNative;
+        return readEditableFromView(valueView, valueVm);
+    }
+
+    /** Редактируемость по привязанному SWT-виджету AEF (без LWT isEnabled). */
+    static Boolean readSwtEditableFromRenderer(Object page, Object valueVm, Object valueView)
+    {
+        if (page == null || valueVm == null)
+            return null;
+        Object scene = Global.invoke(page, "getScene"); //$NON-NLS-1$
+        Object renderer = scene != null ? Global.invoke(scene, "getRenderer") : null; //$NON-NLS-1$
+        if (renderer == null)
+            return null;
+        Boolean fromVm = readRendererNativeSwtEditable(renderer, valueVm);
+        if (fromVm != null)
+            return fromVm;
+        if (valueView == null)
+            return null;
+        Object nativeObj = Global.invoke(valueView, "getNativeControl"); //$NON-NLS-1$
+        if (nativeObj == null)
+            nativeObj = lightNativeFromView(valueView);
+        return readBoundNativeSwtEditable(renderer, nativeObj);
+    }
+
+    /** SWT value-контрол через AEF renderer (для зеркала «Новая» без palette row). */
+    static Control resolveValueSwtControl(Object page, Object valueVm, Object valueView)
+    {
+        if (page == null || valueVm == null)
+            return null;
+        Object scene = Global.invoke(page, "getScene"); //$NON-NLS-1$
+        Object renderer = scene != null ? Global.invoke(scene, "getRenderer") : null; //$NON-NLS-1$
+        if (renderer == null)
+            return null;
+        Control fromVm = resolveRendererNativeSwtControl(renderer, valueVm);
+        if (fromVm != null)
+            return fromVm;
+        if (valueView == null)
+            return null;
+        Object nativeObj = Global.invoke(valueView, "getNativeControl"); //$NON-NLS-1$
+        if (nativeObj == null)
+            nativeObj = lightNativeFromView(valueView);
+        return resolveBoundNativeSwtControl(renderer, nativeObj);
+    }
+
+    private static Boolean readRendererNativeEditable(Object renderer, Object valueVm)
+    {
+        if (renderer == null || valueVm == null)
+            return null;
+        Object nativeObj = Global.invoke(renderer, "getNativeControl", valueVm); //$NON-NLS-1$
+        Boolean fromLight = readBoundNativeEditable(renderer, nativeObj);
+        if (fromLight != null)
+            return fromLight;
+        Object composite = rendererLightComposite(renderer);
+        if (composite != null)
+        {
+            nativeObj = Global.invoke(renderer, "getNativeControl", composite, valueVm); //$NON-NLS-1$
+            fromLight = readBoundNativeEditable(renderer, nativeObj);
+            if (fromLight != null)
+                return fromLight;
+        }
+        return null;
+    }
+
+    private static Boolean readRendererNativeSwtEditable(Object renderer, Object valueVm)
+    {
+        if (renderer == null || valueVm == null)
+            return null;
+        Object nativeObj = Global.invoke(renderer, "getNativeControl", valueVm); //$NON-NLS-1$
+        Boolean fromSwt = readBoundNativeSwtEditable(renderer, nativeObj);
+        if (fromSwt != null)
+            return fromSwt;
+        Object composite = rendererLightComposite(renderer);
+        if (composite != null)
+        {
+            nativeObj = Global.invoke(renderer, "getNativeControl", composite, valueVm); //$NON-NLS-1$
+            fromSwt = readBoundNativeSwtEditable(renderer, nativeObj);
+            if (fromSwt != null)
+                return fromSwt;
+        }
+        return null;
+    }
+
+    private static Control resolveRendererNativeSwtControl(Object renderer, Object valueVm)
+    {
+        if (renderer == null || valueVm == null)
+            return null;
+        Object nativeObj = Global.invoke(renderer, "getNativeControl", valueVm); //$NON-NLS-1$
+        Control fromSwt = resolveBoundNativeSwtControl(renderer, nativeObj);
+        if (fromSwt != null)
+            return fromSwt;
+        Object composite = rendererLightComposite(renderer);
+        if (composite != null)
+        {
+            nativeObj = Global.invoke(renderer, "getNativeControl", composite, valueVm); //$NON-NLS-1$
+            fromSwt = resolveBoundNativeSwtControl(renderer, nativeObj);
+            if (fromSwt != null)
+                return fromSwt;
+        }
+        return null;
+    }
+
+    private static Object rendererLightComposite(Object renderer)
+    {
+        Object composite = Global.invoke(renderer, "getSwtComposite"); //$NON-NLS-1$
+        if (composite == null)
+            composite = Global.getField(renderer, "lightComposite"); //$NON-NLS-1$
+        return composite;
+    }
+
+    private static Boolean readBoundNativeSwtEditable(Object renderer, Object nativeObj)
+    {
+        Control swt = resolveBoundNativeSwtControl(renderer, nativeObj);
+        if (swt == null || swt.isDisposed())
+            return null;
+        Boolean editable = readSwtEditablePreferCombo(swt);
+        if (editable != null && editable.booleanValue())
+            return Boolean.TRUE;
+        return null;
+    }
+
+    private static Control resolveBoundNativeSwtControl(Object renderer, Object nativeObj)
+    {
+        return resolveSwtControlFromLight(renderer, nativeObj, 0);
+    }
+
+    private static Control resolveSwtControlFromLight(Object renderer, Object light, int depth)
+    {
+        if (light == null || depth > 8)
+            return null;
+        tryBindNativeControl(renderer, light);
+        Boolean readOnly = readLightReadOnly(light, 0);
+        if (readOnly != null && !readOnly.booleanValue())
+            return null;
+        Control swt = unwrapToSwtControl(light);
+        if (swt != null && !swt.isDisposed())
+        {
+            Control preferred = preferValueSwtControl(swt);
+            if (preferred != null)
+                return preferred;
+        }
+        for (String method : new String[] {
+                "getEditor", "getInput", "getTextEditor", "getControl", "getLightControl", "getTextControl" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        })
+        {
+            Object nested = Global.invoke(light, method);
+            if (nested != null && nested != light)
+            {
+                Control found = resolveSwtControlFromLight(renderer, nested, depth + 1);
+                if (found != null)
+                    return found;
+            }
+        }
+        Object children = Global.invoke(light, "getChildren"); //$NON-NLS-1$
+        java.util.Iterator<?> it = toLightIterator(children);
+        while (it != null && it.hasNext())
+        {
+            Control found = resolveSwtControlFromLight(renderer, it.next(), depth + 1);
+            if (found != null)
+                return found;
+        }
+        return null;
+    }
+
+    private static Control preferValueSwtControl(Control control)
+    {
+        if (control == null || control.isDisposed())
+            return null;
+        if (control instanceof org.eclipse.swt.custom.CCombo
+                || control instanceof org.eclipse.swt.widgets.Combo
+                || control instanceof org.eclipse.swt.widgets.Spinner
+                || control instanceof org.eclipse.swt.widgets.Text
+                || control instanceof org.eclipse.swt.widgets.Button)
+            return control;
+        if (control instanceof org.eclipse.swt.widgets.Composite)
+        {
+            Control combo = null;
+            Control fallback = null;
+            for (Control child : ((org.eclipse.swt.widgets.Composite) control).getChildren())
+            {
+                if (child == null || child.isDisposed())
+                    continue;
+                if (child instanceof org.eclipse.swt.custom.CCombo
+                        || child instanceof org.eclipse.swt.widgets.Combo)
+                    combo = child;
+                else if (fallback == null)
+                {
+                    Control nested = preferValueSwtControl(child);
+                    if (nested != null)
+                        fallback = nested;
+                }
+            }
+            if (combo != null)
+                return combo;
+            return fallback;
+        }
+        return control;
+    }
+
+    private static Boolean readSwtEditablePreferCombo(Control control)
+    {
+        Control preferred = preferValueSwtControl(control);
+        if (preferred == null || preferred.isDisposed())
+            return null;
+        return readSwtEditable(preferred);
+    }
+
+    private static Boolean readBoundNativeEditable(Object renderer, Object nativeObj)
+    {
+        Boolean fromSwt = readBoundNativeSwtEditable(renderer, nativeObj);
+        if (fromSwt != null)
+            return fromSwt;
+        return null;
+    }
+
+    /** Редактируемость value-контрола AEF/LWT (true/false/unknown). */
+    static Boolean readEditableFromView(Object view, Object valueVm)
+    {
+        Object nativeObj = lightNativeFromView(view);
+        Boolean readOnly = readLightReadOnly(nativeObj, 0);
+        if (readOnly != null && !readOnly.booleanValue())
+            return Boolean.FALSE;
+        if (readSwtEditableFromViewNative(nativeObj) == Boolean.TRUE)
+            return Boolean.TRUE;
+        Object light = lightControlFromView(view);
+        readOnly = readLightReadOnly(light, 0);
+        if (readOnly != null && !readOnly.booleanValue())
+            return Boolean.FALSE;
+        if (readSwtEditableFromViewNative(light) == Boolean.TRUE)
+            return Boolean.TRUE;
+        if (view != null)
+        {
+            Object enabled = Global.invoke(view, "isEnabled"); //$NON-NLS-1$
+            if (enabled instanceof Boolean && ((Boolean) enabled).booleanValue())
+                return Boolean.TRUE;
+            Object editable = Global.invoke(view, "isEditable"); //$NON-NLS-1$
+            if (editable instanceof Boolean && ((Boolean) editable).booleanValue())
+                return Boolean.TRUE;
+        }
+        if (readSwtEditableFromViewNative(view) == Boolean.TRUE)
+            return Boolean.TRUE;
+        if (valueVm != null)
+        {
+            Object enabled = Global.invoke(valueVm, "isEnabled"); //$NON-NLS-1$
+            if (enabled instanceof Boolean && ((Boolean) enabled).booleanValue())
+                return Boolean.TRUE;
+            Object editable = Global.invoke(valueVm, "isEditable"); //$NON-NLS-1$
+            if (editable instanceof Boolean && ((Boolean) editable).booleanValue())
+                return Boolean.TRUE;
+        }
+        if (view != null)
+        {
+            Object enabled = Global.invoke(view, "isEnabled"); //$NON-NLS-1$
+            if (enabled instanceof Boolean)
+                return (Boolean) enabled;
+        }
+        if (valueVm != null)
+        {
+            Object enabled = Global.invoke(valueVm, "isEnabled"); //$NON-NLS-1$
+            if (enabled instanceof Boolean)
+                return (Boolean) enabled;
+        }
+        return null;
+    }
+
+    /** LWT isEnabled без SWT (null = неизвестно). */
+    static Boolean readLwtEnabled(Object valueView, Object valueVm)
+    {
+        for (Object target : new Object[] { valueView, valueVm })
+        {
+            if (target == null)
+                continue;
+            Object enabled = Global.invoke(target, "isEnabled"); //$NON-NLS-1$
+            if (enabled instanceof Boolean)
+                return (Boolean) enabled;
+        }
+        return null;
+    }
+
+    private static Boolean readSwtEditableFromViewNative(Object nativeObj)
+    {
+        if (nativeObj == null)
+            return null;
+        Control swt = unwrapToSwtControl(nativeObj);
+        if (swt != null && !swt.isDisposed())
+            return readSwtEditablePreferCombo(swt);
+        for (String method : new String[] {
+                "getEditor", "getInput", "getTextEditor", "getControl", "getLightControl", "getTextControl" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        })
+        {
+            Object nested = Global.invoke(nativeObj, method);
+            if (nested != null && nested != nativeObj)
+            {
+                Boolean result = readSwtEditableFromViewNative(nested);
+                if (result != null)
+                    return result;
+            }
+        }
+        Object children = Global.invoke(nativeObj, "getChildren"); //$NON-NLS-1$
+        java.util.Iterator<?> it = toLightIterator(children);
+        while (it != null && it.hasNext())
+        {
+            Boolean result = readSwtEditableFromViewNative(it.next());
+            if (result != null)
+                return result;
+        }
+        return null;
+    }
+
+    private static Boolean readLightReadOnly(Object light, int depth)
+    {
+        if (light == null || depth > 6)
+            return null;
+        Object readOnly = Global.invoke(light, "isReadOnly"); //$NON-NLS-1$
+        if (readOnly instanceof Boolean)
+            return Boolean.valueOf(!((Boolean) readOnly).booleanValue());
+        for (String method : new String[] {
+                "getEditor", "getInput", "getTextEditor", "getControl", "getLightControl", "getTextControl" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        })
+        {
+            Object nested = Global.invoke(light, method);
+            if (nested != null && nested != light)
+            {
+                Boolean result = readLightReadOnly(nested, depth + 1);
+                if (result != null)
+                    return result;
+            }
+        }
+        Object children = Global.invoke(light, "getChildren"); //$NON-NLS-1$
+        java.util.Iterator<?> it = toLightIterator(children);
+        while (it != null && it.hasNext())
+        {
+            Boolean child = readLightReadOnly(it.next(), depth + 1);
+            if (child != null)
+                return child;
+        }
+        return null;
+    }
+
+    private static Boolean readLightEditableDeep(Object light, int depth)
+    {
+        if (light == null || depth > 6)
+            return null;
+        Object readOnly = Global.invoke(light, "isReadOnly"); //$NON-NLS-1$
+        if (readOnly instanceof Boolean)
+            return Boolean.valueOf(!((Boolean) readOnly).booleanValue());
+        Object editable = Global.invoke(light, "isEditable"); //$NON-NLS-1$
+        Object enabled = Global.invoke(light, "isEnabled"); //$NON-NLS-1$
+        editable = Global.invoke(light, "getEditable"); //$NON-NLS-1$
+        for (String method : new String[] {
+                "getEditor", "getInput", "getTextEditor", "getControl", "getLightControl", "getTextControl" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        })
+        {
+            Object nested = Global.invoke(light, method);
+            if (nested != null && nested != light)
+            {
+                Boolean result = readLightEditableDeep(nested, depth + 1);
+                if (result != null)
+                    return result;
+            }
+        }
+        Object children = Global.invoke(light, "getChildren"); //$NON-NLS-1$
+        java.util.Iterator<?> it = toLightIterator(children);
+        Boolean combined = null;
+        while (it != null && it.hasNext())
+        {
+            Boolean child = readLightEditableDeep(it.next(), depth + 1);
+            if (child == null)
+                continue;
+            combined = combined == null ? child : Boolean.valueOf(combined.booleanValue() && child.booleanValue());
+        }
+        if (combined != null)
+            return combined;
+        if (Global.invoke(light, "isEditable") instanceof Boolean) //$NON-NLS-1$
+            return (Boolean) Global.invoke(light, "isEditable"); //$NON-NLS-1$
+        if (enabled instanceof Boolean)
+            return (Boolean) enabled;
+        return null;
+    }
+
+    private static java.util.Iterator<?> toLightIterator(Object raw)
+    {
+        if (raw instanceof Iterable)
+            return ((Iterable<?>) raw).iterator();
+        if (raw instanceof Object[])
+        {
+            Object[] arr = (Object[]) raw;
+            java.util.List<Object> list = new java.util.ArrayList<>(arr.length);
+            for (Object o : arr)
+                list.add(o);
+            return list.iterator();
+        }
+        return null;
+    }
+
+    private static Boolean readSwtEditable(Control control)
+    {
+        if (control == null || control.isDisposed())
+            return null;
+        if (control instanceof org.eclipse.swt.widgets.Text)
+            return Boolean.valueOf(((org.eclipse.swt.widgets.Text) control).getEditable()
+                    && control.getEnabled());
+        if (control instanceof org.eclipse.swt.custom.CCombo
+                || control instanceof org.eclipse.swt.widgets.Combo
+                || control instanceof org.eclipse.swt.widgets.Spinner
+                || control instanceof org.eclipse.swt.widgets.Button)
+            return Boolean.valueOf(control.getEnabled());
+        if (control instanceof Composite)
+        {
+            Composite composite = (Composite) control;
+            org.eclipse.swt.widgets.Text actionBarText = null;
+            boolean hasPushButtons = false;
+            boolean anyPushEnabled = false;
+            for (Control child : composite.getChildren())
+            {
+                if (child instanceof org.eclipse.swt.widgets.Text && actionBarText == null)
+                    actionBarText = (org.eclipse.swt.widgets.Text) child;
+                else if (child instanceof org.eclipse.swt.widgets.Button
+                        && (((org.eclipse.swt.widgets.Button) child).getStyle() & org.eclipse.swt.SWT.PUSH) != 0)
+                {
+                    hasPushButtons = true;
+                    if (child.getEnabled())
+                        anyPushEnabled = true;
+                }
+            }
+            if (actionBarText != null && hasPushButtons)
+            {
+                if (!composite.getEnabled())
+                    return Boolean.FALSE;
+                if (anyPushEnabled || (actionBarText.getEditable() && actionBarText.getEnabled()))
+                    return Boolean.TRUE;
+                return Boolean.FALSE;
+            }
+            for (Control child : composite.getChildren())
+            {
+                Boolean nested = readSwtEditable(child);
+                if (nested != null)
+                    return nested;
+            }
+        }
+        return null;
+    }
+
     /** Состояние LWT checkbox/toggle (true/false/unknown). */
     static Boolean booleanSelectionFromView(Object view, Object valueVm)
     {
@@ -1381,5 +1914,441 @@ final class PropertySheetControlInterop
     private static String nullToEmpty(String s)
     {
         return s != null ? s : ""; //$NON-NLS-1$
+    }
+
+    /**
+     * Имитация действия пользователя на «Старой» вкладке: LWT-view, light-контрол и SWT.
+     * Вызывается после прямого push в {@link PropertySheetComfortValueControls}.
+     */
+    /**
+     * Имитация клика по LwtCheckboxView на «Старой» вкладке.
+     * Нельзя вызывать {@code LightCheckbox.setChecked}/{@code CheckboxViewModel.setChecked} —
+     * databinding ломает {@code PROPERTY_PALETTE_ENGINE}.
+     */
+    static boolean invokeCheckboxOnView(Object renderer, Object valueView, Object valueVm, boolean selected)
+    {
+        if (valueView == null && valueVm == null)
+            return false;
+        if (renderer != null && valueVm != null)
+        {
+            Object nativeCtrl = Global.invoke(renderer, "getNativeControl", valueVm); //$NON-NLS-1$
+            if (pushCheckboxViaNativeTarget(renderer, nativeCtrl, selected, "renderer.vm")) //$NON-NLS-1$
+                return true;
+        }
+        if (renderer != null && valueView != null)
+        {
+            Object nativeCtrl = Global.invoke(renderer, "getNativeControl", valueView); //$NON-NLS-1$
+            if (pushCheckboxViaNativeTarget(renderer, nativeCtrl, selected, "renderer.view")) //$NON-NLS-1$
+                return true;
+            for (Object light : lightCheckboxTargets(valueView))
+            {
+                tryBindNativeControl(renderer, light);
+                if (pushCheckboxViaNativeTarget(renderer, light, selected, "renderer.light")) //$NON-NLS-1$
+                    return true;
+            }
+        }
+        for (Object light : lightCheckboxTargets(valueView))
+        {
+            Control bridged = bridgeSwtLightControlOnly(light);
+            Button check = findSwtCheckButton(bridged);
+            if (check != null && !check.isDisposed())
+            {
+                pushSwtCheckboxSelection(check, selected, "swt.bridge"); //$NON-NLS-1$
+                return true;
+            }
+        }
+        Button check = findSwtCheckButton(unwrapToSwtControl(valueView));
+        if (check != null && !check.isDisposed())
+        {
+            pushSwtCheckboxSelection(check, selected, "swt.view"); //$NON-NLS-1$
+            return true;
+        }
+        for (Object light : lightCheckboxTargets(valueView))
+        {
+            if (toggleLightCheckbox(light, selected))
+            {
+                PropertySheetDebug.sync("invokeCheckboxOnView OK light.toggle selected=" + selected //$NON-NLS-1$
+                        + " view=" + PropertySheetDebug.safe(valueView)); //$NON-NLS-1$
+                return true;
+            }
+        }
+        PropertySheetDebug.sync("invokeCheckboxOnView FAIL view=" + PropertySheetDebug.safe(valueView) //$NON-NLS-1$
+                + " lights=" + lightCheckboxTargets(valueView).size()); //$NON-NLS-1$
+        return false;
+    }
+
+    private static boolean pushCheckboxViaNativeTarget(Object renderer, Object nativeTarget, boolean selected,
+            String via)
+    {
+        if (nativeTarget == null)
+            return false;
+        tryBindNativeControl(renderer, nativeTarget);
+        if (isLightControl(nativeTarget))
+        {
+            Control bridged = bridgeSwtLightControlOnly(nativeTarget);
+            Button check = findSwtCheckButton(bridged);
+            if (check != null && !check.isDisposed())
+            {
+                pushSwtCheckboxSelection(check, selected, via);
+                return true;
+            }
+            return toggleLightCheckbox(nativeTarget, selected);
+        }
+        Button check = findSwtCheckButton(unwrapToSwtControl(nativeTarget));
+        if (check != null && !check.isDisposed())
+        {
+            pushSwtCheckboxSelection(check, selected, via);
+            return true;
+        }
+        return false;
+    }
+
+    private static void pushSwtCheckboxSelection(Button check, boolean selected, String via)
+    {
+        if (check == null || check.isDisposed())
+            return;
+        if (check.getSelection() != selected)
+            check.setSelection(selected);
+        notifySwtSelection(check);
+        PropertySheetDebug.sync("invokeCheckboxOnView OK " + via + " selected=" + selected); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** Имитация клика: только {@code handleEvent(Selection)}, без {@code setChecked}. */
+    private static boolean toggleLightCheckbox(Object light, boolean selected)
+    {
+        if (light == null)
+            return false;
+        String cn = light.getClass().getName();
+        if (!cn.contains("Checkbox") && !cn.contains("CheckBox")) //$NON-NLS-1$ //$NON-NLS-2$
+            return false;
+        Object current = Global.invoke(light, "isChecked"); //$NON-NLS-1$
+        if (current instanceof Boolean && ((Boolean) current).booleanValue() == selected)
+            return true;
+        Control swt = bridgeSwtLightControlOnly(light);
+        for (int eventType : new int[] { SWT.Selection, SWT.MouseDown })
+        {
+            Event event = new Event();
+            event.type = eventType;
+            event.button = 1;
+            if (swt != null && !swt.isDisposed())
+                event.widget = swt;
+            if (Global.invokeVoid(light, "handleEvent", event)) //$NON-NLS-1$
+            {
+                Object after = Global.invoke(light, "isChecked"); //$NON-NLS-1$
+                if (after instanceof Boolean && ((Boolean) after).booleanValue() == selected)
+                    return true;
+            }
+        }
+        if (!notifyLightSelection(light))
+            return false;
+        Object after = Global.invoke(light, "isChecked"); //$NON-NLS-1$
+        return after instanceof Boolean && ((Boolean) after).booleanValue() == selected;
+    }
+
+    static void simulateNativeValueChange(PropertySheetComfortValueControls.Kind kind,
+            Object valueView, Object valueVm, Control nativeValue, Object value)
+    {
+        boolean pushed = false;
+        if (valueView != null)
+            pushed |= pushComfortValueViaView(kind, valueView, value);
+        if (nativeValue != null && !nativeValue.isDisposed())
+            pushed |= pushComfortValueViaSwt(kind, nativeValue, value);
+        if (!pushed && valueView != null)
+            notifyViewRefresh(valueView, valueVm, value);
+        if (pushed)
+            PropertySheetDebug.syncVerbose("simulateNative kind=" + kind //$NON-NLS-1$
+                    + " value=" + PropertySheetDebug.quote(String.valueOf(value)) //$NON-NLS-1$
+                    + " view=" + PropertySheetDebug.safe(valueView)); //$NON-NLS-1$
+    }
+
+    private static boolean pushComfortValueViaView(PropertySheetComfortValueControls.Kind kind,
+            Object valueView, Object value)
+    {
+        if (valueView == null)
+            return false;
+        boolean pushed = false;
+        pushed |= pushComfortValueToLight(kind, valueView, value);
+        pushed |= pushComfortValueToLight(kind, lightControlFromView(valueView), value);
+        pushed |= pushComfortValueToLight(kind, lightNativeFromView(valueView), value);
+        Control swt = unwrapToSwtControl(valueView);
+        if (swt != null && !swt.isDisposed())
+            pushed |= pushComfortValueViaSwt(kind, swt, value);
+        for (String method : comfortViewHandlerMethods(kind))
+            pushed |= Global.invokeVoid(valueView, method, comfortHandlerArg(kind, value));
+        return pushed;
+    }
+
+    private static String[] comfortViewHandlerMethods(PropertySheetComfortValueControls.Kind kind)
+    {
+        if (kind == PropertySheetComfortValueControls.Kind.BOOLEAN)
+            return new String[] {
+                    "handleSelection", "selectionChanged", "handleCheck", "handleValueChange", "valueChanged" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            };
+        return new String[] {
+                "handleModify", "textChanged", "handleValueChange", "valueChanged", "handleSelection", "selectionChanged" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        };
+    }
+
+    private static Object comfortHandlerArg(PropertySheetComfortValueControls.Kind kind, Object value)
+    {
+        if (kind == PropertySheetComfortValueControls.Kind.BOOLEAN)
+            return Boolean.valueOf(comfortBoolean(value));
+        return value != null ? value : ""; //$NON-NLS-1$
+    }
+
+    private static void notifyViewRefresh(Object valueView, Object valueVm, Object value)
+    {
+        for (String method : new String[] { "valueChanged", "refresh", "updateVisual", "handleModelChange" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        {
+            if (Global.invokeVoid(valueView, method))
+                return;
+            if (Global.invokeVoid(valueView, method, value))
+                return;
+        }
+        if (valueVm != null)
+        {
+            for (String method : new String[] { "valueChanged", "refresh" }) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                if (Global.invokeVoid(valueVm, method))
+                    return;
+                if (Global.invokeVoid(valueVm, method, value))
+                    return;
+            }
+        }
+    }
+
+    private static boolean pushComfortValueToLight(PropertySheetComfortValueControls.Kind kind,
+            Object light, Object value)
+    {
+        if (light == null)
+            return false;
+        boolean pushed = false;
+        if (kind == PropertySheetComfortValueControls.Kind.BOOLEAN)
+            return toggleLightCheckbox(light, comfortBoolean(value));
+        String text = value != null ? String.valueOf(value) : ""; //$NON-NLS-1$
+        pushed |= Global.invokeVoid(light, "setText", text); //$NON-NLS-1$
+        if (kind == PropertySheetComfortValueControls.Kind.COMBO)
+        {
+            pushed |= Global.invokeVoid(light, "setSelection", text); //$NON-NLS-1$
+            Object items = Global.invoke(light, "getItems"); //$NON-NLS-1$
+            int idx = comfortComboIndex(items, text);
+            if (idx >= 0)
+                pushed |= Global.invokeVoid(light, "select", Integer.valueOf(idx)); //$NON-NLS-1$
+        }
+        pushed |= notifyLightModify(light);
+        return pushed;
+    }
+
+    private static boolean pushComfortValueViaSwt(PropertySheetComfortValueControls.Kind kind,
+            Control control, Object value)
+    {
+        if (control == null || control.isDisposed())
+            return false;
+        if (kind == PropertySheetComfortValueControls.Kind.BOOLEAN)
+        {
+            Button check = findSwtCheckButton(control);
+            if (check == null)
+                return false;
+            boolean selected = comfortBoolean(value);
+            if (check.getSelection() == selected)
+                notifySwtSelection(check);
+            else
+            {
+                check.setSelection(selected);
+                notifySwtSelection(check);
+            }
+            return true;
+        }
+        if (kind == PropertySheetComfortValueControls.Kind.COMBO)
+        {
+            Control combo = control instanceof Combo || control instanceof CCombo ? control
+                    : findSwtCombo(control);
+            if (combo == null)
+                return false;
+            String text = value != null ? String.valueOf(value) : ""; //$NON-NLS-1$
+            if (combo instanceof Combo)
+            {
+                Combo swtCombo = (Combo) combo;
+                int idx = swtCombo.indexOf(text);
+                if (idx >= 0)
+                    swtCombo.select(idx);
+                else
+                    swtCombo.setText(text);
+                notifySwtSelection(swtCombo);
+                return true;
+            }
+            if (combo instanceof CCombo)
+            {
+                CCombo swtCombo = (CCombo) combo;
+                swtCombo.setText(text);
+                notifySwtSelection(swtCombo);
+                return true;
+            }
+            return false;
+        }
+        if (kind == PropertySheetComfortValueControls.Kind.SPINNER && control instanceof Spinner)
+        {
+            try
+            {
+                int number = Integer.parseInt(String.valueOf(value));
+                ((Spinner) control).setSelection(number);
+                notifySwtSelection(control);
+                return true;
+            }
+            catch (NumberFormatException ignored)
+            {
+                return false;
+            }
+        }
+        Text textControl = control instanceof Text ? (Text) control : findSwtText(control);
+        if (textControl == null)
+            return false;
+        String text = value != null ? String.valueOf(value) : ""; //$NON-NLS-1$
+        if (!text.equals(textControl.getText()))
+            textControl.setText(text);
+        notifySwtModify(textControl);
+        return true;
+    }
+
+    private static Button findSwtCheckButton(Control control)
+    {
+        if (control == null || control.isDisposed())
+            return null;
+        if (control instanceof Button && (((Button) control).getStyle() & SWT.CHECK) != 0)
+            return (Button) control;
+        if (control instanceof Composite)
+        {
+            for (Control child : ((Composite) control).getChildren())
+            {
+                Button found = findSwtCheckButton(child);
+                if (found != null)
+                    return found;
+            }
+        }
+        return null;
+    }
+
+    private static Control findSwtCombo(Control control)
+    {
+        if (control == null || control.isDisposed())
+            return null;
+        if (control instanceof Combo || control instanceof CCombo)
+            return control;
+        if (control instanceof Composite)
+        {
+            for (Control child : ((Composite) control).getChildren())
+            {
+                Control found = findSwtCombo(child);
+                if (found != null)
+                    return found;
+            }
+        }
+        return null;
+    }
+
+    private static Text findSwtText(Control control)
+    {
+        if (control == null || control.isDisposed())
+            return null;
+        if (control instanceof Text)
+            return (Text) control;
+        if (control instanceof Composite)
+        {
+            for (Control child : ((Composite) control).getChildren())
+            {
+                Text found = findSwtText(child);
+                if (found != null)
+                    return found;
+            }
+        }
+        return null;
+    }
+
+    private static int comfortComboIndex(Object items, String text)
+    {
+        if (items == null || text == null)
+            return -1;
+        if (items instanceof String[])
+        {
+            String[] array = (String[]) items;
+            for (int i = 0; i < array.length; i++)
+            {
+                if (text.equals(array[i]))
+                    return i;
+            }
+            return -1;
+        }
+        java.util.Iterator<?> it = toLightIterator(items);
+        if (it == null)
+            return -1;
+        int index = 0;
+        while (it.hasNext())
+        {
+            Object item = it.next();
+            String itemText = item instanceof String ? (String) item : objectString(item);
+            if (text.equals(itemText))
+                return index;
+            index++;
+        }
+        return -1;
+    }
+
+    private static boolean comfortBoolean(Object value)
+    {
+        if (value instanceof Boolean)
+            return ((Boolean) value).booleanValue();
+        if (value == null)
+            return false;
+        String text = String.valueOf(value).trim();
+        return "true".equalsIgnoreCase(text) || "да".equalsIgnoreCase(text) //$NON-NLS-1$ //$NON-NLS-2$
+                || "yes".equalsIgnoreCase(text) || "1".equals(text); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static boolean notifyLightSelection(Object light)
+    {
+        Event event = new Event();
+        event.type = SWT.Selection;
+        if (Global.invokeVoid(light, "handleEvent", event)) //$NON-NLS-1$
+            return true;
+        for (String method : new String[] {
+                "notifySelectionListeners", "notifyListeners", "handleSelection", "selectionChanged" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        })
+        {
+            if (Global.invokeVoid(light, method))
+                return true;
+            if (Global.invokeVoid(light, method, Integer.valueOf(SWT.Selection)))
+                return true;
+        }
+        return false;
+    }
+
+    private static boolean notifyLightModify(Object light)
+    {
+        for (String method : new String[] {
+                "notifyModifyListeners", "notifyListeners", "handleModify", "textChanged" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        })
+        {
+            if (Global.invokeVoid(light, method))
+                return true;
+            if (Global.invokeVoid(light, method, Integer.valueOf(SWT.Modify)))
+                return true;
+        }
+        return false;
+    }
+
+    private static void notifySwtSelection(Control control)
+    {
+        if (control == null || control.isDisposed())
+            return;
+        Event event = new Event();
+        control.notifyListeners(SWT.Selection, event);
+        control.notifyListeners(SWT.Modify, event);
+    }
+
+    private static void notifySwtModify(Control control)
+    {
+        if (control == null || control.isDisposed())
+            return;
+        control.notifyListeners(SWT.Modify, new Event());
     }
 }

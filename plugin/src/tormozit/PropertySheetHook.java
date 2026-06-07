@@ -33,6 +33,7 @@ public final class PropertySheetHook implements IStartup
     @Override
     public void earlyStartup()
     {
+        if(true) return; // Не доделано
         Display.getDefault().asyncExec(() -> {
             IWorkbench wb = PlatformUI.getWorkbench();
             if (wb == null)
@@ -203,14 +204,14 @@ public final class PropertySheetHook implements IStartup
 
         Object nativeListener = Global.invoke(searchBox, "getSearchListener"); //$NON-NLS-1$
 
-        boolean listenerOk = searchInput.attachPatternListener(view, nativeListener, explicitPattern -> {
+        boolean listenerOk = searchInput.attachPatternListener(view, nativeListener, propertyPage, explicitPattern -> {
             Display d = Display.getDefault();
             if (pending[0] != null)
                 d.timerExec(-1, pending[0]);
             pending[0] = () -> {
                 String pattern = explicitPattern != null ? explicitPattern : input.readPattern();
                 PropertySheetDebug.uiVerbose("modify pattern=\"" + pattern + "\""); //$NON-NLS-1$ //$NON-NLS-2$
-                PropertySheetSearchSupport.apply(propertyPage, pattern);
+                PropertySheetSearchSupport.apply(propertyPage, pattern, false);
             };
             d.timerExec(150, pending[0]);
         });

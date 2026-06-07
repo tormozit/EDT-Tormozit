@@ -146,6 +146,16 @@ final class PropertySheetLiveSync
             return;
         Object page = binding.page;
         String sourceKey = PropertySheetSourceKey.fingerprint(page);
+        if (PropertySheetComfortUi.isComfortPushInProgress(page)
+                || PropertySheetComfortUi.isComfortRefreshSuppressed(page))
+        {
+            PropertySheetDebug.syncVerbose("liveSync DEFER push/suppress page=" //$NON-NLS-1$
+                    + PropertySheetDebug.safe(page));
+            Display display = Display.getDefault();
+            if (display != null && !display.isDisposed())
+                display.timerExec(300, () -> scheduleSourceRefresh(binding, force));
+            return;
+        }
         if (!force && sourceKey.equals(binding.lastSourceKey)
                 && PropertySheetComfortUi.hasRows(page))
             return;
@@ -176,9 +186,12 @@ final class PropertySheetLiveSync
             if (!key.equals(binding.lastSourceKey))
                 PropertySheetSearchSupport.prepareComfortSync(binding.page);
         }
+        PropertySheetDebug.sync("liveSync refresh attempt=" + attempt //$NON-NLS-1$
+                + " page=" + PropertySheetDebug.safe(binding.page)); //$NON-NLS-1$
         boolean ok = PropertySheetComfortCoordinator.refreshInstalled(binding.page, matcher);
         if (ok)
             binding.lastSourceKey = PropertySheetSourceKey.fingerprint(binding.page);
+        PropertySheetDebug.syncVerbose("liveSync refresh attempt=" + attempt + " ok=" + ok); //$NON-NLS-1$ //$NON-NLS-2$
         if (ok || attempt + 1 >= RETRY_DELAYS_MS.length)
             return;
         int nextDelay = RETRY_DELAYS_MS[attempt + 1] - RETRY_DELAYS_MS[attempt];

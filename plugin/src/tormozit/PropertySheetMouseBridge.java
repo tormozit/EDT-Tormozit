@@ -148,8 +148,14 @@ final class PropertySheetMouseBridge
             int dist = Math.abs(local.y - (lightLocal.y + Math.max(1, bounds.height / 2)));
             if (dist < bestDist)
             {
-                Point origin = new Point(Math.max(0, lightLocal.x + 3),
-                        Math.max(0, lightLocal.y + Math.max(0, (bounds.height - 13) / 2)));
+                Composite host = widget instanceof Composite ? (Composite) widget : widget.getParent();
+                Point origin = PropertySheetControlInterop.lwtLabelDrawOrigin(light, host);
+                if (origin == null)
+                {
+                    int textHeight = PropertySheetControlInterop.lwtTextHeight(light, host);
+                    origin = new Point(Math.max(0, lightLocal.x + 3),
+                            Math.max(0, lightLocal.y + Math.max(0, (bounds.height - textHeight) / 2)));
+                }
                 PropertySheetControlInterop.storeLwtRowGeometry(widget, view, name, origin, band);
                 Composite rowComposite = widget instanceof Composite ? (Composite) widget : widget.getParent();
                 best = new PropertySheetPaletteRow(widget, rowComposite,
