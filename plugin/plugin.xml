@@ -17,6 +17,7 @@
     <startup class="tormozit.OpenMdObjectHook"/>
     <startup class="tormozit.MenuTooltipStatusLineHook"/>
     <startup class="tormozit.RecentPlacesTracker"/>
+    <startup class="tormozit.PropertySheetHook"/>
   </extension>
 
   <extension point="org.eclipse.ui.contexts">

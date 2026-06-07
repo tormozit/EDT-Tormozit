@@ -17,10 +17,25 @@ alwaysApply: true
 
 Пример: `com._1c.g5.v8.dt.platform.services.ui_*.jar` — там же.
 
+## Распаковка архивов (JAR, ZIP и т.п.)
+
+**Никогда** не распаковывать в корень репозитория, в `plugin/` или другие рабочие каталоги.
+
+Всегда использовать подкаталог **`.tmp/`** в корне проекта (уже в `.gitignore`):
+
+```text
+C:\VC\EDT.Comfort\.tmp\mdprops\   — пример для разбора бандла
+```
+
+Перед распаковкой: `mkdir .tmp\<имя>` (или `New-Item -ItemType Directory`). Рабочую директорию для `jar xf` / `unzip` задавать явно (`cd .tmp\…` или `-C .tmp\…`).
+
+После анализа временные файлы можно удалить; в git они не попадают.
+
 ## Когда нужен внутренний код EDT
 
 1. Сначала `dir /s /b` или поиск по `*.jar` в `.bundle_pool\plugins\`.
-2. Для разбора класса: `jar xf …/SomeBundle_*.jar path/to/Class.class` и строки из `.class`, либо `javap` если доступен JDK из target.
+2. Для разбора класса: распаковать в `.tmp\…`, например  
+   `jar xf …/SomeBundle_*.jar path/to/Class.class` из `.tmp\bundle-name\`, затем строки из `.class` или `javap` (JDK из target).
 
 ## Связь с репозиторием
 

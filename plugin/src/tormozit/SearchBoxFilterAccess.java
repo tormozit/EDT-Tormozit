@@ -31,16 +31,30 @@ final class SearchBoxFilterAccess
 
     static SearchBoxFilterAccess resolve(IViewPart navigator, Object searchBox)
     {
+        return resolve(navigator, searchBox, true);
+    }
+
+    /** Без {@code activateSearchBox} / {@code layout} — для фонового refresh. */
+    static SearchBoxFilterAccess resolveQuiet(IViewPart navigator, Object searchBox)
+    {
+        return resolve(navigator, searchBox, false);
+    }
+
+    private static SearchBoxFilterAccess resolve(IViewPart navigator, Object searchBox, boolean activateUi)
+    {
         if (searchBox == null)
             return null;
-        for (String method : new String[] { "activateSearchBox", "showSearchBox", "expandSearchBox" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            Global.invokeVoid(navigator, method);
-        Global.invokeVoid(searchBox, "setVisible", Boolean.TRUE); //$NON-NLS-1$
-        if (searchBox instanceof Composite)
+        if (activateUi)
         {
-            Composite composite = (Composite) searchBox;
-            if (!composite.isDisposed())
-                composite.layout(true, true);
+            for (String method : new String[] { "activateSearchBox", "showSearchBox", "expandSearchBox" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                Global.invokeVoid(navigator, method);
+            Global.invokeVoid(searchBox, "setVisible", Boolean.TRUE); //$NON-NLS-1$
+            if (searchBox instanceof Composite)
+            {
+                Composite composite = (Composite) searchBox;
+                if (!composite.isDisposed())
+                    composite.layout(true, true);
+            }
         }
         Control textControl = findTextControl(searchBox);
         Object observable = Global.getField(searchBox, "searchTextObservable"); //$NON-NLS-1$
@@ -99,6 +113,11 @@ final class SearchBoxFilterAccess
 
     boolean attachPatternListener(IViewPart navigator, Consumer<String> onPatternChange)
     {
+        return attachPatternListener(navigator, null, onPatternChange);
+    }
+
+    boolean attachPatternListener(IViewPart navigator, Object nativeListener, Consumer<String> onPatternChange)
+    {
         boolean attached = false;
         ModifyListener onModify = e -> onPatternChange.accept(null);
         if ("styledText".equals(mode) && textControl instanceof StyledText) //$NON-NLS-1$
@@ -121,7 +140,7 @@ final class SearchBoxFilterAccess
             }
         }
         // Резерв: performSearch (в т.ч. очистка) — observable иногда молчит
-        if (attachSearchListenerProxy(navigator, onPatternChange))
+        if (attachSearchListenerProxy(navigator, nativeListener, onPatternChange))
             attached = true;
         return attached;
     }
@@ -247,9 +266,12 @@ final class SearchBoxFilterAccess
         return null;
     }
 
-    private boolean attachSearchListenerProxy(IViewPart navigator, Consumer<String> onPatternChange)
+    private boolean attachSearchListenerProxy(IViewPart navigator, Object nativeListener,
+            Consumer<String> onPatternChange)
     {
-        Object delegate = navigator != null ? Global.getField(navigator, "searchPerformer") : null; //$NON-NLS-1$
+        Object delegate = nativeListener;
+        if (delegate == null && navigator != null)
+            delegate = Global.getField(navigator, "searchPerformer"); //$NON-NLS-1$
         Object proxy = createSearchListener(onPatternChange, delegate);
         if (proxy == null)
             return false;

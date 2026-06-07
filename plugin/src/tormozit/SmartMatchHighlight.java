@@ -12,7 +12,10 @@ import org.eclipse.swt.custom.StyleRange;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.FontData;
+import org.eclipse.swt.graphics.GC;
+import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.TextStyle;
+import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.themes.ITheme;
@@ -76,6 +79,29 @@ public final class SmartMatchHighlight
     }
 
     /** Добавляет стили подсветки к уже отрисованной ячейке (после штатного label provider). */
+    /** Жирный синий overlay поверх уже отрисованного SWT-текста (Label и др.). */
+    public static void paintTextMatchOverlay(GC gc, Control control, String text, SmartMatcher matcher)
+    {
+        if (gc == null || control == null || control.isDisposed() || text == null || text.isEmpty()
+                || matcher == null || matcher.isEmpty)
+            return;
+        Point origin = swtTextOrigin(gc, control, text);
+        drawMatchFragments(gc, text, matcher, origin.x, origin.y, control.getFont());
+    }
+
+    /** Жирный синий overlay для LWT LightLabel в координатах host-контрола. */
+    public static void paintLwtTextMatchOverlay(GC gc, Control host, String text, SmartMatcher matcher,
+            int originX, int originY, Object light)
+    {
+        if (gc == null || host == null || host.isDisposed() || text == null || text.isEmpty()
+                || matcher == null || matcher.isEmpty)
+            return;
+        Font font = PropertySheetControlInterop.lwtFont(light);
+        if (font == null)
+            font = host.getFont();
+        drawMatchFragments(gc, text, matcher, originX, originY, font);
+    }
+
     public static void appendMatchRanges(ViewerCell cell, Iterable<SmartMatcher.HighlightRange> ranges)
     {
         if (cell == null || ranges == null)
@@ -98,6 +124,60 @@ public final class SmartMatchHighlight
         System.arraycopy(existing, 0, merged, 0, existing.length);
         System.arraycopy(added, 0, merged, existing.length, added.length);
         cell.setStyleRanges(merged);
+    }
+
+    private static void drawMatchFragments(GC gc, String text, SmartMatcher matcher,
+            int baseX, int baseY, Font baseFont)
+    {
+        List<SmartMatcher.HighlightRange> ranges = matcher.getHighlightRanges(text);
+        if (ranges.isEmpty())
+            return;
+
+        Font prevFont = gc.getFont();
+        Color prevFg = gc.getForeground();
+        Font bold = boldFontFrom(baseFont != null ? baseFont : prevFont);
+        gc.setForeground(foreground());
+        gc.setFont(bold);
+        try
+        {
+            for (SmartMatcher.HighlightRange range : ranges)
+            {
+                if (range.offset < 0 || range.length <= 0 || range.offset + range.length > text.length())
+                    continue;
+                String prefix = text.substring(0, range.offset);
+                String match = text.substring(range.offset, range.offset + range.length);
+                int x = baseX + gc.textExtent(prefix, SWT.DRAW_TRANSPARENT | SWT.DRAW_DELIMITER).x;
+                gc.drawText(match, x, baseY, true);
+            }
+        }
+        finally
+        {
+            gc.setFont(prevFont);
+            gc.setForeground(prevFg);
+            if (bold != cachedBoldFont && bold != null && !bold.isDisposed())
+                bold.dispose();
+        }
+    }
+
+    private static Point swtTextOrigin(GC gc, Control control, String text)
+    {
+        Font font = control.getFont();
+        if (font != null)
+            gc.setFont(font);
+        Point ext = gc.textExtent(text);
+        int x = 4;
+        int y = Math.max(0, (control.getSize().y - ext.y) / 2);
+        return new Point(x, y);
+    }
+
+    private static Font boldFontFrom(Font base)
+    {
+        if (base == null || base.isDisposed())
+            return boldFont();
+        FontData[] data = base.getFontData();
+        for (FontData fd : data)
+            fd.setStyle(fd.getStyle() | SWT.BOLD);
+        return new Font(currentDisplay(), data);
     }
 
     private static StyleRange[] toStyleRanges(String text, Iterable<SmartMatcher.HighlightRange> ranges)
