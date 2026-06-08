@@ -1,26 +1,11 @@
 package tormozit;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.Future;
-
 import org.eclipse.jface.viewers.DelegatingStyledCellLabelProvider;
 import org.eclipse.jface.viewers.DelegatingStyledCellLabelProvider.IStyledLabelProvider;
 import org.eclipse.jface.viewers.IBaseLabelProvider;
 import org.eclipse.jface.viewers.ILabelProvider;
-import org.eclipse.jface.viewers.IStructuredSelection;
-import org.eclipse.jface.viewers.ITreeContentProvider;
 import org.eclipse.jface.viewers.StyledCellLabelProvider;
-import org.eclipse.jface.viewers.StructuredSelection;
 import org.eclipse.jface.viewers.ViewerComparator;
-import org.eclipse.jface.viewers.ViewerFilter;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Tree;
@@ -34,21 +19,18 @@ import org.eclipse.ui.IWorkbenchPart;
 import org.eclipse.ui.IWorkbenchPartReference;
 import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.PlatformUI;
-import org.eclipse.ui.navigator.CommonNavigator;
 import org.eclipse.ui.navigator.CommonViewer;
-
-import com._1c.g5.v8.dt.navigator.util.NavigatorUtil;
 
 /**
  * Умный фильтр и подсветка в навигаторе EDT ({@code com._1c.g5.v8.dt.ui2.navigator}).
  * Сортировка навигатора не меняется (без {@link SmartOutlineComparator}).
  *
  * <p><b>НЕ ТРОГАТЬ ГРУППЫ</b> — см. {@link NavigatorTreeElementLabels#isGroupNode(Object)}:
- * служебные папки EDT не фильтруются и не раскрашиваются по паттерну ({@link NavigatorOutlineFilter},
+ * служебные папки EDT не раскрашиваются по паттерну ({@link NavigatorHighlightStyledProvider},
  * {@link NavigatorStyledCellLabelWrapper}).
  *
- * <p><b>При выводе фильтрованного дерева раскрывать узлы на пути к совпадениям</b> — см.
- * {@link NavigatorNativeSearchBridge} (штатный {@code NavigatorSearchFilter} + наш matcher).
+ * <p>Фильтрация — штатный {@code NavigatorSearchFilter} через {@link NavigatorNativeSearchBridge}
+ * ({@link ComfortNavigatorSearchEngine}); раскрытие путей — нативный {@code expandTreeViewerStepByStep}.
  */
 public final class NavigatorFilterHook implements IStartup
 {
@@ -61,28 +43,8 @@ public final class NavigatorFilterHook implements IStartup
     private static final String VIEWER_LABEL_PROVIDER_KEY = "tormozit.navigatorViewerLabelProvider"; //$NON-NLS-1$
     private static final String INJECT_HIGHLIGHT_KEY = "tormozit.navigatorInjectHighlight"; //$NON-NLS-1$
     private static final String REQUESTED_PATTERN_KEY = "tormozit.navigatorRequestedPattern"; //$NON-NLS-1$
-    private static final String SNAPSHOT_KEY = "tormozit.navigatorSnapshot"; //$NON-NLS-1$
-    private static final String SNAPSHOT_SIZE_KEY = "tormozit.navigatorSnapshotSize"; //$NON-NLS-1$
-    private static final String WORKER_FUTURE_KEY = "tormozit.navigatorWorkerFuture"; //$NON-NLS-1$
-    private static final String WORKER_SEQ_KEY = "tormozit.navigatorWorkerSeq"; //$NON-NLS-1$
     private static final String FILTER_ACTIVE_KEY = "tormozit.navigatorFilterActive"; //$NON-NLS-1$
-    private static final String STORED_NAV_FILTERS_KEY = "tormozit.storedNavFilters"; //$NON-NLS-1$
-    private static final String NAV_SEARCH_FILTER = "NavigatorSearchFilter"; //$NON-NLS-1$
-    private static final String NATIVE_NAV_SEARCH_FILTER_ID =
-            "com._1c.g5.v8.dt.internal.navigator.ui.filters.NavigatorSearchFilter"; //$NON-NLS-1$
-    private static final int FILTER_EMIT_MIN_DELTA = 32;
-    private static final long FILTER_EMIT_MAX_NS = 50_000_000L;
-    private static final int FILTER_WORKER_DEBOUNCE_MS = 50;
     private static volatile String lastGiveUpReason = ""; //$NON-NLS-1$
-    /**
-     * ФИЛЬТРАЦИЯ НЕ ДОЛЖНА БЛОКИРОВАТЬ ВВОД:
-     * поиск и обход дерева — в отдельном потоке, UI-поток только применяет готовый результат.
-     */
-    private static final ScheduledExecutorService FILTER_WORKER = Executors.newSingleThreadScheduledExecutor(r -> {
-        Thread thread = new Thread(r, "NavigatorFilterWorker"); //$NON-NLS-1$
-        thread.setDaemon(true);
-        return thread;
-    });
 
     @Override
     public void earlyStartup()
@@ -335,7 +297,7 @@ public final class NavigatorFilterHook implements IStartup
             // ФИЛЬТРАЦИЯ НЕ ДОЛЖНА БЛОКИРОВАТЬ ВВОД: фильтр — штатный SearchJob; здесь только подсветка.
             applyHighlightState(viewer, tree, highlight, searchCache, safePattern);
             if (safePattern.isEmpty())
-                triggerNativeSearchClear(navigator);
+                onSearchCleared(navigator, viewer, tree);
         });
         NavigatorFilterDebug.log("patternListener attached=" + listenerOk + " mode=" + input.mode()); //$NON-NLS-1$ //$NON-NLS-2$
 
@@ -548,577 +510,18 @@ public final class NavigatorFilterHook implements IStartup
         return lp;
     }
 
-    private static void applyFilter(IViewPart navigator, CommonViewer viewer, SmartOutlineFilter smartFilter,
-            SmartLabelHighlight highlight, NavigatorSearchTextCache searchCache, String pattern, boolean forceRefresh)
-    {
-        applyFilter(navigator, viewer, smartFilter, highlight, searchCache, pattern, forceRefresh, false);
-    }
-
-    private static void applyFilter(IViewPart navigator, CommonViewer viewer, SmartOutlineFilter smartFilter,
-            SmartLabelHighlight highlight, NavigatorSearchTextCache searchCache, String pattern, boolean forceRefresh,
-            boolean fromWorker)
-    {
-        if (viewer.getControl() == null || viewer.getControl().isDisposed())
-        {
-            NavigatorFilterDebug.log("applyFilter SKIP viewer disposed"); //$NON-NLS-1$
-            return;
-        }
-        Tree tree = viewer.getTree();
-        if (tree == null || tree.isDisposed())
-        {
-            NavigatorFilterDebug.log("applyFilter SKIP tree disposed"); //$NON-NLS-1$
-            return;
-        }
-        String safePattern = pattern != null ? pattern : ""; //$NON-NLS-1$
-        if (!fromWorker && smartFilter instanceof NavigatorOutlineFilter)
-            ((NavigatorOutlineFilter) smartFilter).clearPrecomputedResult();
-        Object requestedObj = tree.getData(REQUESTED_PATTERN_KEY);
-        if (requestedObj instanceof String && !safePattern.equals(requestedObj))
-        {
-            NavigatorFilterDebug.log("applyFilter SKIP superseded requested=\"" + requestedObj //$NON-NLS-1$
-                    + "\" apply=\"" + safePattern + "\""); //$NON-NLS-1$ //$NON-NLS-2$
-            return;
-        }
-        if (!fromWorker && searchCache != null)
-            searchCache.onPatternChanged(safePattern);
-        boolean filtering = !safePattern.isEmpty();
-        boolean filterWasActive = Boolean.TRUE.equals(tree.getData(FILTER_ACTIVE_KEY));
-        Object lastObj = tree.getData(LAST_PATTERN_KEY);
-        String lastPattern = lastObj instanceof String ? (String) lastObj : ""; //$NON-NLS-1$
-        // ФИЛЬТРАЦИЯ НЕ ДОЛЖНА БЛОКИРОВАТЬ ВВОД:
-        // при неизмененном паттерне не гоняем лишние refresh/suppress (кроме порций от worker).
-        if (!fromWorker && !forceRefresh && safePattern.equals(lastPattern)
-                && isSmartFilterAttached(viewer, smartFilter) == filtering)
-        {
-            NavigatorFilterDebug.log("applyFilter SKIP unchanged pattern=\"" + safePattern + "\""); //$NON-NLS-1$ //$NON-NLS-2$
-            return;
-        }
-        boolean clearingFilter = !filtering && !lastPattern.isEmpty();
-        IStructuredSelection savedSelection = null;
-        if (!filtering && viewer.getSelection() instanceof IStructuredSelection)
-            savedSelection = (IStructuredSelection) viewer.getSelection();
-        boolean batchRedraw = !fromWorker;
-        if (batchRedraw)
-            tree.setRedraw(false);
-        try
-        {
-            if (!fromWorker)
-            {
-                smartFilter.refreshPattern(safePattern);
-                highlight.setHighlightPattern(safePattern);
-                ensureNavigatorLabelProvider(viewer, tree, filtering);
-                if (filtering)
-                {
-                    ensureSmartFilter(viewer, smartFilter);
-                    // ФИЛЬТРАЦИЯ НЕ ДОЛЖНА БЛОКИРОВАТЬ ВВОД:
-                    // тяжелое подавление native-search только на входе в режим фильтрации.
-                    if (!filterWasActive)
-                    {
-                        suppressNativeSearch(navigator, viewer);
-                        clearNavigatorTreePredicate(navigator);
-                    }
-                }
-                else
-                {
-                    removeSmartFilter(viewer, smartFilter);
-                    if (filterWasActive || clearingFilter)
-                        resetNavigatorContentState(navigator, viewer);
-                }
-            }
-            else
-            {
-                ensureNavigatorLabelProvider(viewer, tree, filtering);
-                ensureSmartFilter(viewer, smartFilter);
-            }
-            viewer.refresh();
-            ensureNavigatorHighlight(viewer);
-            requestedObj = tree.getData(REQUESTED_PATTERN_KEY);
-            if (requestedObj instanceof String && !safePattern.equals(requestedObj))
-            {
-                NavigatorFilterDebug.log("applyFilter ABORT superseded pattern=\"" + safePattern + "\""); //$NON-NLS-1$ //$NON-NLS-2$
-                return;
-            }
-            if (filtering)
-            {
-                if (smartFilter instanceof NavigatorOutlineFilter)
-                    ((NavigatorOutlineFilter) smartFilter).applyFilterExpansion(viewer);
-                else
-                    smartFilter.applyTreeExpansion(viewer);
-            }
-            else
-                restoreTreeStateAfterClear(viewer, smartFilter, savedSelection);
-            IBaseLabelProvider lp = viewer.getLabelProvider();
-            NavigatorFilterDebug.log("refresh pattern=\"" + safePattern + "\" treeItems=" + tree.getItemCount() //$NON-NLS-1$ //$NON-NLS-2$
-                    + " lp=" + (lp != null ? lp.getClass().getSimpleName() : "null") //$NON-NLS-1$ //$NON-NLS-2$
-                    + " smartFilterAttached=" + isSmartFilterAttached(viewer, smartFilter) //$NON-NLS-1$
-                    + " force=" + forceRefresh //$NON-NLS-1$
-                    + " worker=" + fromWorker //$NON-NLS-1$
-                    + " " + NavigatorFilterDebug.filtersDesc(viewer)); //$NON-NLS-1$
-            if (navigator != null)
-                logNativeSearchState(navigator);
-            tree.setData(LAST_PATTERN_KEY, safePattern);
-            tree.setData(FILTER_ACTIVE_KEY, Boolean.valueOf(filtering));
-        }
-        finally
-        {
-            if (batchRedraw)
-                tree.setRedraw(true);
-        }
-    }
-
-    /**
-     * Подготовка к асинхронному поиску без refresh: паттерн, фильтр и подсветка на UI,
-     * дерево остаётся в прежнем виде до первой порции от worker.
-     */
-    private static void prepareAsyncFilterSearch(IViewPart navigator, CommonViewer viewer, Tree tree,
-            NavigatorOutlineFilter smartFilter, SmartLabelHighlight highlight, String pattern)
-    {
-        if (viewer == null || tree == null || tree.isDisposed() || smartFilter == null || highlight == null)
-            return;
-        String safePattern = pattern != null ? pattern : ""; //$NON-NLS-1$
-        if (safePattern.isEmpty())
-            return;
-        Object requestedObj = tree.getData(REQUESTED_PATTERN_KEY);
-        if (requestedObj instanceof String && !safePattern.equals(requestedObj))
-            return;
-        boolean filterWasActive = Boolean.TRUE.equals(tree.getData(FILTER_ACTIVE_KEY));
-        smartFilter.refreshPattern(safePattern);
-        highlight.setHighlightPattern(safePattern);
-        ensureNavigatorLabelProvider(viewer, tree, true);
-        ensureSmartFilter(viewer, smartFilter);
-        if (!filterWasActive)
-        {
-            suppressNativeSearch(navigator, viewer);
-            clearNavigatorTreePredicate(navigator);
-        }
-        tree.setData(FILTER_ACTIVE_KEY, Boolean.TRUE);
-    }
-
-    private static void startFilterWorker(IViewPart navigator, CommonViewer viewer, Tree tree,
-            NavigatorOutlineFilter smartFilter, SmartLabelHighlight highlight, NavigatorSearchTextCache searchCache,
-            ILabelProvider filterLabels, String pattern)
-    {
-        String safePattern = pattern != null ? pattern : ""; //$NON-NLS-1$
-        Object requestedObj = tree.getData(REQUESTED_PATTERN_KEY);
-        if (requestedObj instanceof String && !safePattern.equals(requestedObj))
-            return;
-        cancelWorkerTask(tree);
-        if (safePattern.isEmpty())
-        {
-            applyFilter(navigator, viewer, smartFilter, highlight, searchCache, safePattern, true, false);
-            return;
-        }
-        int seq = nextWorkerSeq(tree);
-        long requestedAtNs = System.nanoTime();
-        NavigatorFilterDebug.log("worker schedule seq=" + seq + " pattern=\"" + safePattern + "\""); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        Future<?> future = FILTER_WORKER.submit(() -> {
-            TreeSnapshot snapshot = buildTreeSnapshot(viewer, filterLabels);
-            if (snapshot == null || snapshot.nodes.isEmpty())
-            {
-                NavigatorFilterDebug.log("worker fallback: snapshot=" + (snapshot == null ? "null" : "empty")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                Display display = Display.getDefault();
-                if (display != null && !display.isDisposed())
-                {
-                    display.asyncExec(() -> {
-                        Object requested = tree.getData(REQUESTED_PATTERN_KEY);
-                        if (requested instanceof String && safePattern.equals(requested))
-                            applyFilter(navigator, viewer, smartFilter, highlight, searchCache, safePattern, true,
-                                    false);
-                    });
-                }
-                return;
-            }
-            Display display = Display.getDefault();
-            if (display != null && !display.isDisposed())
-            {
-                display.asyncExec(() -> {
-                    tree.setData(SNAPSHOT_KEY, snapshot);
-                    tree.setData(SNAPSHOT_SIZE_KEY, Integer.valueOf(snapshot.nodes.size()));
-                });
-            }
-            NavigatorFilterDebug.log("worker start seq=" + seq + " pattern=\"" + safePattern //$NON-NLS-1$ //$NON-NLS-2$
-                    + "\" nodes=" + snapshot.nodes.size()); //$NON-NLS-1$
-            runFilterWorkerTask(seq, safePattern, navigator, viewer, tree, smartFilter, highlight, searchCache,
-                    snapshot, requestedAtNs);
-        });
-        tree.setData(WORKER_FUTURE_KEY, future);
-    }
-
-    private static int nextWorkerSeq(Tree tree)
-    {
-        if (tree == null)
-            return 1;
-        Object current = tree.getData(WORKER_SEQ_KEY);
-        int seq = current instanceof Integer ? ((Integer) current).intValue() + 1 : 1;
-        tree.setData(WORKER_SEQ_KEY, Integer.valueOf(seq));
-        return seq;
-    }
-
-    private static void runFilterWorkerTask(int seq, String pattern, IViewPart navigator, CommonViewer viewer, Tree tree,
-            NavigatorOutlineFilter smartFilter, SmartLabelHighlight highlight, NavigatorSearchTextCache searchCache,
-            TreeSnapshot snapshot, long requestedAtNs)
-    {
-        if (snapshot == null || snapshot.nodes.isEmpty())
-        {
-            NavigatorFilterDebug.log("worker skip: snapshot=" + (snapshot == null ? "null" : "empty")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            return;
-        }
-
-        String safePattern = pattern != null ? pattern : ""; //$NON-NLS-1$
-        long workerStartNs = System.nanoTime();
-        int scannedNodes = 0;
-        int partialEmits = 0;
-        try
-        {
-            if (safePattern.isEmpty())
-            {
-                publishWorkerPointers(seq, safePattern, navigator, viewer, tree, smartFilter, highlight, searchCache,
-                        new FilterPointers(Collections.emptySet(), Collections.emptySet()), true,
-                        requestedAtNs, workerStartNs, scannedNodes, partialEmits);
-                return;
-            }
-
-            SmartMatcher matcher = new SmartMatcher(safePattern);
-            Set<Object> visibleElements = new HashSet<>();
-            Set<Object> expand = new LinkedHashSet<>();
-            long lastEmitNs = System.nanoTime();
-            int lastEmitVisibleSize = 0;
-
-            for (int i = 0; i < snapshot.nodes.size(); i++)
-            {
-                if (Thread.currentThread().isInterrupted())
-                {
-                    NavigatorFilterDebug.log("metric worker_cancel seq=" + seq //$NON-NLS-1$
-                            + " scan_ms=" + ((System.nanoTime() - workerStartNs) / 1_000_000L) //$NON-NLS-1$
-                            + " scanned=" + scannedNodes); //$NON-NLS-1$
-                    return;
-                }
-                NodeSnapshot node = snapshot.nodes.get(i);
-                scannedNodes++;
-                if (node.group || !matcher.matches(node.searchText))
-                    continue;
-
-                visibleElements.add(node.element);
-                int parent = node.parentIndex;
-                while (parent >= 0)
-                {
-                    if (Thread.currentThread().isInterrupted())
-                    {
-                        NavigatorFilterDebug.log("metric worker_cancel seq=" + seq //$NON-NLS-1$
-                                + " scan_ms=" + ((System.nanoTime() - workerStartNs) / 1_000_000L) //$NON-NLS-1$
-                                + " scanned=" + scannedNodes); //$NON-NLS-1$
-                        return;
-                    }
-                    NodeSnapshot parentNode = snapshot.nodes.get(parent);
-                    visibleElements.add(parentNode.element);
-                    expand.add(parentNode.element);
-                    parent = parentNode.parentIndex;
-                }
-
-                long now = System.nanoTime();
-                boolean firstMatchEmit = partialEmits == 0;
-                if (firstMatchEmit
-                        || visibleElements.size() - lastEmitVisibleSize >= FILTER_EMIT_MIN_DELTA
-                        || now - lastEmitNs >= FILTER_EMIT_MAX_NS)
-                {
-                    partialEmits++;
-                    publishWorkerPointers(seq, safePattern, navigator, viewer, tree, smartFilter, highlight, searchCache,
-                            new FilterPointers(new HashSet<>(visibleElements), new LinkedHashSet<>(expand)), false,
-                            requestedAtNs, workerStartNs, scannedNodes, partialEmits);
-                    lastEmitVisibleSize = visibleElements.size();
-                    lastEmitNs = now;
-                }
-            }
-
-            publishWorkerPointers(seq, safePattern, navigator, viewer, tree, smartFilter, highlight, searchCache,
-                    new FilterPointers(new HashSet<>(visibleElements), new LinkedHashSet<>(expand)), true,
-                    requestedAtNs, workerStartNs, scannedNodes, partialEmits);
-        }
-        catch (RuntimeException e)
-        {
-            NavigatorFilterDebug.log("worker error seq=" + seq + " pattern=\"" + safePattern //$NON-NLS-1$ //$NON-NLS-2$
-                    + "\" " + e.getClass().getSimpleName() + ": " + e.getMessage()); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-    }
-
-    private static void cancelWorkerTask(Tree tree)
-    {
-        if (tree == null)
-            return;
-        Object pending = tree.getData(WORKER_FUTURE_KEY);
-        if (pending instanceof Future<?>)
-        {
-            Future<?> future = (Future<?>) pending;
-            boolean cancelled = future.cancel(true);
-            if (cancelled && NavigatorFilterDebug.isEnabled())
-                NavigatorFilterDebug.log("metric cancel_worker cancelled=true"); //$NON-NLS-1$
-        }
-        tree.setData(WORKER_FUTURE_KEY, null);
-    }
-
-    private static TreeSnapshot buildTreeSnapshot(CommonViewer viewer, ILabelProvider filterLabels)
-    {
-        if (viewer == null)
-            return null;
-        Object cp = viewer.getContentProvider();
-        if (!(cp instanceof ITreeContentProvider))
-            return null;
-        ITreeContentProvider tcp = (ITreeContentProvider) cp;
-        Object input = viewer.getInput();
-        if (input == null)
-            return null;
-        List<NodeSnapshot> nodes = new ArrayList<>();
-        Map<Object, Integer> seen = new java.util.IdentityHashMap<>();
-        for (Object root : tcp.getElements(input))
-            collectSnapshotNode(root, -1, tcp, filterLabels, nodes, seen);
-        return new TreeSnapshot(nodes);
-    }
-
-    private static void collectSnapshotNode(Object element, int parentIndex, ITreeContentProvider tcp,
-            ILabelProvider filterLabels, List<NodeSnapshot> nodes, Map<Object, Integer> seen)
-    {
-        if (element == null || seen.containsKey(element))
-            return;
-        NodeSnapshot node = new NodeSnapshot();
-        node.element = element;
-        node.parentIndex = parentIndex;
-        node.group = NavigatorTreeElementLabels.isGroupNode(element);
-        String text = filterLabels != null ? filterLabels.getText(element) : null;
-        node.searchText = text != null ? text : ""; //$NON-NLS-1$
-        int myIndex = nodes.size();
-        nodes.add(node);
-        seen.put(element, Integer.valueOf(myIndex));
-        Object[] children = tcp.getChildren(element);
-        if (children == null)
-            return;
-        for (Object child : children)
-            collectSnapshotNode(child, myIndex, tcp, filterLabels, nodes, seen);
-    }
-
-    private static void publishWorkerPointers(int seq, String safePattern, IViewPart navigator, CommonViewer viewer, Tree tree,
-            NavigatorOutlineFilter smartFilter, SmartLabelHighlight highlight, NavigatorSearchTextCache searchCache,
-            FilterPointers pointers, boolean completed, long requestedAtNs, long workerStartNs,
-            int scannedNodes, int partialEmits)
-    {
-        Display display = Display.getDefault();
-        if (display == null || display.isDisposed())
-            return;
-        display.asyncExec(() -> {
-            if (tree == null || tree.isDisposed() || viewer.getControl() == null || viewer.getControl().isDisposed())
-                return;
-            Object requested = tree.getData(REQUESTED_PATTERN_KEY);
-            if (!(requested instanceof String) || !safePattern.equals(requested))
-            {
-                NavigatorFilterDebug.log("worker drop seq=" + seq + " stale pattern=\"" + safePattern //$NON-NLS-1$ //$NON-NLS-2$
-                        + "\" requested=\"" + requested + "\""); //$NON-NLS-1$ //$NON-NLS-2$
-                return;
-            }
-            if (safePattern.isEmpty())
-                smartFilter.clearPrecomputedResult();
-            else
-                smartFilter.setPrecomputedResult(pointers.visible, pointers.expand, true);
-            // Как SearchJob: промежуточные порции только обновляют precomputed, UI — в финале
-            // (или на первой порции для быстрой обратной связи). Иначе большая порция блокирует ввод.
-            if (!completed && partialEmits > 1)
-            {
-                if (NavigatorFilterDebug.isEnabled())
-                    NavigatorFilterDebug.log("worker seq=" + seq + " partial skip ui emit=" + partialEmits); //$NON-NLS-1$ //$NON-NLS-2$
-                return;
-            }
-            if (NavigatorFilterDebug.isEnabled())
-            {
-                long nowNs = System.nanoTime();
-                NavigatorFilterDebug.log("worker seq=" + seq + " pattern=\"" + safePattern + "\" visible=" //$NON-NLS-1$ //$NON-NLS-2$
-                        + pointers.visible.size() + " expand=" + pointers.expand.size() //$NON-NLS-1$
-                        + " completed=" + completed //$NON-NLS-1$
-                        + " queue_ms=" + ((workerStartNs - requestedAtNs) / 1_000_000L) //$NON-NLS-1$
-                        + " scan_ms=" + ((nowNs - workerStartNs) / 1_000_000L) //$NON-NLS-1$
-                        + " scanned=" + scannedNodes //$NON-NLS-1$
-                        + " partial_emits=" + partialEmits); //$NON-NLS-1$
-            }
-            long uiStartNs = System.nanoTime();
-            ensureNavigatorLabelProvider(viewer, tree, true);
-            ensureSmartFilter(viewer, smartFilter);
-            ensureNavigatorHighlight(viewer);
-            NavigatorNonBlockingUi.applyPrecomputedUi(viewer, tree, smartFilter, pointers.visible, pointers.expand,
-                    completed);
-            tree.setData(LAST_PATTERN_KEY, safePattern);
-            tree.setData(FILTER_ACTIVE_KEY, Boolean.TRUE);
-            if (completed)
-            {
-                NavigatorFilterDebug.log("worker ui done pattern=\"" + safePattern + "\" visible=" //$NON-NLS-1$ //$NON-NLS-2$
-                        + pointers.visible.size() + " treeItems=" + tree.getItemCount()); //$NON-NLS-1$
-            }
-            if (NavigatorFilterDebug.isEnabled())
-            {
-                long uiEndNs = System.nanoTime();
-                NavigatorFilterDebug.log("metric ui_queue seq=" + seq //$NON-NLS-1$
-                        + " ui_queue_ms=" + ((uiEndNs - uiStartNs) / 1_000_000L) //$NON-NLS-1$
-                        + " total_input_to_ui_ms=" + ((uiEndNs - requestedAtNs) / 1_000_000L)); //$NON-NLS-1$
-            }
-        });
-    }
-
-    private static void applyFilter(IViewPart navigator, CommonViewer viewer, SmartOutlineFilter smartFilter,
-            SmartLabelHighlight highlight, NavigatorSearchTextCache searchCache, String pattern)
-    {
-        applyFilter(navigator, viewer, smartFilter, highlight, searchCache, pattern, false);
-    }
-
-    private static final class NodeSnapshot
-    {
-        Object element;
-        int parentIndex;
-        boolean group;
-        String searchText;
-    }
-
-    private static final class TreeSnapshot
-    {
-        final List<NodeSnapshot> nodes;
-
-        TreeSnapshot(List<NodeSnapshot> nodes)
-        {
-            this.nodes = nodes != null ? nodes : Collections.emptyList();
-        }
-    }
-
-    private static final class FilterPointers
-    {
-        final Set<Object> visible;
-        final Set<Object> expand;
-
-        FilterPointers(Set<Object> visible, Set<Object> expand)
-        {
-            this.visible = visible != null ? visible : Collections.emptySet();
-            this.expand = expand != null ? expand : Collections.emptySet();
-        }
-    }
-
-    private static void ensureSmartFilter(CommonViewer viewer, SmartOutlineFilter smartFilter)
-    {
-        if (viewer == null || smartFilter == null)
-            return;
-        for (ViewerFilter filter : viewer.getFilters())
-        {
-            if (filter == smartFilter)
-                return;
-        }
-        viewer.addFilter(smartFilter);
-    }
-
-    private static boolean isSmartFilterAttached(CommonViewer viewer, SmartOutlineFilter smartFilter)
-    {
-        if (viewer == null || smartFilter == null)
-            return false;
-        for (ViewerFilter filter : viewer.getFilters())
-        {
-            if (filter == smartFilter)
-                return true;
-        }
-        return false;
-    }
-
-    private static void restoreTreeStateAfterClear(CommonViewer viewer, SmartOutlineFilter smartFilter,
-            IStructuredSelection selection)
-    {
-        Set<Object> toExpand = new LinkedHashSet<>();
-        smartFilter.collectRootExpansion(viewer, toExpand);
-        if (selection != null && !selection.isEmpty())
-            addAncestorChain(viewer, selection.getFirstElement(), toExpand);
-        if (!toExpand.isEmpty())
-            viewer.setExpandedElements(toExpand.toArray());
-        if (selection != null && !selection.isEmpty())
-            viewer.setSelection(selection, true);
-    }
-
-    private static void addAncestorChain(CommonViewer viewer, Object element, Set<Object> toExpand)
-    {
-        if (viewer == null || element == null || toExpand == null)
-            return;
-        Object cp = viewer.getContentProvider();
-        if (!(cp instanceof ITreeContentProvider))
-            return;
-        ITreeContentProvider tcp = (ITreeContentProvider) cp;
-        Object parent = tcp.getParent(element);
-        while (parent != null)
-        {
-            toExpand.add(parent);
-            parent = tcp.getParent(parent);
-        }
-    }
-
-    private static void removeSmartFilter(CommonViewer viewer, SmartOutlineFilter smartFilter)
-    {
-        if (viewer == null || smartFilter == null)
-            return;
-        viewer.removeFilter(smartFilter);
-    }
-
-    private static void suppressNativeSearch(IViewPart navigator, CommonViewer viewer)
-    {
-        String deactivateMethod = "none"; //$NON-NLS-1$
-        int removed = 0;
-
-        if (navigator != null)
-            deactivateMethod = tryInvokeDeactivateFilterWithLog(navigator);
-        if (viewer != null)
-        {
-            Tree tree = viewer.getTree();
-            List<ViewerFilter> stored = null;
-            if (tree != null && tree.getData(STORED_NAV_FILTERS_KEY) == null)
-                stored = new ArrayList<>();
-            for (ViewerFilter filter : viewer.getFilters())
-            {
-                if (filter != null && filter.getClass().getName().contains(NAV_SEARCH_FILTER))
-                {
-                    if (stored != null)
-                        stored.add(filter);
-                    viewer.removeFilter(filter);
-                    removed++;
-                }
-            }
-            if (tree != null && stored != null && !stored.isEmpty())
-                tree.setData(STORED_NAV_FILTERS_KEY, stored.toArray(new ViewerFilter[0]));
-        }
-        NavigatorFilterDebug.log("suppressNative deactivateFilter=" + deactivateMethod //$NON-NLS-1$
-                + " removedNavFilters=" + removed); //$NON-NLS-1$
-        if ("none".equals(deactivateMethod) && removed == 0) //$NON-NLS-1$
-            NavigatorFilterDebug.log("suppressNative WARN native search may still be active"); //$NON-NLS-1$
-    }
-
-    /** @return имя сработавшей сигнатуры или {@code "none"} */
-    private static String tryInvokeDeactivateFilterWithLog(IViewPart navigator)
-    {
-        if (Global.invokeVoid(navigator, "deactivateFilter")) //$NON-NLS-1$
-            return "deactivateFilter()"; //$NON-NLS-1$
-        if (Global.invokeVoid(navigator, "deactivateFilter", "")) //$NON-NLS-1$ //$NON-NLS-2$
-            return "deactivateFilter(\"\")"; //$NON-NLS-1$
-        if (Global.invokeVoid(navigator, "deactivateFilter", Boolean.FALSE)) //$NON-NLS-1$
-            return "deactivateFilter(false)"; //$NON-NLS-1$
-        if (Global.invokeVoid(navigator, "deactivateFilter", StructuredSelection.EMPTY)) //$NON-NLS-1$
-            return "deactivateFilter(EMPTY)"; //$NON-NLS-1$
-        if (Global.invokeVoid(navigator, "deactivateFilter", StructuredSelection.EMPTY, Boolean.FALSE)) //$NON-NLS-1$
-            return "deactivateFilter(EMPTY,false)"; //$NON-NLS-1$
-        return "none"; //$NON-NLS-1$
-    }
-
-    private static void resetNavigatorContentState(IViewPart navigator, CommonViewer viewer)
+    private static void onSearchCleared(IViewPart navigator, CommonViewer viewer, Tree tree)
     {
         triggerNativeSearchClear(navigator);
-        if (viewer != null)
+        if (viewer != null && tree != null)
         {
-            Tree tree = viewer.getTree();
-            if (tree != null)
-            {
-                NavigatorNativeSearchBridge.restoreStoredNativeFilters(viewer, tree);
-                NavigatorNativeSearchBridge.install(navigator, viewer, tree);
-            }
+            NavigatorNativeSearchBridge.restoreStoredNativeFilters(viewer, tree);
+            NavigatorNativeSearchBridge.install(navigator, viewer, tree);
         }
-        NavigatorFilterDebug.log("resetContent " + NavigatorFilterDebug.filtersDesc(viewer)); //$NON-NLS-1$
+        NavigatorFilterDebug.log("searchCleared " + NavigatorFilterDebug.filtersDesc(viewer)); //$NON-NLS-1$
     }
 
-    /** Сброс штатного SearchPerformer (PredicateFilter + content provider). */
+    /** Сброс штатного SearchPerformer / SearchBox. */
     private static void triggerNativeSearchClear(IViewPart navigator)
     {
         if (navigator == null)
@@ -1129,50 +532,6 @@ public final class NavigatorFilterHook implements IStartup
         Object searchBox = Global.getField(navigator, "searchBox"); //$NON-NLS-1$
         if (searchBox != null)
             Global.invoke(searchBox, "performSearch", ""); //$NON-NLS-1$ //$NON-NLS-2$
-    }
-
-    /** Сброс PredicateFilter на AEF-дереве навигатора. */
-    private static void clearNavigatorTreePredicate(IViewPart navigator)
-    {
-        if (navigator == null)
-            return;
-        for (String field : new String[] { "tree", "navigatorTree", "treeComponent", "contentArea" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        {
-            Object treeComp = Global.getField(navigator, field);
-            if (treeComp == null)
-                continue;
-            Object model = Global.invoke(treeComp, "getTreeModel"); //$NON-NLS-1$
-            if (model == null)
-                model = Global.invoke(treeComp, "getModel"); //$NON-NLS-1$
-            if (model == null)
-                continue;
-            Object predicateFilter = Global.invoke(model, "getFilter"); //$NON-NLS-1$
-            if (predicateFilter != null)
-                Global.invoke(predicateFilter, "setPredicate", (Object) null); //$NON-NLS-1$
-            Global.invokeVoid(treeComp, "refresh"); //$NON-NLS-1$
-            break;
-        }
-    }
-
-    private static void removeNavigatorSearchFiltersFromViewer(CommonViewer viewer)
-    {
-        if (viewer == null)
-            return;
-        for (ViewerFilter filter : viewer.getFilters())
-        {
-            if (filter != null && filter.getClass().getName().contains(NAV_SEARCH_FILTER))
-                viewer.removeFilter(filter);
-        }
-    }
-
-    private static void tryInvokeDeactivateFilter(IViewPart navigator)
-    {
-        tryInvokeDeactivateFilterWithLog(navigator);
-    }
-
-    private static void deactivateNavigatorFilters(IViewPart navigator, CommonViewer viewer)
-    {
-        suppressNativeSearch(navigator, viewer);
     }
 
     private static void logNativeSearchState(IViewPart navigator)

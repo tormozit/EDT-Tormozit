@@ -122,14 +122,6 @@ public final class NavigatorNativeSearchBridge
         return null;
     }
 
-    static IModelObjectTreeSearchEngine unwrapNativeEngine(Tree tree)
-    {
-        if (tree == null)
-            return null;
-        Object stored = tree.getData(NATIVE_ENGINE_KEY);
-        return stored instanceof IModelObjectTreeSearchEngine engine ? engine : null;
-    }
-
     private static IModelObjectTreeSearchEngine resolveNativeDelegate(Object navFilter, Tree tree)
     {
         Object stored = tree != null ? tree.getData(NATIVE_ENGINE_KEY) : null;
