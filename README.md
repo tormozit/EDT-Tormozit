@@ -11,4 +11,4 @@
 Если установщик не видит новую версию, то нужно нажать в нем "Управление..." и в открывшемся списке сайтов нажать "Обновить" или передобавить сайт (с именем установочного файла в случае архива).
 
 Сборка релиза:
-Измените `comfort.release` в [site/version.txt](site/version.txt), clean.bat, **Build All** в проекте site (Eclipse) или `build.bat` (Maven).
+Измените номер версии в [site/version.txt](site/version.txt), clean.bat, **Build All** в проекте site (Eclipse) или `build.bat` (Maven).
