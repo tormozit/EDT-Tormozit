@@ -45,17 +45,14 @@ import com._1c.g5.v8.dt.export.ExportException;
 import com._1c.g5.v8.dt.md.ui.editor.base.DtGranularEditor;
 import com._1c.g5.v8.dt.md.ui.editor.base.DtGranularEditorEmbeddedEditorPage;
 import com._1c.g5.v8.dt.metadata.mdclass.CompatibilityMode;
-import com._1c.g5.v8.dt.platform.version.IRuntimeVersionSupport;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com._1c.g5.v8.dt.xml.ChangeAnyRefTypeOutputStream;
-import com.google.inject.Inject;
 
 public class DataCompositionSchemaEditorHook implements IStartup
 {
-    @Inject
-    static private IResourceLookup resourceLookup;
-    @Inject
-    static private IRuntimeVersionSupport runtimeVersionSupport;
+    static private IResourceLookup resourceLookup() {
+        return Global.getOsgiService(IResourceLookup.class);
+    }
     private static final String EDITOR_ID  = "com._1c.g5.v8.dt.md.ui.editor.commonTemplate"; //$NON-NLS-1$
     private final Map<IWorkbenchWindow, IPartListener2>          partListeners =
         new HashMap<>();
@@ -207,7 +204,7 @@ public class DataCompositionSchemaEditorHook implements IStartup
 //                        outputStream.write(BOM); // new byte[]{-17, -69, -65};
 //                        Version version = runtimeVersionSupport.getRuntimeVersion(schema);
             Version version = v8Project.getVersion();
-            DcsV8Serializer serializer = new DcsV8Serializer(project, version, resourceLookup);
+            DcsV8Serializer serializer = new DcsV8Serializer(project, version, resourceLookup());
             serializer.serializeXML(schema, outputStream, PreferenceUtils.getLineSeparator(project.getWorkspaceProject()), project);
             return file;
         }
@@ -223,7 +220,7 @@ public class DataCompositionSchemaEditorHook implements IStartup
         IV8ProjectManager projectManager = (IV8ProjectManager) Global.getServiceByClass(IV8ProjectManager.class);
         IV8Project v8Project = projectManager.getProject(project);
         Version version = v8Project.getVersion();
-        DcsV8Serializer serializer = new DcsV8Serializer(project, version, resourceLookup);
+        DcsV8Serializer serializer = new DcsV8Serializer(project, version, resourceLookup());
         try (FileInputStream fis = new FileInputStream(file))
         {
             final DataCompositionSchema schemaNew = serializer.deserializeXML(fis);
