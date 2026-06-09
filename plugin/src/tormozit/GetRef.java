@@ -350,10 +350,10 @@ public class GetRef extends AbstractHandler
 
     public static String getRefFromPart(IWorkbenchPart part)
     {
-        IWorkbenchPage page  = part.getSite().getPage();
         if (part instanceof IEditorPart
                 && Global.COMPARE_EDITOR_ID.equals(part.getSite().getId()))
             return refFromCompareEditor((IEditorPart) part);
+        IWorkbenchPage page  = part.getSite().getPage();
         if (part == page.findView(Global.NAVIGATOR_VIEW_ID))
             return refFromNavigator(page);
 //        if (part == page.findView(Global.PROPERTIES_SHEET_ID)) // не работает

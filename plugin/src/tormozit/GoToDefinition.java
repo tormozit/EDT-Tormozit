@@ -32,6 +32,7 @@ import org.eclipse.swt.widgets.Shell;
 import org.eclipse.ui.IEditorInput;
 import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.IWorkbenchPage;
+import org.eclipse.ui.IWorkbenchPart;
 import org.eclipse.ui.PartInitException;
 import org.eclipse.ui.handlers.HandlerUtil;
 import org.eclipse.ui.ide.IDE;
@@ -140,6 +141,7 @@ public class GoToDefinition extends AbstractHandler
         String transportFolder = IRApplication.transportFolder;
         Shell shell  = HandlerUtil.getActiveShell(event);
         IWorkbenchPage page = HandlerUtil.getActiveWorkbenchWindow(event).getActivePage();
+        IWorkbenchPart part = HandlerUtil.getActivePart(event);
         File commandFile = new File(transportFolder + "\\Команда.txt"); //$NON-NLS-1$
         IProject project = null;
         if (commandFile.exists()
@@ -181,8 +183,8 @@ public class GoToDefinition extends AbstractHandler
             }
             command = command.strip();
         }
-        if (project==null)
-            project = Global.getActiveEditorProject(false);
+        if (project == null)
+            project = Global.getActiveProject(part, false);
         if (project == null)
         {
             ToastNotification.show("Переход к определению", "Отсутствует активный проект");
@@ -564,14 +566,11 @@ public class GoToDefinition extends AbstractHandler
 
     private static boolean openMdObjectByFullName(String fullName, Shell shell, IWorkbenchPage page, IProject project)
     {
+        if (project == null)
+            return false;
         IV8ProjectManager projectManager =
             (IV8ProjectManager) Global.getServiceByClass(IV8ProjectManager.class);
-        IProject activeProject = Global.getActiveProject(page, true);
-        if (activeProject == null)
-        {
-            return false;
-        }
-        IV8Project v8Project = projectManager.getProject(activeProject);
+        IV8Project v8Project = projectManager.getProject(project);
         if (v8Project == null)
         {
             return false;
@@ -753,16 +752,12 @@ public class GoToDefinition extends AbstractHandler
 
     private static IFile findFileInWorkspace(String relPath, IWorkbenchPage page, IProject project)
     {
+        if (project == null)
+            return null;
         String path = relPath.replace('\\', '/');
-        if (project==null)
-        {
-            project = Global.getActiveProject(page, true);
-        }
-        if (project != null) {
-            IFile f = findInProject(project, path);
-            if (f != null)
-                return f; 
-        }
+        IFile f = findInProject(project, path);
+        if (f != null)
+            return f;
         // Не будетм перебирать все проекты, если актвиного нет
 //        for (IProject p : ResourcesPlugin.getWorkspace().getRoot().getProjects())
 //        {

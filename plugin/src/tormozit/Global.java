@@ -12,6 +12,7 @@ import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.jface.viewers.TreeSelection;
 import org.eclipse.ui.IEditorInput;
 import org.eclipse.ui.IEditorPart;
+import org.eclipse.ui.IWorkbenchPart;
 import org.eclipse.ui.IViewPart;
 import org.eclipse.ui.IViewReference;
 import org.eclipse.ui.IWorkbench;
@@ -245,10 +246,41 @@ public final class Global
         return null;
     }
 
-    public static IProject getActiveEditorProject(boolean showMessage)
+    /**
+     * Активный проект с учётом {@linkplain org.eclipse.ui.handlers.HandlerUtil#getActivePart
+     * активной части}: при фокусе в навигаторе — из его выделения, при фокусе в редакторе —
+     * из редактора; иначе — {@link #getActiveProject(IWorkbenchPage, boolean)}.
+     */
+    public static IProject getActiveProject(IWorkbenchPart part, boolean showMessage)
     {
-        IProject project = getActiveProject(null, showMessage);
-        return project;
+        IWorkbenchPage page = part != null ? part.getSite().getPage() : getActivePage();
+        if (part != null && page != null)
+        {
+            IViewPart navigator = page.findView(NAVIGATOR_VIEW_ID);
+            if (part == navigator && navigator instanceof CommonNavigator)
+            {
+                IProject navProject = getProjectFromNavigator((CommonNavigator) navigator);
+                if (navProject != null)
+                    return navProject;
+                if (showMessage)
+                    ToastNotification.show("Проект", "Отсутствует активный проект"); //$NON-NLS-1$ //$NON-NLS-2$
+                return null;
+            }
+            if (part instanceof IEditorPart)
+            {
+                IEditorPart editor = (IEditorPart) part;
+                IFile file = editorToFile(editor);
+                if (file != null)
+                    return file.getProject();
+                if (COMPARE_EDITOR_ID.equals(part.getSite().getId()))
+                {
+                    IProject p = CompareConfigOpenObjectHandler.getProjectFromEditor(editor);
+                    if (p != null)
+                        return p;
+                }
+            }
+        }
+        return getActiveProject(page, showMessage);
     }
 
     /** Возвращает {@link IDtProject} из поля {@code project} произвольного редактора. */
@@ -301,18 +333,23 @@ public final class Global
 
     private static IProject getProjectFromNavigator()
     {
+        return getProjectFromNavigator((CommonNavigator) getViewById(NAVIGATOR_VIEW_ID));
+    }
+
+    private static IProject getProjectFromNavigator(CommonNavigator nav)
+    {
         try
         {
-            CommonNavigator nav = (CommonNavigator) getViewById(NAVIGATOR_VIEW_ID);
-            if (nav == null) 
+            if (nav == null)
                 return null;
             TreeSelection sel = (TreeSelection) nav.getSite().getSelectionProvider().getSelection();
-            if (sel == null || sel.isEmpty()) 
+            if (sel == null || sel.isEmpty())
                 return null;
             return (IProject) sel.getPaths()[0].getSegment(0);
         }
-        catch (Exception ignored) { 
-            return null; 
+        catch (Exception ignored)
+        {
+            return null;
         }
     }
     
