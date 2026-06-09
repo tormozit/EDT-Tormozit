@@ -28,6 +28,8 @@ import org.eclipse.jface.text.source.ISourceViewer;
 import org.eclipse.jface.viewers.ISelection;
 import org.eclipse.swt.dnd.Clipboard;
 import org.eclipse.swt.dnd.TextTransfer;
+import org.eclipse.swt.graphics.Point;
+import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.ui.IEditorInput;
 import org.eclipse.ui.IEditorPart;
@@ -58,6 +60,11 @@ import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.md.ui.editor.base.DtGranularEditor;
 import com._1c.g5.v8.dt.md.ui.editor.base.DtGranularEditorEmbeddedEditorPage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.moxel.Cell;
+import com._1c.g5.v8.dt.moxel.sheet.CellsSelection;
+import com._1c.g5.v8.dt.moxel.sheet.Selection;
+import com._1c.g5.v8.dt.moxel.sheet.SheetAccessor;
+import com._1c.g5.v8.dt.moxel.ui.editor.MoxelControl;
 import com._1c.g5.v8.dt.moxel.ui.editor.MoxelEditor;
 import com._1c.g5.v8.dt.ui.editor.IDtGranularEditor;
 import com._1c.g5.v8.dt.ui.util.OpenHelper;
@@ -576,11 +583,10 @@ public class GoToDefinition extends AbstractHandler
             return false;
         }
         EObject eObject = resolveEObjectByQualifiedName(fullName, v8Project);
-        if (eObject instanceof MdObject)
-        {
-            new OpenHelper().openEditor((MdObject) eObject, null);
+        if (eObject instanceof MdObject
+                && openMdObjectViaOpenHelper((MdObject) eObject, fullName, page))
             return true;
-        }
+
         String mdoPath = mdNameToMdoPath(fullName);
         if (mdoPath == null)
         {
@@ -594,19 +600,61 @@ public class GoToDefinition extends AbstractHandler
             return false;
         }
         eObject = resolveEObjectViaResourceSet(mdoFile, v8Project);
-        if (eObject instanceof MdObject)
-        {
-            new OpenHelper().openEditor((MdObject) eObject, null);
+        if (eObject instanceof MdObject
+                && openMdObjectViaOpenHelper((MdObject) eObject, fullName, page))
             return true;
-        }
+
         Global.log("GoToDefinition: EObject не получен, открываем .mdo напрямую"); //$NON-NLS-1$
-        try { 
-            return IDE.openEditor(page, mdoFile, true) != null; }
+        try
+        {
+            return IDE.openEditor(page, mdoFile, true) != null;
+        }
         catch (PartInitException e)
         {
             Global.log("GoToDefinition: IDE.openEditor(.mdo): " + e); //$NON-NLS-1$
             return false;
         }
+    }
+
+    /**
+     * Открывает объект МД через {@link OpenHelper}.
+     * Из редактора табличного документа (MOXEL) {@code openEditor} может бросить NPE
+     * при попытке переоткрыть текущий {@link DtGranularEditor} через AEF-страницу
+     * с неинициализированной сценой — в этом случае возвращаем {@code false},
+     * чтобы сработал fallback на {@code IDE.openEditor(.mdo)}.
+     */
+    private static boolean openMdObjectViaOpenHelper(MdObject mdObject, String fullName, IWorkbenchPage page)
+    {
+        if (page == null || mdObject == null)
+            return false;
+        if (isSameGranularEditorTarget(page, fullName))
+            return true;
+        try
+        {
+            IEditorPart editor = new OpenHelper(page).openEditor(mdObject, null);
+            return editor != null;
+        }
+        catch (RuntimeException e)
+        {
+            Global.log("GoToDefinition: OpenHelper.openEditor: " + e.getMessage()); //$NON-NLS-1$
+            return false;
+        }
+    }
+
+    /** Целевой объект уже открыт в активном {@link DtGranularEditor}. */
+    private static boolean isSameGranularEditorTarget(IWorkbenchPage page, String fullName)
+    {
+        if (fullName == null || fullName.isBlank())
+            return false;
+        IEditorPart active = page.getActiveEditor();
+        if (!(active instanceof DtGranularEditor<?>))
+            return false;
+        String currentRef = GetRef.getRefFromEditor(active);
+        if (currentRef == null || currentRef.isBlank())
+            return false;
+        String targetFqn = MdTypeMapping.anyFullNameToBmFqn(fullName.strip());
+        String currentFqn = MdTypeMapping.anyFullNameToBmFqn(currentRef.strip());
+        return targetFqn != null && targetFqn.equalsIgnoreCase(currentFqn);
     }
 
     public static EObject resolveEObjectViaResourceSet(IFile file, IV8Project v8Project)
@@ -985,9 +1033,11 @@ public class GoToDefinition extends AbstractHandler
      *       внутри слова, извлекается максимально длинная цепочка идентификаторов
      *       через точку (например {@code Справочники.Валюты}).</li>
      *   <li><b>Активный SWT-виджет — текстовое поле или ячейка</b>: если фокус
-     *       стоит в {@link org.eclipse.swt.widgets.Text} или
-     *       {@link org.eclipse.swt.widgets.Combo}, возвращается выделенный текст,
-     *       а при его отсутствии — всё содержимое поля.</li>
+     *       стоит в {@link org.eclipse.swt.widgets.Text},
+     *       {@link org.eclipse.swt.widgets.Combo},
+     *       {@link org.eclipse.swt.custom.StyledText} или
+     *       {@link MoxelControl}, возвращается выделенный текст,
+     *       а при его отсутствии — всё содержимое поля/ячейки.</li>
      * </ol>
      *
      * @return текст для перехода или {@code null} / пустая строка если ничего не найдено
@@ -1091,9 +1141,10 @@ public class GoToDefinition extends AbstractHandler
 
     /**
      * Получает текст из SWT-виджета в фокусе.
-     * Поддерживает {@link org.eclipse.swt.widgets.Text} и
-     * {@link org.eclipse.swt.widgets.Combo}.
-     * Возвращает выделение (если есть) или всё содержимое поля.
+     * Поддерживает {@link org.eclipse.swt.widgets.Text},
+     * {@link org.eclipse.swt.widgets.Combo},
+     * {@link org.eclipse.swt.custom.StyledText} и {@link MoxelControl}.
+     * Возвращает выделение (если есть) или всё содержимое поля/ячейки.
      */
     private static String getTextFromFocusedWidget()
     {
@@ -1131,7 +1182,69 @@ public class GoToDefinition extends AbstractHandler
                 return sel.strip();
             return st.getText();
         }
+        MoxelControl moxel = focused instanceof MoxelControl
+                ? (MoxelControl) focused
+                : findMoxelControlAncestor(focused);
+        if (moxel != null)
+            return getTextFromMoxelCell(moxel);
         return null;
+    }
+
+    /** Ищет {@link MoxelControl} среди предков виджета (встроенный редактор ячейки и т. п.). */
+    private static MoxelControl findMoxelControlAncestor(org.eclipse.swt.widgets.Control control)
+    {
+        for (org.eclipse.swt.widgets.Composite parent = control.getParent();
+                parent != null && !parent.isDisposed();
+                parent = parent.getParent())
+        {
+            if (parent instanceof MoxelControl)
+                return (MoxelControl) parent;
+        }
+        return null;
+    }
+
+    /**
+     * Текст активной ячейки табличного документа.
+     * Координаты берутся из {@link MoxelControl#getActiveCell()},
+     * при их отсутствии — из текущего {@link CellsSelection}.
+     */
+    private static String getTextFromMoxelCell(MoxelControl moxel)
+    {
+        if (moxel == null || moxel.isDisposed())
+            return null;
+        SheetAccessor sheet = moxel.getSheet();
+        if (sheet == null)
+            return null;
+
+        int row = -1;
+        int col = -1;
+        Point active = moxel.getActiveCell();
+        if (active != null)
+        {
+            row = active.y;
+            col = active.x;
+        }
+        else
+        {
+            Selection sel = moxel.getTailSelection();
+            if (sel instanceof CellsSelection)
+            {
+                Rectangle r = ((CellsSelection) sel).getNormalizedPosition();
+                row = r.y;
+                col = r.x;
+            }
+        }
+        if (row < 0 || col < 0)
+            return null;
+
+        Cell cell = sheet.lookupCell(row, col);
+        if (cell == null)
+            cell = sheet.getCell(row, col);
+        if (cell == null)
+            return null;
+
+        String text = sheet.getCellText(cell);
+        return text != null ? text.strip() : null;
     }
 
     // =======================================================================
