@@ -646,8 +646,9 @@ public class GoToDefinition extends AbstractHandler
             // Спускаемся по дочерним объектам по парам (тип, имя)
             for (int i = 2; i + 1 < fqnParts.length && eObject != null; i += 2)
             {
+                String childType = fqnParts[i];
                 String childName = fqnParts[i + 1];
-                eObject = findChildByName(eObject, childName);
+                eObject = findChildByName(eObject, childType, childName);
             }
             return eObject;
         }
@@ -662,35 +663,41 @@ public class GoToDefinition extends AbstractHandler
     }
 
     /**
-     * Ищет прямой дочерний EMF-объект (EObject) по имени свойства "name".
-     * Перебирает все containment-ссылки и сравнивает (без учёта регистра).
+     * Ищет дочерний EMF-объект в коллекции, соответствующей категории (Реквизит → attributes).
      */
-    private static EObject findChildByName(EObject parent, String name)
+    private static EObject findChildByName(EObject parent, String categoryType, String name)
     {
-        if (parent == null || name == null) return null;
-        for (org.eclipse.emf.ecore.EReference ref : parent.eClass().getEAllContainments())
+        if (parent == null || categoryType == null || name == null)
+            return null;
+        String featureName = MdTypeMapping.subObjectTypeToEmfFeature(categoryType);
+        if (featureName == null)
+            return null;
+        org.eclipse.emf.ecore.EStructuralFeature feature =
+            parent.eClass().getEStructuralFeature(featureName);
+        if (feature == null)
+            return null;
+        Object val = parent.eGet(feature);
+        if (feature.isMany())
         {
-            Object val = parent.eGet(ref);
-            if (ref.isMany())
+            if (!(val instanceof java.util.List<?>))
+                return null;
+            for (Object item : (java.util.List<?>) val)
             {
-                for (Object item : (java.util.List<?>) val)
+                if (item instanceof EObject)
                 {
-                    if (item instanceof EObject)
-                    {
-                        EObject child = (EObject) item;
-                        String childName = getEObjectName(child);
-                        if (name.equalsIgnoreCase(childName))
-                            return child;
-                    }
+                    EObject child = (EObject) item;
+                    String childName = getEObjectName(child);
+                    if (name.equalsIgnoreCase(childName))
+                        return child;
                 }
             }
-            else if (val instanceof EObject)
-            {
-                EObject child = (EObject) val;
-                String childName = getEObjectName(child);
-                if (name.equalsIgnoreCase(childName))
-                    return child;
-            }
+        }
+        else if (val instanceof EObject)
+        {
+            EObject child = (EObject) val;
+            String childName = getEObjectName(child);
+            if (name.equalsIgnoreCase(childName))
+                return child;
         }
         return null;
     }

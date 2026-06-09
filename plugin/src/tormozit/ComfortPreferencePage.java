@@ -4,6 +4,7 @@ import org.eclipse.jface.dialogs.IDialogConstants;
 import org.eclipse.jface.preference.BooleanFieldEditor;
 import org.eclipse.jface.preference.FieldEditor;
 import org.eclipse.jface.preference.FieldEditorPreferencePage;
+import org.eclipse.jface.preference.IPreferencePageContainer;
 import org.eclipse.jface.preference.IntegerFieldEditor;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.ControlAdapter;
@@ -14,8 +15,10 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Group;
 import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.Link;
 import org.eclipse.ui.IWorkbench;
 import org.eclipse.ui.IWorkbenchPreferencePage;
+import org.eclipse.ui.preferences.IWorkbenchPreferenceContainer;
 
 /**
  * Страница настроек плагина Comfort в разделе
@@ -48,6 +51,8 @@ public class ComfortPreferencePage
     @Override
     protected void createFieldEditors()
     {
+        createKeysLink();
+
         BooleanFieldEditor replaceListFiltersField = new BooleanFieldEditor(
             ComfortSettings.PREF_REPLACE_LIST_FILTERS,
             "Заменять фильтры в списках",
@@ -93,6 +98,29 @@ public class ComfortPreferencePage
 
         // Поле «Символы» намеренно не добавляется:
         // значение задано константой ContentAssistSettings.CHARSET_VALUE
+    }
+
+    private void createKeysLink()
+    {
+        Composite parent = getFieldEditorParent();
+        Link keysLink = new Link(parent, SWT.NONE);
+        keysLink.setText("<a>Клавиши</a>"); //$NON-NLS-1$
+        GridData gd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
+        gd.horizontalSpan = 2;
+        gd.verticalIndent = 4;
+        keysLink.setLayoutData(gd);
+        keysLink.setToolTipText(
+            "Перейти на страницу «Общие → Клавиши» с отбором по категории «Комфорт»"); //$NON-NLS-1$
+        keysLink.addListener(SWT.Selection, e -> {
+            if (!"Клавиши".equals(e.text)) //$NON-NLS-1$
+                return;
+            IPreferencePageContainer container = getContainer();
+            if (container instanceof IWorkbenchPreferenceContainer wb)
+            {
+                wb.openPage(ComfortKeysPreferences.KEYS_PREFERENCE_PAGE_ID, null);
+                ComfortKeysPreferences.applyCategoryFilterAsync();
+            }
+        });
     }
 
     /**

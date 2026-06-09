@@ -365,6 +365,22 @@ public class SmartContentAssistProcessor implements IContentAssistProcessor
         String filter = SmartFilterTracker.getCurrentFilter();
 
         ensureFullListForContext(viewer, doc, caret);
+
+        boolean reloadUnfiltered = SmartAssistFilterState.consumeUnfilteredReloadPending();
+        if (reloadUnfiltered && shouldReloadDelegateOnUnfiltered())
+        {
+            fullListReady = false;
+            fullListComplete = false;
+            fullListCache = EMPTY;
+            memberAccessReloadScheduledSeq = -1;
+            rescheduleIdleFullListLoad(viewer, true);
+        }
+        else if (reloadUnfiltered)
+        {
+            ContentAssistDebug.log("unfilteredReload reuse cache=" + fullListCache.length //$NON-NLS-1$
+                + " key=" + fullListContextKey); //$NON-NLS-1$
+        }
+
         int probeOffset = resolveDelegateProbeOffset(viewer, offset, caret);
         return resolveProposalList(viewer, probeOffset, caret, filter,
             SmartAssistFilterState.isSmartFilterEnabled());
@@ -381,19 +397,15 @@ public class SmartContentAssistProcessor implements IContentAssistProcessor
         if (doc != null && caret >= 0)
             filter = computeIdentifierFilter(doc, caret);
 
-        if (!smartEnabled)
-        {
-            ICompletionProposal[] raw = unwrapProposals(fetchDelegateList(viewer, offset, caret));
-            return buildUnfilteredList(raw);
-        }
+        // Пустой префикс — полный список delegate (как без флажка), не усечённый interim-кэш
+        if (!smartEnabled || filter.isEmpty())
+            return resolveUnfilteredList(viewer, offset, caret);
 
-        if (!filter.isEmpty() && isCacheValidForCaret(doc, caret))
+        if (isCacheValidForCaret(doc, caret))
             return filterAndSort(fullListCache, filter);
 
         ICompletionProposal[] raw = unwrapProposals(fetchDelegateList(viewer, offset, caret));
         absorbInterimIntoCache(viewer, caret, raw);
-        if (filter.isEmpty())
-            return resolveEmptyFilterList(viewer, offset, caret, raw);
         ICompletionProposal[] source = resolveFilterSource(raw);
         return filterSmartWithFallback(viewer, offset, caret, source, filter);
     }
@@ -431,30 +443,31 @@ public class SmartContentAssistProcessor implements IContentAssistProcessor
         }
     }
 
-    private ICompletionProposal[] resolveEmptyFilterList(ITextViewer viewer, int offset, int caret)
+    /** Алфавитный список без smart-фильтра; при пустом delegate — кэш / lastStable. */
+    private ICompletionProposal[] resolveUnfilteredList(ITextViewer viewer, int offset, int caret)
     {
-        return resolveEmptyFilterList(viewer, offset, caret,
-            unwrapProposals(fetchDelegateList(viewer, offset, caret)));
-    }
-
-    private ICompletionProposal[] resolveEmptyFilterList(ITextViewer viewer, int offset, int caret,
-                                                       ICompletionProposal[] interim)
-    {
-        if (interim.length > 0)
+        if (fullListReady && fullListCache.length > 0)
         {
-            lastStableEmptyList = buildWrappedList(interim);
-            return lastStableEmptyList;
+            ICompletionProposal[] built = buildUnfilteredList(fullListCache);
+            if (built.length > 0)
+            {
+                lastStableEmptyList = built;
+                return built;
+            }
         }
         if (lastStableEmptyList.length > 0)
             return lastStableEmptyList;
-        if (fullListReady && fullListCache.length > 0)
-            return buildWrappedList(fullListCache);
-        ICompletionProposal[] retry = unwrapProposals(fetchDelegateList(viewer, offset, caret));
-        if (retry.length > 0)
+
+        ICompletionProposal[] raw = unwrapProposals(fetchDelegateList(viewer, offset, caret));
+        if (raw.length > 0)
         {
-            lastStableEmptyList = buildWrappedList(retry);
-            return lastStableEmptyList;
+            ICompletionProposal[] built = buildUnfilteredList(raw);
+            if (built.length > 0)
+                lastStableEmptyList = built;
+            return built;
         }
+        if (fullListCache.length > 0)
+            return buildUnfilteredList(fullListCache);
         return EMPTY;
     }
 
@@ -1090,6 +1103,8 @@ public class SmartContentAssistProcessor implements IContentAssistProcessor
 
     static int computeScore(SmartCodeMatcher matcher, ICompletionProposal proposal)
     {
+        if (matcher.isEmpty)
+            return 1;
         String display = displayString(unwrapProposal(proposal));
         if (display == null || display.isEmpty())
             return 0;

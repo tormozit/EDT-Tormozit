@@ -30,6 +30,9 @@ public final class MdTypeMapping
      */
     private static final Map<String, String> RU_TO_RU_PLURAL = new LinkedHashMap<>();
 
+    /** EN ед.ч. типа под-объекта → имя EMF-коллекции (attributes, forms…). */
+    private static final Map<String, String> SUB_OBJECT_TO_EMF_FEATURE = new LinkedHashMap<>();
+
     // =========================================================================
     // Единая таблица: (RU ед.ч., EN ед.ч., EN мн.ч./папка)
     // =========================================================================
@@ -111,6 +114,14 @@ public final class MdTypeMapping
         add("Перерасчет",          "Recalculation",   null);
         add("ПризнакУчета",        "AccountingFlag",  null);
 
+        SUB_OBJECT_TO_EMF_FEATURE.put("Attribute",      "attributes");
+        SUB_OBJECT_TO_EMF_FEATURE.put("TabularSection", "tabularSections");
+        SUB_OBJECT_TO_EMF_FEATURE.put("Form",           "forms");
+        SUB_OBJECT_TO_EMF_FEATURE.put("Template",       "templates");
+        SUB_OBJECT_TO_EMF_FEATURE.put("Command",        "commands");
+        SUB_OBJECT_TO_EMF_FEATURE.put("Dimension",      "dimensions");
+        SUB_OBJECT_TO_EMF_FEATURE.put("Resource",       "resources");
+
         // ── RU ед.ч. → RU мн.ч. для менеджеров ─────────────────────────────
         // Используется в ПрямоеИмяМодуляИзПолного: МодульМенеджера → «Справочники.Валюты»
         RU_TO_RU_PLURAL.put("Справочник",             "Справочники");
@@ -179,6 +190,17 @@ public final class MdTypeMapping
         if (FOLDER_TO_RU.containsKey(type)) return type;
         String f = RU_TO_FOLDER.get(type); if (f != null) return f;
         return EN_SING_TO_FOLDER.get(type);
+    }
+
+    /**
+     * Тип под-объекта (RU или EN) → имя EMF-коллекции родителя.
+     * «Реквизит» / «Attribute» → {@code attributes}, «Форма» / «Form» → {@code forms} и т.д.
+     */
+    public static String subObjectTypeToEmfFeature(String categoryType)
+    {
+        if (categoryType == null) return null;
+        String en = anyToEnSing(categoryType);
+        return en != null ? SUB_OBJECT_TO_EMF_FEATURE.get(en) : null;
     }
 
     // =========================================================================

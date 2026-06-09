@@ -179,6 +179,7 @@ public final class ContentAssistPopupUi
         toggle.setText("Фильтр"); //$NON-NLS-1$
         toggle.setSelection(SmartAssistFilterState.isSmartFilterEnabled());
         toggle.addListener(SWT.Selection, e -> {
+            ContentAssistPopupSync.captureSelectionBeforeFilterToggle(assistant);
             SmartAssistFilterState.setSmartFilterEnabled(toggle.getSelection());
             ContentAssistPopupSync.recomputePopupList(assistant, viewer, processor);
         });

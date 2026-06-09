@@ -68,10 +68,12 @@
     <command
         id="tormozit.compareConf.openObject"
         name="Открыть объект"
+        categoryId="tormozit.commands.global"
         description="Открыть выбранный объект конфигурации в редакторе (Комфорт)"/>
      <command
         id="tormozit.compareConf.showInNavigator"
         name="Показать в навигаторе"
+        categoryId="tormozit.commands.global"
         description="Показать выбранный объект конфигурации в навигаторе (Комфорт)"/>
      <command
         id="tormozit.GoToDefinition"
@@ -167,7 +169,6 @@
 
   <extension point="org.eclipse.ui.preferencePages">
     <page
-        category="com._1c.g5.v8"
         class="tormozit.ComfortPreferencePage"
         id="tormozit.ComfortPreferencePages"
         name="Комфорт"/>
