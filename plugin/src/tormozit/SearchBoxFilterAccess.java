@@ -389,11 +389,7 @@ final class SearchBoxFilterAccess
                             String pattern = fromArgs;
                             if (pattern == null || pattern.isEmpty())
                                 pattern = self.readPatternWithoutObservable();
-                            // Фильтрация — штатный SearchJob (не блокирует ввод в SearchBox).
-                            boolean comfortActive = propertyPage != null
-                                    && PropertySheetComfortUi.isInstalled(propertyPage)
-                                    && PropertySheetComfortUi.hasRows(propertyPage);
-                            if (nativeDelegate != null && (!comfortActive || pattern != null && !pattern.isEmpty()))
+                            if (nativeDelegate != null)
                                 return method.invoke(nativeDelegate, args);
                             return null;
                         }

@@ -50,8 +50,9 @@ final class PropertySheetMouseBridge
             row = hitTestRow(page, display);
         if (row == null)
         {
-            PropertySheetDebug.feature("mouseDown miss at=(" + display.x + "," + display.y + ") " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                    + "widget=" + PropertySheetDebug.controlBrief(widget)); //$NON-NLS-1$
+            PropertySheetDebug.problem("mouseDown MISS at=(" + display.x + "," + display.y + ") " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + "widget=" + PropertySheetDebug.controlBrief(widget) //$NON-NLS-1$
+                    + " ctx.rows=" + contextRowCount(page)); //$NON-NLS-1$
             return;
         }
 
@@ -102,27 +103,20 @@ final class PropertySheetMouseBridge
         if (labelEntries.isEmpty())
             return null;
 
-        int from = 0;
-        int to = labelEntries.size();
-        int[] slice = labelEntrySliceForWidget(page, widget, labelEntries.size());
-        boolean scopedToWidget = slice != null;
-        if (slice != null)
-        {
-            from = slice[0];
-            to = slice[1];
-        }
-
         Point local = widget.toControl(display);
         if (local.x < 0 || local.y < 0 || local.x >= widget.getSize().x || local.y >= widget.getSize().y)
             return null;
+        // Левая половина — зона имени; правая половина — зона значения.
+        // В правой половине может быть LightLabel имени (это определяет следующий цикл до границы / 2).
         if (local.x > widget.getSize().x / 2)
             return null;
 
         PropertySheetPaletteRow best = null;
         int bestDist = Integer.MAX_VALUE;
-        for (int i = from; i < to; i++)
+        // Проходим все LabelViewModel — без slice-индексирования.
+        // Принадлежность к widget определяется по реальным координатам LightLabel.
+        for (Map.Entry<?, ?> entry : labelEntries)
         {
-            Map.Entry<?, ?> entry = labelEntries.get(i);
             Object vm = entry.getKey();
             String name = textOfViewModel(vm);
             if (name.isEmpty())
@@ -135,8 +129,8 @@ final class PropertySheetMouseBridge
             Rectangle bounds = (Rectangle) boundsObj;
             Point lightDisplay = lightDisplayOrigin(light);
             Point lightLocal = lightDisplay != null ? widget.toControl(lightDisplay) : null;
-            if (lightLocal == null && scopedToWidget)
-                lightLocal = new Point(bounds.x, bounds.y);
+            if (lightLocal == null)
+                lightLocal = new Point(bounds.x, bounds.y); // fallback: LWT local coords
             if (lightLocal == null)
                 continue;
             if (lightLocal.x < -8 || lightLocal.x > widget.getSize().x / 2)
@@ -178,42 +172,6 @@ final class PropertySheetMouseBridge
                 out.add(entry);
         }
         return out;
-    }
-
-    private static int[] labelEntrySliceForWidget(Object page, Control widget, int totalLabels)
-    {
-        if (page == null || widget == null || widget.isDisposed() || totalLabels <= 0)
-            return null;
-        Composite root = PropertySheetUiContext.findPaletteRoot(page);
-        if (root == null || root.isDisposed())
-            return null;
-        List<Composite> hosts = PropertySheetControlInterop.collectLwtPaintHosts(root);
-        if (hosts.isEmpty())
-            return null;
-
-        int start = 0;
-        for (Composite host : hosts)
-        {
-            int capacity = lwtHostCapacity(host);
-            int end = Math.min(totalLabels, start + capacity);
-            if (sameOrRelated(widget, host))
-            {
-                PropertySheetDebug.feature("directLightLabel slice " + start + ".." + end //$NON-NLS-1$ //$NON-NLS-2$
-                        + " host=" + PropertySheetDebug.controlBrief(host)); //$NON-NLS-1$
-                return new int[] { start, end };
-            }
-            start = end;
-            if (start >= totalLabels)
-                break;
-        }
-        return null;
-    }
-
-    private static int lwtHostCapacity(Control host)
-    {
-        if (host == null || host.isDisposed())
-            return 1;
-        return Math.max(1, Math.round(host.getSize().y / 30.0f));
     }
 
     private static boolean sameOrRelated(Control a, Control b)
@@ -339,6 +297,12 @@ final class PropertySheetMouseBridge
             }
         }
         return best;
+    }
+
+    private static int contextRowCount(Object page)
+    {
+        PropertySheetUiContext ctx = PropertySheetUiCoordinator.lastContext(page);
+        return ctx != null ? ctx.rows.size() : 0;
     }
 
 }

@@ -195,18 +195,19 @@ final class PropertySheetRowSelectionFeature implements PropertySheetUiFeature
             Rectangle band = PropertySheetControlInterop.lwtRowBand(host, propName);
             if (band != null)
             {
-                int targetH = Math.max(26, band.height + 10);
-                int extra = Math.max(0, targetH - band.height);
-                y = Math.max(0, band.y - (extra / 2));
-                h = targetH;
+                // Точная геометрия от LightLabel.getBounds — придерживаемся её ±1px.
+                y = Math.max(0, band.y - 1);
+                h = Math.min(band.height + 2, host.getSize().y - y);
             }
             else
             {
                 org.eclipse.swt.graphics.Point origin =
                         PropertySheetControlInterop.lwtHighlightOrigin(host, propName);
                 int bandH = PropertySheetControlInterop.lwtRowBandHeight(host, propName);
-                y = Math.max(0, origin.y - 2);
-                h = Math.max(4, bandH);
+                // Не позволяем полосе быть выше одной строки (~33px).
+                bandH = Math.min(bandH, 36);
+                y = Math.max(0, origin.y - 1);
+                h = Math.min(Math.max(4, bandH + 2), host.getSize().y - y);
             }
         }
 

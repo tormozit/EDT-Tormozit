@@ -26,8 +26,6 @@ final class PropertySheetUiCoordinator
     {
         if (page == null || !isPageAlive(page))
             return;
-        if (PropertySheetComfortCoordinator.modeFor(page) == PropertySheetComfortCoordinator.UiMode.COMFORT_UI)
-            return;
         PageSession session = SESSIONS.computeIfAbsent(page, key -> new PageSession());
         session.pendingMatcher = matcher;
         session.syncAttempt = 0;

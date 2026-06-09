@@ -68,11 +68,6 @@ final class PropertySheetUiContext
     {
         if (page == null)
             return null;
-        if (PropertySheetComfortUi.isInstalled(page))
-        {
-            PropertySheetDebug.scanVerbose("paletteRoot skip comfortUi page=" + PropertySheetDebug.safe(page)); //$NON-NLS-1$
-            return null;
-        }
         for (String method : new String[] {
                 "getNewPaletteContent", //$NON-NLS-1$
                 "getNewPaletteScrolledComposite", //$NON-NLS-1$
