@@ -36,6 +36,9 @@ public final class NavigatorShowInExplorerMenuHook implements IStartup
     private static final String HOOK_MARKER = "tormozit.navigatorShowInExplorerHook"; //$NON-NLS-1$
     private static final String SUB_HOOK_MARKER = "tormozit.navigatorShowInExplorerSubHook"; //$NON-NLS-1$
     private static final String ITEM_TEXT = "Показать в проводнике"; //$NON-NLS-1$
+    private static final String ITEM_TOOLTIP =
+            "Открыть проводник ОС на файле или папке выбранного элемента навигатора" //$NON-NLS-1$
+            + Global.pluginSignForTooltip();
 
     @Override
     public void earlyStartup()
@@ -158,6 +161,7 @@ public final class NavigatorShowInExplorerMenuHook implements IStartup
                 added.add(new MenuItem(subMenu, SWT.SEPARATOR));
                 MenuItem item = new MenuItem(subMenu, SWT.PUSH);
                 item.setText(ITEM_TEXT);
+                item.setToolTipText(ITEM_TOOLTIP);
                 item.addSelectionListener(new SelectionAdapter()
                 {
                     @Override

@@ -19,6 +19,8 @@
     <startup class="tormozit.MenuTooltipStatusLineHook"/>
     <startup class="tormozit.RecentPlacesTracker"/>
     <startup class="tormozit.PropertySheetHook"/>
+    <startup class="tormozit.ChoiceParametersHook"/>
+    <startup class="tormozit.PredefinedSelectionDialogHook"/>
   </extension>
 
   <extension point="org.eclipse.ui.contexts">
