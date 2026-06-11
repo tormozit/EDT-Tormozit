@@ -54,6 +54,10 @@ public class SmartCodeMatcher extends SmartMatcher {
         AdaptiveWordMatch match = matchAdaptiveWords(partText);
         if (!match.matched)
             return 0;
+        return scoreAdaptiveMatch(match);
+    }
+
+    private static int scoreAdaptiveMatch(AdaptiveWordMatch match) {
         int gap = match.lastWord - match.firstWord + 1;
         boolean consecutive = (gap == match.matchedWords);
         if (match.firstWord == 0) {
@@ -71,51 +75,145 @@ public class SmartCodeMatcher extends SmartMatcher {
         final List<HighlightRange> ranges = new ArrayList<>();
     }
 
+    /** Состояние одной ветки параллельного сопоставления. */
+    private static final class MatchState {
+        int wordIdx;
+        int offsetInWord;
+        int firstWord = -1;
+        int lastWord = -1;
+        int matchedWords;
+        final List<HighlightRange> ranges = new ArrayList<>();
+
+        MatchState copy() {
+            MatchState c = new MatchState();
+            c.wordIdx = wordIdx;
+            c.offsetInWord = offsetInWord;
+            c.firstWord = firstWord;
+            c.lastWord = lastWord;
+            c.matchedWords = matchedWords;
+            c.ranges.addAll(ranges);
+            return c;
+        }
+
+        AdaptiveWordMatch toResult() {
+            AdaptiveWordMatch m = new AdaptiveWordMatch();
+            m.matched = true;
+            m.firstWord = firstWord;
+            m.lastWord = lastWord;
+            m.matchedWords = matchedWords;
+            m.ranges.addAll(ranges);
+            return m;
+        }
+    }
+
     /**
-     * Один проход: фильтр по префиксам слов + хвост только как startsWith следующего слова.
-     * Позиции подсветки — {@code wordStarts[i] + offset} внутри слова.
+     * Параллельные ветки: на каждый символ фильтра — продолжение в текущем слове
+     * или начало одного из следующих слов; из успешных веток выбирается лучшая.
      */
     private AdaptiveWordMatch matchAdaptiveWords(String partText) {
-        AdaptiveWordMatch result = new AdaptiveWordMatch();
+        AdaptiveWordMatch empty = new AdaptiveWordMatch();
         List<String> words = splitWords(partText);
         if (words.isEmpty())
-            return result;
+            return empty;
 
         int[] wordStarts = buildWordStarts(words);
-        String remaining = fullPattern;
-        int w = 0;
-        while (!remaining.isEmpty() && w < words.size()) {
-            String wordLower = words.get(w).toLowerCase();
-            int common = commonPrefixLength(remaining, wordLower);
-            if (common > 0) {
-                if (result.firstWord == -1)
-                    result.firstWord = w;
-                result.lastWord = w;
-                result.matchedWords++;
-                result.ranges.add(new HighlightRange(wordStarts[w], common));
-                remaining = remaining.substring(common);
-                w++;
+        List<MatchState> active = new ArrayList<>();
+        MatchState initial = new MatchState();
+        initial.wordIdx = 0;
+        initial.offsetInWord = 0;
+        active.add(initial);
+
+        for (int fi = 0; fi < fullPattern.length(); fi++) {
+            char fc = fullPattern.charAt(fi);
+            List<MatchState> next = new ArrayList<>();
+            for (MatchState state : active)
+                expandMatchState(state, fc, words, wordStarts, next);
+            if (next.isEmpty())
+                return empty;
+            active = next;
+        }
+
+        AdaptiveWordMatch best = empty;
+        int bestScore = -1;
+        for (MatchState state : active) {
+            AdaptiveWordMatch candidate = state.toResult();
+            int score = scoreAdaptiveMatch(candidate);
+            if (score > bestScore) {
+                bestScore = score;
+                best = candidate;
+            }
+        }
+        return best;
+    }
+
+    private void expandMatchState(MatchState state, char fc,
+                                  List<String> words, int[] wordStarts,
+                                  List<MatchState> next) {
+        int w = state.wordIdx;
+        int off = state.offsetInWord;
+
+        // Продолжение в текущем слове
+        if (w < words.size() && off < words.get(w).length()
+            && charEquals(words.get(w).charAt(off), fc)) {
+            MatchState cont = state.copy();
+            recordChar(cont, w, off, wordStarts);
+            cont.wordIdx = w;
+            cont.offsetInWord = off + 1;
+            next.add(cont);
+        }
+
+        // Начало одного из оставшихся слов
+        int startWord = off == 0 ? w : w + 1;
+        for (int w2 = startWord; w2 < words.size(); w2++) {
+            if (w2 == w && off > 0)
+                continue;
+            String word = words.get(w2);
+            if (word.isEmpty())
+                continue;
+            if (!charEquals(word.charAt(0), fc))
+                continue;
+            MatchState jump = state.copy();
+            recordChar(jump, w2, 0, wordStarts);
+            jump.wordIdx = w2;
+            jump.offsetInWord = 1;
+            next.add(jump);
+        }
+    }
+
+    private void recordChar(MatchState state, int wordIdx, int offsetInWord, int[] wordStarts) {
+        int absPos = wordStarts[wordIdx] + offsetInWord;
+        if (!state.ranges.isEmpty()) {
+            HighlightRange last = state.ranges.get(state.ranges.size() - 1);
+            if (last.offset + last.length == absPos) {
+                state.ranges.set(state.ranges.size() - 1,
+                    new HighlightRange(last.offset, last.length + 1));
             } else {
-                w++;
+                state.ranges.add(new HighlightRange(absPos, 1));
+                onNewWord(state, wordIdx);
             }
+        } else {
+            state.ranges.add(new HighlightRange(absPos, 1));
+            onNewWord(state, wordIdx);
         }
-        if (!remaining.isEmpty()) {
-            int start = (result.lastWord == -1) ? 0 : result.lastWord + 1;
-            for (int i = start; i < words.size(); i++) {
-                String wordLower = words.get(i).toLowerCase();
-                if (wordLower.startsWith(remaining)) {
-                    if (result.firstWord == -1)
-                        result.firstWord = i;
-                    result.lastWord = i;
-                    result.matchedWords++;
-                    result.ranges.add(new HighlightRange(wordStarts[i], remaining.length()));
-                    remaining = "";
-                    break;
-                }
-            }
+    }
+
+    private static void onNewWord(MatchState state, int wordIdx) {
+        if (state.firstWord < 0)
+            state.firstWord = wordIdx;
+        if (state.lastWord != wordIdx) {
+            if (state.matchedWords == 0)
+                state.matchedWords = 1;
+            else
+                state.matchedWords++;
+            state.lastWord = wordIdx;
+        } else if (state.matchedWords == 0) {
+            state.matchedWords = 1;
+            state.lastWord = wordIdx;
         }
-        result.matched = remaining.isEmpty();
-        return result;
+    }
+
+    private static boolean charEquals(char a, char b) {
+        return Character.toLowerCase(a) == Character.toLowerCase(b);
     }
 
     private static int[] buildWordStarts(List<String> words) {
@@ -126,14 +224,6 @@ public class SmartCodeMatcher extends SmartMatcher {
             pos += words.get(i).length();
         }
         return starts;
-    }
-
-    private static int commonPrefixLength(String a, String b) {
-        int max = Math.min(a.length(), b.length());
-        int n = 0;
-        while (n < max && a.charAt(n) == b.charAt(n))
-            n++;
-        return n;
     }
 
     private List<String> splitWords(String text) {

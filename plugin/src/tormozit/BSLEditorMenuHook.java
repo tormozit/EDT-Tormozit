@@ -64,7 +64,7 @@ import com._1c.g5.v8.dt.md.ui.editor.base.DtGranularEditorXtextEditorPage;
 public class BSLEditorMenuHook implements IStartup
 {
     private static final String ITEM_TEXT_EditEmbedded = "Вложенный текст ИР";
-    private static final String ITEM_TEXT_DebugIR = "Отладить ИР";
+    private static final String ITEM_TEXT_DebugIR = "Отладить объект ИР";
 
     /**
      * Ключ SWT-данных для маркировки «меню уже прикреплено».

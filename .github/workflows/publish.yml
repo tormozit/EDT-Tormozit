@@ -4,6 +4,15 @@ name: Publish p2 site
 # site/features/, site/plugins/, site/content.jar, site/artifacts.jar → Run workflow.
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'new — новая линейка (comfort.release > gh-pages); republish — пересборка той же версии'
+        required: true
+        default: 'new'
+        type: choice
+        options:
+          - new
+          - republish
 
 permissions:
   contents: write
@@ -34,6 +43,9 @@ jobs:
           fi
           ls -la site/features/ site/plugins/ 2>/dev/null || true
           ls -la site/*.jar 2>/dev/null || true
+
+      - name: Verify release artifacts
+        run: bash .github/workflows/verify_p2_site.sh "${{ inputs.mode }}"
 
       - name: Stash p2 artifacts
         run: |

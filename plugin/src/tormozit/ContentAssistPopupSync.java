@@ -327,7 +327,7 @@ public final class ContentAssistPopupSync
                 SmartContentAssistProcessor.computeIdentifierFilter(doc, caret);
             syncPopupFilterOffsets(popup, viewer, caret);
             boolean resetToFirst = restoreAfterFilterToggle
-                ? false
+                ? SmartAssistFilterState.isSmartFilterEnabled()
                 : shouldResetSelectionToFirst();
             ICompletionProposal[] proposals = processor.computeForPopupRefresh(viewer, caret);
             if (proposals == null)
@@ -385,7 +385,8 @@ public final class ContentAssistPopupSync
             if (fIsFilteredSubsetField != null)
                 fIsFilteredSubsetField.setBoolean(popup, false);
 
-            setProposalsAndRestoreSelection(popup, displayList, false, saved, resetToFirst);
+            setProposalsAndRestoreSelection(popup, displayList, false, saved, resetToFirst,
+                restoreAfterFilterToggle);
 
             List<ICompletionProposal> applied = (List<ICompletionProposal>)
                 fFilteredProposalsField.get(popup);
@@ -399,7 +400,7 @@ public final class ContentAssistPopupSync
                 SmartFilterTracker.getCurrentFilter(), resetToFirst);
 
             if (tableRows >= 0 && tableRows != displayList.size() && !displayList.isEmpty())
-                forceTableRefresh(popup, displayList, saved, resetToFirst);
+                forceTableRefresh(popup, displayList, saved, resetToFirst, restoreAfterFilterToggle);
 
             finishSyncCycle(popup);
             return true;
@@ -635,7 +636,8 @@ public final class ContentAssistPopupSync
     }
 
     private static void forceTableRefresh(Object popup, List<ICompletionProposal> list,
-                                          SavedSelection saved, boolean resetToFirst)
+                                          SavedSelection saved, boolean resetToFirst,
+                                          boolean restoreAfterFilterToggle)
             throws Exception
     {
         if (fProposalTableField == null || selectProposalMethod == null || list == null)
@@ -646,7 +648,7 @@ public final class ContentAssistPopupSync
         fFilteredProposalsField.set(popup, list);
         table.clearAll();
         table.setItemCount(list.size());
-        applySelection(popup, list, saved, resetToFirst);
+        applySelection(popup, list, saved, resetToFirst, restoreAfterFilterToggle);
         ContentAssistDebug.log("popupSync forceTableRefresh rows=" + list.size()); //$NON-NLS-1$
     }
 
@@ -1239,7 +1241,9 @@ public final class ContentAssistPopupSync
                                                         List<ICompletionProposal> list,
                                                         boolean filteredSubset,
                                                         SavedSelection saved,
-                                                        boolean resetToFirst) throws Exception
+                                                        boolean resetToFirst,
+                                                        boolean restoreAfterFilterToggle)
+            throws Exception
     {
         if (fComputedProposalsField != null)
             fComputedProposalsField.set(popup, list);
@@ -1248,16 +1252,20 @@ public final class ContentAssistPopupSync
             (List<ICompletionProposal>) fFilteredProposalsField.get(popup);
         if (fComputedProposalsField != null && applied != null)
             fComputedProposalsField.set(popup, applied);
-        applySelection(popup, applied != null ? applied : list, saved, resetToFirst);
+        applySelection(popup, applied != null ? applied : list, saved, resetToFirst,
+            restoreAfterFilterToggle);
     }
 
     private static void applySelection(Object popup, List<ICompletionProposal> list,
-                                       SavedSelection saved, boolean resetToFirst) throws Exception
+                                       SavedSelection saved, boolean resetToFirst,
+                                       boolean restoreAfterFilterToggle) throws Exception
     {
         if (list == null || list.isEmpty() || selectProposalMethod == null)
             return;
         if (resetToFirst)
             selectProposalAtIndex(popup, 0);
+        else if (restoreAfterFilterToggle)
+            restoreSelection(popup, saved, list);
         else if (!SmartAssistFilterState.isSmartFilterEnabled())
         {
             String prefix = SmartFilterTracker.getCurrentFilter();

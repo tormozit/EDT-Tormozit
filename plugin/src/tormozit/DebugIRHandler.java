@@ -23,6 +23,7 @@ import com._1c.g5.v8.dt.debug.core.model.IBslStackFrame;
 public final class DebugIRHandler
 {
     private static final String REQUIRE_DEFERRED_DEBUG = "Ложь"; //$NON-NLS-1$
+    private static final String IR_CACHE_OS_PID_EXPR = "ирКэш.ИдентификаторПроцессаОСЛкс()"; //$NON-NLS-1$
     private static final long EVAL_TIMEOUT_MS = 1_000;
     private static final long IR_WINDOW_WAIT_MS = 2_000;
     private static final Pattern IR_TOOL_WINDOW_TITLE =
@@ -57,7 +58,6 @@ public final class DebugIRHandler
             {
                 ensureCodeEditor(irSession);
                 ComBridge.invoke(irSession.codeEditor, "РазобратьТекущийКонтекст"); //$NON-NLS-1$
-
                 String debugContext = ComBridge.toString(
                     ComBridge.invoke(irSession.codeEditor, "ВычисляемыйКонтекстОтладчика")); //$NON-NLS-1$
                 if (debugContext == null || debugContext.isBlank())
@@ -66,47 +66,37 @@ public final class DebugIRHandler
                         "Команда применима только при остановке отладки в редакторе модуля"); //$NON-NLS-1$
                     return;
                 }
-
                 String textCall = debugContext.split("\\*")[0] + "От"; //$NON-NLS-1$ //$NON-NLS-2$
                 String moduleRef = ComBridge.toString(
                     ComBridge.invoke(irSession.codeEditor, "СсылкаСтрокиМодуля", null, false)); //$NON-NLS-1$
-
                 String exprText = selectedText;
                 if (exprText == null || exprText.isBlank())
                     exprText = ComBridge.toString(ComBridge.getProperty(irSession.codeEditor, "мКонтекст")); //$NON-NLS-1$
                 if (exprText == null || exprText.isBlank())
                     return;
-
                 if (isHierarchicalLogicalExpression(exprText))
                 {
                     handleHierarchicalExpression(irSession, wsProject, exprText, ref);
                     return;
                 }
-
-                String expression = exprText.startsWith(textCall)
-                    ? exprText
-                    : buildDebugExpression(textCall, exprText, moduleRef);
-
-                boolean thickClient = DebugSessionHelper.isThickClientDebug(wsProject);
-                DebugSessionHelper.EvalResult evalResult = thickClient
-                    ? null
-                    : evaluateOnUiThread(wsProject, expression);
-
-                if (evalResult != null
-                    && evalResult.hasValue()
-                    && evalResult.valueText.toLowerCase(Locale.ROOT)
-                        .contains("открыть объект для отладки")) //$NON-NLS-1$
+                String expression = exprText.startsWith(textCall) ? exprText : buildDebugExpression(textCall, exprText, moduleRef);
+                boolean isThickClient = DebugSessionHelper.isThickClientDebug(wsProject);
+                long thickPid = 0;
+                if (isThickClient)
+                    thickPid = evaluateThickClientOsPid(wsProject);
+                DebugSessionHelper.EvalResult evalResult = evaluateOnUiThread(wsProject, expression);
+                if (thickPid > 0)
+                    if (WinWindowActivator.waitForWindowTitle(thickPid, IR_TOOL_WINDOW_TITLE, IR_WINDOW_WAIT_MS))
+                        WinWindowActivator.activateMainWindow(thickPid);
+                if (evalResult != null && evalResult.hasValue()
+                    && evalResult.valueText.toLowerCase(Locale.ROOT).contains("открыть объект для отладки")) //$NON-NLS-1$
                 {
                     Object irClient = irSession.getModule("ирКлиент"); //$NON-NLS-1$
                     ComBridge.invoke(irClient, "ОтладитьОтложенныйОбъектЛкс", evalResult.valueText); //$NON-NLS-1$
                     irSession.showWindow();
                     return;
                 }
-
-                irSession.showWindow();
-                WinWindowActivator.waitForWindowTitle(irSession.pid, IR_TOOL_WINDOW_TITLE, IR_WINDOW_WAIT_MS);
-
-                if (!thickClient && (evalResult == null || !evalResult.hasValue()))
+                if (evalResult == null || !evalResult.hasValue())
                 {
                     toast("Отладить ИР",
                         "Не дождались снимка объекта. Либо повторите команду после его появления, "
@@ -157,6 +147,52 @@ public final class DebugIRHandler
         return "истина".equals(firstLine) || "ложь".equals(firstLine); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    private static long evaluateThickClientOsPid(IProject project)
+    {
+        return parseIntFromEval(evaluateOnUiThread(project, IR_CACHE_OS_PID_EXPR));
+    }
+
+    private static long parseIntFromEval(DebugSessionHelper.EvalResult result)
+    {
+        if (result == null || !result.hasValue())
+            return 0L;
+
+        String text = result.valueText.strip();
+        if (text.isEmpty())
+            return 0L;
+
+        String numeric = stripIntegerGroupSeparators(text);
+        if (numeric.isEmpty() || "+".equals(numeric)) //$NON-NLS-1$
+            return 0L;
+        if ("-".equals(numeric)) //$NON-NLS-1$
+            return 0L;
+
+        try
+        {
+            return Long.parseLong(numeric);
+        }
+        catch (NumberFormatException e)
+        {
+            Global.log("DebugIRHandler.parseIntFromEval: " + text); //$NON-NLS-1$
+            return 0L;
+        }
+    }
+
+    private static String stripIntegerGroupSeparators(String text)
+    {
+        StringBuilder sb = new StringBuilder(text.length());
+        for (int i = 0; i < text.length(); i++)
+        {
+            char c = text.charAt(i);
+            if (c == ',' || c == '\'' || Character.isWhitespace(c))
+                continue;
+            if (c == '\u00A0' || c == '\u202F' || c == '\u2009') // NBSP, narrow NBSP, thin space
+                continue;
+            sb.append(c);
+        }
+        return sb.toString();
+    }
+
     private static DebugSessionHelper.EvalResult evaluateOnUiThread(IProject project, String expression)
     {
         final DebugSessionHelper.EvalResult[] box = new DebugSessionHelper.EvalResult[1];
@@ -187,6 +223,8 @@ public final class DebugIRHandler
             return ""; //$NON-NLS-1$
         Object sel = viewer.getSelectionProvider().getSelection();
         if (!(sel instanceof ITextSelection textSel))
+            return ""; //$NON-NLS-1$
+        if (textSel.getLength() == 0)
             return ""; //$NON-NLS-1$
         return textSel.getText();
     }

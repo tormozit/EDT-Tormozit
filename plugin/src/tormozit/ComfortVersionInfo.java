@@ -8,8 +8,11 @@ import java.time.format.DateTimeParseException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Platform;
 import org.osgi.framework.Bundle;
+import org.osgi.framework.BundleContext;
+import org.osgi.framework.ServiceReference;
 import org.osgi.framework.Version;
 
 /**
@@ -18,6 +21,10 @@ import org.osgi.framework.Version;
 public final class ComfortVersionInfo
 {
     private static final String BUNDLE_SYMBOLIC_NAME = "tormozit.comfort"; //$NON-NLS-1$
+    private static final String FEATURE_IU_ID =
+            "tormozit.comfort.feature.feature.group"; //$NON-NLS-1$
+    private static final String BUNDLE_P2_CORE = "org.eclipse.equinox.p2.core"; //$NON-NLS-1$
+    private static final String BUNDLE_P2_ENGINE = "org.eclipse.equinox.p2.engine"; //$NON-NLS-1$
     private static final String RELEASES_BASE_URL =
             "https://github.com/tormozit/EDT.Comfort/releases/tag/"; //$NON-NLS-1$
     private static final Pattern QUALIFIER_TIMESTAMP =
@@ -67,14 +74,110 @@ public final class ComfortVersionInfo
         return !changesUrl.isBlank();
     }
 
-    /** Версия установленного бандла {@code tormozit.comfort}. */
+    /** Версия установленного плагина (max из bundle и feature-IU в p2-профиле). */
     public static ComfortVersionInfo installed()
+    {
+        ComfortVersionInfo bundle = fromBundle();
+        ComfortVersionInfo feature = fromInstalledFeatureGroup();
+        if (feature == null || "—".equals(feature.getVersion())) //$NON-NLS-1$
+            return bundle;
+        if ("—".equals(bundle.getVersion())) //$NON-NLS-1$
+            return feature;
+        return newerOf(bundle, feature);
+    }
+
+    private static ComfortVersionInfo fromBundle()
     {
         Bundle bundle = Platform.getBundle(BUNDLE_SYMBOLIC_NAME);
         if (bundle == null)
             return empty();
         Version version = bundle.getVersion();
         return fromOsgiVersion(version != null ? version.toString() : ""); //$NON-NLS-1$
+    }
+
+    private static ComfortVersionInfo newerOf(ComfortVersionInfo left, ComfortVersionInfo right)
+    {
+        int cmp = compareVersionNumbers(left.getVersion(), right.getVersion());
+        if (cmp < 0)
+            return right;
+        if (cmp > 0)
+            return left;
+        return left.getDisplayVersion().compareTo(right.getDisplayVersion()) >= 0
+                ? left : right;
+    }
+
+    /** Версия установленной feature-IU из p2-профиля EDT. */
+    private static ComfortVersionInfo fromInstalledFeatureGroup()
+    {
+        try
+        {
+            Bundle p2Core = Platform.getBundle(BUNDLE_P2_CORE);
+            Bundle p2Engine = Platform.getBundle(BUNDLE_P2_ENGINE);
+            if (p2Core == null || p2Engine == null)
+                return null;
+
+            BundleContext ctx = p2Core.getBundleContext();
+            ServiceReference<?> agentRef = ctx.getServiceReference(
+                "org.eclipse.equinox.p2.core.IProvisioningAgent"); //$NON-NLS-1$
+            if (agentRef == null)
+                return null;
+
+            Object agent = ctx.getService(agentRef);
+            if (agent == null)
+                return null;
+
+            try
+            {
+                Class<?> registryClass = p2Engine.loadClass(
+                    "org.eclipse.equinox.p2.engine.IProfileRegistry"); //$NON-NLS-1$
+                Object registry = agent.getClass()
+                    .getMethod("getService", Class.class) //$NON-NLS-1$
+                    .invoke(agent, registryClass);
+                if (registry == null)
+                    return null;
+
+                String profileId = (String) registryClass
+                    .getMethod("getDefaultProfileId") //$NON-NLS-1$
+                    .invoke(registry);
+                Object profile = registryClass
+                    .getMethod("getProfile", String.class) //$NON-NLS-1$
+                    .invoke(registry, profileId);
+                if (profile == null)
+                    return null;
+
+                Class<?> queryUtil = p2Engine.loadClass(
+                    "org.eclipse.equinox.p2.query.QueryUtil"); //$NON-NLS-1$
+                Class<?> queryClass = p2Engine.loadClass(
+                    "org.eclipse.equinox.p2.query.IQuery"); //$NON-NLS-1$
+                Class<?> monitorClass = Platform.getBundle("org.eclipse.core.runtime") //$NON-NLS-1$
+                    .loadClass("org.eclipse.core.runtime.IProgressMonitor"); //$NON-NLS-1$
+
+                Object query = queryUtil
+                    .getMethod("createIUQuery", String.class) //$NON-NLS-1$
+                    .invoke(null, FEATURE_IU_ID);
+                Object result = profile.getClass()
+                    .getMethod("query", queryClass, monitorClass) //$NON-NLS-1$
+                    .invoke(profile, query, new NullProgressMonitor());
+
+                var iterator = (java.util.Iterator<?>) result.getClass()
+                    .getMethod("iterator") //$NON-NLS-1$
+                    .invoke(result);
+                if (!iterator.hasNext())
+                    return null;
+
+                Object iu = iterator.next();
+                Object version = iu.getClass().getMethod("getVersion").invoke(iu); //$NON-NLS-1$
+                return fromOsgiVersion(version != null ? version.toString() : ""); //$NON-NLS-1$
+            }
+            finally
+            {
+                ctx.ungetService(agentRef);
+            }
+        }
+        catch (ReflectiveOperationException | RuntimeException e)
+        {
+            return null;
+        }
     }
 
     /** Разбор полной p2/OSGi-версии вида {@code 1.0.0.11-202606090924}. */

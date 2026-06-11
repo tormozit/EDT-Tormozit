@@ -13,4 +13,7 @@
 Раздел настроек "Комфорт" расположен на верхнем уровне окна "Параметры".
 
 Сборка релиза:
-Измените номер версии в [site/version.txt](site/version.txt), clean.bat, `Build All` в проекте site (Eclipse) или `build.bat` (Maven).
+1. `site\release.bat` — поднимает версию в [site/version.txt](site/version.txt) и очищает старые артефакты (`site\release.bat republish` — та же линейка).
+2. `Build All` в проекте site (Eclipse) или `site\build.bat` (Maven).
+3. Закоммитить `site/features/`, `site/plugins/`, `site/content.jar`, `site/artifacts.jar`.
+4. GitHub Actions → **Publish p2 site** → Run workflow.
