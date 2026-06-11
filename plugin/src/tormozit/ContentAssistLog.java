@@ -44,7 +44,6 @@ public final class ContentAssistLog
             lineCount++;
         }
         notifyListeners(line);
-        requestShowView();
     }
 
     public static String getFullText()
@@ -142,13 +141,6 @@ public final class ContentAssistLog
                     listener.accept(line);
             });
         }
-    }
-
-    private static void requestShowView()
-    {
-        if (!ComfortSettings.isDebugLogEnabled())
-            return;
-        showView(IWorkbenchPage.VIEW_VISIBLE);
     }
 
     private static Display getDisplay()

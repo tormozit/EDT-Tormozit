@@ -184,7 +184,7 @@ public final class IRApplication
 
         IRSession existing = sessions.get(key);
         if (existing != null && existing.state == State.CONNECTED) {
-            doDisconnect(key, existing);
+            doDisconnect(key, existing, false);
         }
         else if (existing != null && existing.state == State.CONNECTING)
             return;
@@ -468,14 +468,14 @@ public final class IRApplication
 //                        "В файловой базе ИР включено ожидание блокировки данных. Рекомендую отключить.", 10_000); //$NON-NLS-1$
 //            }
 //            catch (Exception ignored) {}
-
             // МодулиИР.ирКлиент.ЛиВФайловойБазеЕстьВключенныеРегламентныеЗаданияЛкс()
+            
             Boolean hasJobs = ComBridge.toBoolean(ComBridge.invoke(irClient, "ЛиВФайловойБазеЕстьВключенныеРегламентныеЗаданияЛкс")); //$NON-NLS-1$
             if (hasJobs)
                 ToastNotification.show(toastTitle(), //$NON-NLS-1$
                     "В файловой базе ИР включены регламентные задания. Рекомендую отключить.\n" //$NON-NLS-1$
-                    + "Если в коде есть их включение, подавите его проверкой файловой базы.", 10_000, 
-                    () -> IRSession.executor.submit(() -> {ComBridge.invoke(irClient, "ОткрытьКонсольЗаданийЛкс", true);})); //$NON-NLS-1$
+                    + "Если в коде есть их включение, подавите его проверкой файловой базы.", 10_000, //$NON-NLS-1$
+                    () -> IRSession.openJobConsole()); //$NON-NLS-1$
         }
         String[] forbiddenHandlers = {
             "ОбработчикОжиданияПроверкиДинамическогоИзмененияИБ", // БСП 2.0 //$NON-NLS-1$
@@ -710,10 +710,98 @@ public final class IRApplication
         if (session == null || session.state == State.IDLE) return;
         
         // Закрываем строго в том же потоке, где выполнялась работа
-        session.executor.submit(() -> doDisconnect(key, session));
+        session.executor.submit(() -> doDisconnect(key, session, false));
     }
 
-    static private void doDisconnect(String key, IRSession session)
+    /** Завершает все подключённые приложения ИР (при выходе из EDT). */
+    public static void disconnectAll()
+    {
+        for (String key : List.copyOf(sessions.keySet()))
+        {
+            IRSession session = sessions.remove(key);
+            if (session == null || session.state == State.IDLE)
+                continue;
+            shutdownSession(key, session);
+        }
+        notifyListeners();
+    }
+
+    private static void shutdownSession(String key, IRSession session)
+    {
+        ExecutorService ex = session.executor;
+        if (ex == null)
+        {
+            killSessionProcess(session);
+            return;
+        }
+        if (ex.isShutdown())
+            return;
+        if (session.state == State.CONNECTING)
+        {
+            ex.shutdownNow();
+            awaitExecutor(ex, 3);
+            return;
+        }
+        try
+        {
+            Future<?> f = ex.submit(() -> {
+                try
+                {
+                    doDisconnect(key, session, true);
+                }
+                finally
+                {
+                    ComBridge.releaseComThread();
+                }
+            });
+            f.get(15, TimeUnit.SECONDS);
+        }
+        catch (Exception e)
+        {
+            Global.log("IRApplication.disconnectAll: " //$NON-NLS-1$
+                + (session.appTitle != null ? session.appTitle : key)
+                + " — " + e.getMessage()); //$NON-NLS-1$
+            killSessionProcess(session);
+        }
+        finally
+        {
+            ex.shutdown();
+            awaitExecutor(ex, 5);
+        }
+    }
+
+    private static void awaitExecutor(ExecutorService ex, int timeoutSec)
+    {
+        try
+        {
+            ex.awaitTermination(timeoutSec, TimeUnit.SECONDS);
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static void killSessionProcess(IRSession session)
+    {
+        if (session.root != null)
+        {
+            try
+            {
+                ComBridge.invoke(session.root, "ЗавершитьРаботуСистемы", false); //$NON-NLS-1$
+                return;
+            }
+            catch (Exception ignored) {}
+        }
+        if (session.pid > 0)
+        {
+            Object proc = session.processObj != null ? session.processObj
+                : WmiProcessHelper.findProcessByPid(session.pid);
+            WmiProcessHelper.terminate(proc, session.pid);
+        }
+    }
+
+    static private void doDisconnect(String key, IRSession session, boolean quiet)
     {
         boolean killed = false;
         if (session.root != null)
@@ -736,12 +824,16 @@ public final class IRApplication
             WmiProcessHelper.terminate(proc, session.pid);
             killed = true;
         }
-        ToastNotification.show(toastTitle(), 
-            killed ? "Процесс приложения ИР завершён принудительно." //$NON-NLS-1$
-                   : "Приложение ИР завершено. Отключение займёт несколько секунд.", //$NON-NLS-1$
-            3_000);
+        if (!quiet)
+        {
+            ToastNotification.show(toastTitle(), 
+                killed ? "Процесс приложения ИР завершён принудительно." //$NON-NLS-1$
+                       : "Приложение ИР завершено. Отключение займёт несколько секунд.", //$NON-NLS-1$
+                3_000);
+        }
         sessions.remove(key);
-        notifyListeners();
+        if (!quiet)
+            notifyListeners();
     }
 
     public static String buildConnectionString(InfobaseReference infobase, boolean withUser)

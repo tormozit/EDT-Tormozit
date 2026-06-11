@@ -64,7 +64,7 @@ public class Activator extends AbstractUIPlugin
     @Override
     public void stop(BundleContext context) throws Exception
     {
-//        IRApplication.disconnectAll(); // TODO
+        IRApplication.disconnectAll();
 
         ContentAssistManager mgr = ContentAssistManager.getInstance();
         if (mgr != null)

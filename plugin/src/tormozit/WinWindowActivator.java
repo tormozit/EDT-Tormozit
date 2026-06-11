@@ -1,6 +1,7 @@
 package tormozit;
 
-import com.sun.jna.Pointer;
+import java.util.regex.Pattern;
+
 import com.sun.jna.platform.win32.User32;
 import com.sun.jna.platform.win32.WinDef.DWORD;
 import com.sun.jna.platform.win32.WinDef.HWND;
@@ -45,6 +46,38 @@ public final class WinWindowActivator
         return true;
     }
 
+    /**
+     * Ожидает появления top-level окна процесса с заголовком, подходящим под {@code titlePattern}.
+     *
+     * @return {@code true}, если окно найдено и активировано
+     */
+    public static boolean waitForWindowTitle(long pid, Pattern titlePattern, long timeoutMs)
+    {
+        if (!WINDOWS || pid <= 0 || titlePattern == null || timeoutMs <= 0)
+            return false;
+
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline)
+        {
+            HWND hwnd = findWindowByTitle((int) pid, titlePattern);
+            if (hwnd != null)
+            {
+                showAndActivate(hwnd);
+                return true;
+            }
+            try
+            {
+                Thread.sleep(50);
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return false;
+    }
+
     private static HWND findMainWindow(int pid)
     {
         final HWND[] best = { null };
@@ -82,6 +115,33 @@ public final class WinWindowActivator
         }, null);
 
         return best[0];
+    }
+
+    private static HWND findWindowByTitle(int pid, Pattern titlePattern)
+    {
+        final HWND[] found = { null };
+
+        User32.INSTANCE.EnumWindows((hwnd, data) ->
+        {
+            char[] title = new char[512];
+            if (User32.INSTANCE.GetWindowText(hwnd, title, title.length) == 0)
+                return true;
+
+            IntByReference windowPid = new IntByReference();
+            User32.INSTANCE.GetWindowThreadProcessId(hwnd, windowPid);
+            if (windowPid.getValue() != pid)
+                return true;
+
+            String titleText = new String(title).trim();
+            if (!titleText.isEmpty() && titlePattern.matcher(titleText).find())
+            {
+                found[0] = hwnd;
+                return false;
+            }
+            return true;
+        }, null);
+
+        return found[0];
     }
 
     private static boolean isMinimized(HWND hwnd)

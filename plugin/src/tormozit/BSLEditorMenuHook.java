@@ -64,6 +64,7 @@ import com._1c.g5.v8.dt.md.ui.editor.base.DtGranularEditorXtextEditorPage;
 public class BSLEditorMenuHook implements IStartup
 {
     private static final String ITEM_TEXT_EditEmbedded = "Вложенный текст ИР";
+    private static final String ITEM_TEXT_DebugIR = "Отладить ИР";
 
     /**
      * Ключ SWT-данных для маркировки «меню уже прикреплено».
@@ -268,31 +269,46 @@ public class BSLEditorMenuHook implements IStartup
     {
         return new MenuAdapter()
         {
-            private final List<MenuItem> addedItems = new ArrayList<>(2);
+            private final List<MenuItem> addedItems = new ArrayList<>(4);
 
             @Override
             public void menuShown(MenuEvent e)
             {
-                if (!EditEmbeddedTextHandler.isApplicable(editor))
-                    return;
-
                 Menu menu = (Menu) e.widget;
 
-//                addedItems.add(new MenuItem(menu, SWT.SEPARATOR));
-
-                MenuItem item = new MenuItem(menu, SWT.PUSH);
-                item.setText(ITEM_TEXT_EditEmbedded);
-                item.setToolTipText(
-                    "Открыть вложенный текст в редакторе текста приложения ИР" + Global.pluginSignForTooltip());
-                item.addSelectionListener(new SelectionAdapter()
+                if (EditEmbeddedTextHandler.isApplicable(editor))
                 {
-                    @Override
-                    public void widgetSelected(SelectionEvent e)
+                    MenuItem item = new MenuItem(menu, SWT.PUSH);
+                    item.setText(ITEM_TEXT_EditEmbedded);
+                    item.setToolTipText(
+                        "Открыть вложенный текст в редакторе текста приложения ИР" + Global.pluginSignForTooltip());
+                    item.addSelectionListener(new SelectionAdapter()
                     {
-                        EditEmbeddedTextHandler.editEmbeddedText(editor);
-                    }
-                });
-                addedItems.add(item);
+                        @Override
+                        public void widgetSelected(SelectionEvent e)
+                        {
+                            EditEmbeddedTextHandler.editEmbeddedText(editor);
+                        }
+                    });
+                    addedItems.add(item);
+                }
+
+                if (DebugIRHandler.isApplicable(editor))
+                {
+                    MenuItem item = new MenuItem(menu, SWT.PUSH);
+                    item.setText(ITEM_TEXT_DebugIR);
+                    item.setToolTipText(
+                        "Текущее выражение передается в отладочный инструмент в окно приложения ИР или предмета отладки" + Global.pluginSignForTooltip());
+                    item.addSelectionListener(new SelectionAdapter()
+                    {
+                        @Override
+                        public void widgetSelected(SelectionEvent e)
+                        {
+                            DebugIRHandler.debugObject(editor);
+                        }
+                    });
+                    addedItems.add(item);
+                }
             }
 
             @Override

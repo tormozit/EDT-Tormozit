@@ -68,7 +68,8 @@ public final class ToastNotification
     
     public static Shell show(String title, String message, int durationMs, Runnable action)
     {
-        return show(title, message, durationMs, action, null);
+        return show(title, message, durationMs, action,
+            action != null ? "Выполнить" : null); //$NON-NLS-1$
     }
 
     /**

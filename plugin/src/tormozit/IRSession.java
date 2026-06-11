@@ -179,4 +179,13 @@ public final class IRSession
                WinWindowActivator.activateMainWindow(pid);
          }
 
+        public void openJobConsole()
+        {
+            executeOnComThread(() -> {
+                showWindow();
+                ComBridge.invoke(getModule("ирКлиент"), "ОткрытьКонсольЗаданийЛкс", true); //$NON-NLS-1$ //$NON-NLS-2$
+                return null;
+            });
+        }
+
     }
