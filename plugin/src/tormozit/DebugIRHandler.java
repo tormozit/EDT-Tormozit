@@ -1,29 +1,40 @@
 package tormozit;
 
 import java.util.Locale;
+import java.util.Optional;
 import java.util.regex.Pattern;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
+import org.eclipse.debug.core.DebugException;
+import org.eclipse.debug.core.model.IDebugTarget;
+import org.eclipse.debug.core.model.IExpression;
+import org.eclipse.debug.core.model.IWatchExpression;
 import org.eclipse.jface.text.ITextSelection;
 import org.eclipse.jface.text.source.ISourceViewer;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.IEditorInput;
+import org.eclipse.ui.IEditorPart;
+import org.eclipse.ui.PlatformUI;
 
 import com._1c.g5.v8.dt.bsl.ui.editor.BslXtextEditor;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.debug.core.model.IBslStackFrame;
+import com._1c.g5.v8.dt.debug.core.model.IBslVariable;
+import com._1c.g5.v8.dt.debug.core.model.IRuntimeDebugClientTarget;
+import com.e1c.g5.dt.applications.IApplication;
 
 /**
- * Обработчик команды «Отладить ИР» в контекстном меню BSL-редактора.
+ * Обработчик команды «Отладить ИР» в контекстном меню BSL-редактора и панелей отладчика.
  * Порт {@code ОтладитьОбъект()} из RDT.txt.
  */
 public final class DebugIRHandler
 {
     private static final String REQUIRE_DEFERRED_DEBUG = "Ложь"; //$NON-NLS-1$
     private static final String IR_CACHE_OS_PID_EXPR = "ирКэш.ИдентификаторПроцессаОСЛкс()"; //$NON-NLS-1$
+    private static final String DEFAULT_DEBUG_CALL = "ирОбщий.От"; //$NON-NLS-1$
     private static final long EVAL_TIMEOUT_MS = 1_000;
     private static final long IR_WINDOW_WAIT_MS = 2_000;
     private static final Pattern IR_TOOL_WINDOW_TITLE =
@@ -34,6 +45,12 @@ public final class DebugIRHandler
     public static boolean isApplicable(BslXtextEditor editor)
     {
         IProject project = getWorkspaceProject(editor);
+        return project != null && DebugSessionHelper.isDebugSuspended(project);
+    }
+
+    public static boolean isApplicableForDebugView(IProject project)
+    {
+        // Только проверка suspend — без getSession(), чтобы не запускать подключение ИР при открытии меню.
         return project != null && DebugSessionHelper.isDebugSuspended(project);
     }
 
@@ -80,29 +97,8 @@ public final class DebugIRHandler
                     return;
                 }
                 String expression = exprText.startsWith(textCall) ? exprText : buildDebugExpression(textCall, exprText, moduleRef);
-                boolean isThickClient = DebugSessionHelper.isThickClientDebug(wsProject);
-                long thickPid = 0;
-                if (isThickClient)
-                    thickPid = evaluateThickClientOsPid(wsProject);
-                DebugSessionHelper.EvalResult evalResult = evaluateOnUiThread(wsProject, expression);
-                if (thickPid > 0)
-                    if (WinWindowActivator.waitForWindowTitle(thickPid, IR_TOOL_WINDOW_TITLE, IR_WINDOW_WAIT_MS))
-                        WinWindowActivator.activateMainWindow(thickPid);
-                if (evalResult != null && evalResult.hasValue()
-                    && evalResult.valueText.toLowerCase(Locale.ROOT).contains("открыть объект для отладки")) //$NON-NLS-1$
-                {
-                    Object irClient = irSession.getModule("ирКлиент"); //$NON-NLS-1$
-                    ComBridge.invoke(irClient, "ОтладитьОтложенныйОбъектЛкс", evalResult.valueText); //$NON-NLS-1$
-                    irSession.showWindow();
-                    return;
-                }
-                if (evalResult == null || !evalResult.hasValue())
-                {
-                    toast("Отладить ИР",
-                        "Не дождались снимка объекта. Либо повторите команду после его появления, "
-                            + "либо активируйте окно отлаживаемого приложения.", //$NON-NLS-1$
-                        5_000);
-                }
+                IBslStackFrame frame = DebugSessionHelper.findSuspendedStackFrame(wsProject);
+                runDebugEvaluation(frame, expression, wsProject, irSession);
             }
             catch (Exception e)
             {
@@ -110,6 +106,146 @@ public final class DebugIRHandler
                 toast("Отладить ИР", "Ошибка вызова ИР: " + e.getMessage(), 5_000); //$NON-NLS-1$ //$NON-NLS-2$
             }
         });
+    }
+
+    public static void debugVariable(IBslVariable variable)
+    {
+        if (variable == null)
+            return;
+
+        DebugViewsDebug.log("debugVariable enter name=" + safeVariableName(variable) //$NON-NLS-1$
+            + " thread=" + DebugViewsDebug.threadBrief()); //$NON-NLS-1$
+
+        IBslStackFrame frame;
+        frame = variable.getStackFrame();
+        if (frame == null)
+        {
+            DebugViewsDebug.problem("debugVariable: frame=null"); //$NON-NLS-1$
+            return;
+        }
+
+        IProject project = getProjectFromStackFrame(frame);
+        if (!isApplicableForDebugView(project))
+        {
+            DebugViewsDebug.log("debugVariable skip: not applicable project=" + project); //$NON-NLS-1$
+            return;
+        }
+
+        IDtProject dtProject = getDtProjectFromWorkspaceProject(project);
+        IRSession irSession = IRApplication.getSession(dtProject);
+        if (irSession == null || irSession.executor == null)
+            return;
+
+        String expr;
+        expr = variable.toWatchExpression();
+        if (expr == null || expr.isBlank())
+            return;
+
+        String evalExpr = "ирОбщий.ОтлКс(" + expr + ")"; //$NON-NLS-1$ //$NON-NLS-2$
+        DebugViewsDebug.log("debugVariable evalExpr=" + evalExpr); //$NON-NLS-1$
+        irSession.executor.submit(() ->
+        {
+            try
+            {
+                runDebugEvaluation(frame, evalExpr, project, irSession);
+            }
+            catch (Exception e)
+            {
+                Global.log("DebugIRHandler.debugVariable: " + e.getMessage()); //$NON-NLS-1$
+                toast("Отладить ИР", "Ошибка вызова ИР: " + e.getMessage(), 5_000); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        });
+    }
+
+    public static void debugWatchExpression(IWatchExpression watchExpr, IBslStackFrame frame, IProject project)
+    {
+        if (watchExpr == null || frame == null || project == null)
+            return;
+        if (!isApplicableForDebugView(project))
+            return;
+
+        IDtProject dtProject = getDtProjectFromWorkspaceProject(project);
+        IRSession irSession = IRApplication.getSession(dtProject);
+        if (irSession == null || irSession.executor == null)
+            return;
+
+        String exprText = getWatchExpressionText(watchExpr);
+        if (exprText == null || exprText.isBlank())
+            return;
+
+        irSession.executor.submit(() ->
+        {
+            try
+            {
+                if (isHierarchicalLogicalExpression(exprText))
+                {
+                    handleHierarchicalExpression(irSession, project, exprText, ""); //$NON-NLS-1$
+                    return;
+                }
+
+                String textCall = DEFAULT_DEBUG_CALL;
+                String moduleRef = ""; //$NON-NLS-1$
+                BslXtextEditor editor = getActiveBslEditor();
+                if (editor != null)
+                {
+                    irSession.syncCodeEditorToIR(editor);
+                    ensureCodeEditor(irSession);
+                    ComBridge.invoke(irSession.codeEditor, "РазобратьТекущийКонтекст"); //$NON-NLS-1$
+                    String debugContext = ComBridge.toString(
+                        ComBridge.invoke(irSession.codeEditor, "ВычисляемыйКонтекстОтладчика")); //$NON-NLS-1$
+                    if (debugContext != null && !debugContext.isBlank())
+                    {
+                        textCall = debugContext.split("\\*")[0] + "От"; //$NON-NLS-1$ //$NON-NLS-2$
+                        moduleRef = ComBridge.toString(
+                            ComBridge.invoke(irSession.codeEditor, "СсылкаСтрокиМодуля", null, false)); //$NON-NLS-1$
+                    }
+                }
+
+                String expression = exprText.startsWith(textCall)
+                    ? exprText
+                    : buildDebugExpression(textCall, exprText, moduleRef);
+                runDebugEvaluation(frame, expression, project, irSession);
+            }
+            catch (Exception e)
+            {
+                Global.log("DebugIRHandler.debugWatchExpression: " + e.getMessage()); //$NON-NLS-1$
+                toast("Отладить ИР", "Ошибка вызова ИР: " + e.getMessage(), 5_000); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        });
+    }
+
+    private static void runDebugEvaluation(
+        IBslStackFrame frame, String expression, IProject wsProject, IRSession irSession) throws Exception
+    {
+        boolean isThickClient = DebugSessionHelper.isThickClientDebug(wsProject);
+        long thickPid = 0;
+        if (isThickClient)
+            thickPid = evaluateThickClientOsPid(wsProject);
+        DebugSessionHelper.EvalResult evalResult = evaluateOnUiThread(frame, expression);
+        processEvalResult(irSession, evalResult, thickPid);
+    }
+
+    private static void processEvalResult(
+        IRSession irSession, DebugSessionHelper.EvalResult evalResult, long thickPid) throws Exception
+    {
+        if (thickPid > 0)
+            if (WinWindowActivator.waitForWindowTitle(thickPid, IR_TOOL_WINDOW_TITLE, IR_WINDOW_WAIT_MS))
+                WinWindowActivator.activateMainWindow(thickPid);
+        if (evalResult != null && evalResult.hasValue()
+            && evalResult.valueText.toLowerCase(Locale.ROOT).contains("открыть объект для отладки")) //$NON-NLS-1$
+        {
+            Object irClient = irSession.getModule("ирКлиент"); //$NON-NLS-1$
+            ComBridge.invoke(irClient, "ОтладитьОтложенныйОбъектЛкс", evalResult.valueText); //$NON-NLS-1$
+            irSession.showWindow();
+            return;
+        }
+        if (evalResult == null || !evalResult.hasValue())
+        {
+            toast("Отладить ИР",
+                "Не дождались снимка объекта. Либо повторите команду после его появления, "
+                    + "либо активируйте окно отлаживаемого приложения.", //$NON-NLS-1$
+                5_000);
+        }
     }
 
     private static void handleHierarchicalExpression(
@@ -120,7 +256,8 @@ public final class DebugIRHandler
             ComBridge.invoke(irCommon, "ТекстВВыражениеВстроенногоЯзыкаЛкс", exprText)); //$NON-NLS-1$
         String evalExpr = "ирОбщий.РасшифровкаИерархическогоЛогическогоВыраженияЛкс(" + wrapped + ")"; //$NON-NLS-1$ //$NON-NLS-2$
 
-        DebugSessionHelper.EvalResult evalResult = evaluateOnUiThread(wsProject, evalExpr);
+        IBslStackFrame frame = DebugSessionHelper.findSuspendedStackFrame(wsProject);
+        DebugSessionHelper.EvalResult evalResult = evaluateOnUiThread(frame, evalExpr);
         if (evalResult == null || !evalResult.hasValue())
             return;
 
@@ -130,6 +267,8 @@ public final class DebugIRHandler
 
     private static String buildDebugExpression(String textCall, String exprText, String moduleRef)
     {
+        if (moduleRef == null)
+            moduleRef = ""; //$NON-NLS-1$
         String commaSuffix = exprText.contains(",") ? ",," : ",,,"; //$NON-NLS-1$ //$NON-NLS-2$
         return textCall + "(" + exprText + commaSuffix + " " + REQUIRE_DEFERRED_DEBUG //$NON-NLS-1$ //$NON-NLS-2$
             + ",,,, \"" + moduleRef + "\")"; //$NON-NLS-1$ //$NON-NLS-2$
@@ -195,16 +334,19 @@ public final class DebugIRHandler
 
     private static DebugSessionHelper.EvalResult evaluateOnUiThread(IProject project, String expression)
     {
+        IBslStackFrame frame = DebugSessionHelper.findSuspendedStackFrame(project);
+        return evaluateOnUiThread(frame, expression);
+    }
+
+    private static DebugSessionHelper.EvalResult evaluateOnUiThread(IBslStackFrame frame, String expression)
+    {
         final DebugSessionHelper.EvalResult[] box = new DebugSessionHelper.EvalResult[1];
         Display display = Display.getDefault();
         if (display == null || display.isDisposed())
             return new DebugSessionHelper.EvalResult(null, null, "no display"); //$NON-NLS-1$
 
         display.syncExec(() ->
-        {
-            IBslStackFrame frame = DebugSessionHelper.findSuspendedStackFrame(project);
-            box[0] = DebugSessionHelper.evaluateExpression(frame, expression, EVAL_TIMEOUT_MS);
-        });
+            box[0] = DebugSessionHelper.evaluateExpression(frame, expression, EVAL_TIMEOUT_MS));
         return box[0];
     }
 
@@ -229,29 +371,63 @@ public final class DebugIRHandler
         return textSel.getText();
     }
 
+    private static String getWatchExpressionText(IWatchExpression watchExpr)
+    {
+        if (watchExpr instanceof IExpression expression)
+            return expression.getExpressionText();
+        return null;
+    }
+
+    private static BslXtextEditor getActiveBslEditor()
+    {
+        try
+        {
+            var workbench = PlatformUI.getWorkbench();
+            if (workbench == null)
+                return null;
+            var window = workbench.getActiveWorkbenchWindow();
+            if (window == null)
+                return null;
+            var page = window.getActivePage();
+            if (page == null)
+                return null;
+            IEditorPart editor = page.getActiveEditor();
+            if (editor instanceof BslXtextEditor bslEditor)
+                return bslEditor;
+            return null;
+        }
+        catch (Exception ignored)
+        {
+            return null;
+        }
+    }
+
+    static IProject getProjectFromStackFrame(IBslStackFrame frame)
+    {
+        if (frame == null)
+            return null;
+        IDebugTarget debugTarget = frame.getDebugTarget();
+        if (!(debugTarget instanceof IRuntimeDebugClientTarget target))
+            return null;
+        Optional<IApplication> app = target.getApplication();
+        if (!app.isPresent())
+            return null;
+        Object appProject = Global.call(app.get(), "getProject"); //$NON-NLS-1$
+        return appProject instanceof IProject ? (IProject) appProject : null;
+    }
+
     private static IProject getWorkspaceProject(BslXtextEditor editor)
     {
         IDtProject dt = getDtProjectFromBslEditor(editor);
         return dt != null ? dt.getWorkspaceProject() : null;
     }
 
-    private static IDtProject getDtProjectFromBslEditor(BslXtextEditor editor)
+    static IDtProject getDtProjectFromWorkspaceProject(IProject iProject)
     {
-        Object p = Global.getField(editor, "project"); //$NON-NLS-1$
-        if (p instanceof IDtProject)
-            return (IDtProject) p;
-
+        if (iProject == null)
+            return null;
         try
         {
-            IEditorInput input = editor.getEditorInput();
-            if (input == null)
-                return null;
-
-            IFile file = input.getAdapter(IFile.class);
-            if (file == null)
-                return null;
-
-            IProject iProject = file.getProject();
             IV8ProjectManager projectManager =
                 (IV8ProjectManager) Global.getServiceByClass(IV8ProjectManager.class);
             if (projectManager == null)
@@ -271,6 +447,31 @@ public final class DebugIRHandler
                         return candidate;
                 }
             }
+        }
+        catch (Exception e)
+        {
+            Global.log("DebugIRHandler.getDtProjectFromWorkspaceProject: " + e); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    static IDtProject getDtProjectFromBslEditor(BslXtextEditor editor)
+    {
+        Object p = Global.getField(editor, "project"); //$NON-NLS-1$
+        if (p instanceof IDtProject)
+            return (IDtProject) p;
+
+        try
+        {
+            IEditorInput input = editor.getEditorInput();
+            if (input == null)
+                return null;
+
+            IFile file = input.getAdapter(IFile.class);
+            if (file == null)
+                return null;
+
+            return getDtProjectFromWorkspaceProject(file.getProject());
         }
         catch (Exception e)
         {
@@ -302,5 +503,17 @@ public final class DebugIRHandler
         Display display = Display.getDefault();
         if (display != null && !display.isDisposed())
             display.asyncExec(() -> ToastNotification.show(title, message, durationMs));
+    }
+
+    private static String safeVariableName(IBslVariable variable)
+    {
+        try
+        {
+            return variable.getName();
+        }
+        catch (Exception e)
+        {
+            return "?"; //$NON-NLS-1$
+        }
     }
 }

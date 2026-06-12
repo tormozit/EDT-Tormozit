@@ -54,6 +54,12 @@ public class Activator extends AbstractUIPlugin
             ComfortSettings.DEFAULT_DEBUG_LOG);
         ContentAssistManager.init(settings);
         ComfortSettings.init(PLUGIN_ID);
+        getPreferenceStore().setDefault(
+            ComfortSettings.PREF_DEBUG_INSPECTOR_AUTO_CLOSE,
+            ComfortSettings.DEFAULT_DEBUG_INSPECTOR_AUTO_CLOSE);
+        getPreferenceStore().setDefault(
+            ComfortSettings.PREF_DEBUG_INSPECTOR_HOVER_UPDATE,
+            ComfortSettings.DEFAULT_DEBUG_INSPECTOR_HOVER_UPDATE);
 
         // Подключаем персистентное хранилище последних мест.
         RecentPlaces.getInstance().init(PLUGIN_ID);

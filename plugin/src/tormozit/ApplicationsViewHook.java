@@ -78,6 +78,9 @@ public class ApplicationsViewHook implements IStartup
     // Описание колонок — единственное место для изменения состава и порядка
     // =======================================================================
 
+    /** Начальная ширина колонок с флажками (одинаковая для обеих). */
+    private static final int CHECKBOX_COLUMN_WIDTH = 140;
+
     /**
      * Порядок констант = порядок колонок = индекс ({@code ordinal()}).
      * Вставить/убрать/переставить колонку: только этот enum.
@@ -88,7 +91,10 @@ public class ApplicationsViewHook implements IStartup
         PLATFORM("Версия платформы", "Версия платформы для взаимодействия EDT с базой",       80, true,  SWT.NONE  ),
         SSH     ("Конфигуратор SSH",  "Дата сеанса конфигуратора SSH. Клик — отключить.",    165, true,  SWT.NONE  ),
         IR      ("Приложение ИР",    "Версия платформы и дата сеанса ИР. Клик — отключить.", 165, true,  SWT.NONE  ),
-        AUTO    ("Авто",             "Автоматически подключать приложение ИР",                 45, false, SWT.CENTER);
+        AUTO    ("Авто ИР",             "Автоматически подключать приложение ИР",                 CHECKBOX_COLUMN_WIDTH, true, SWT.CENTER),
+        DYN_AUTO("Динамическое обновление",
+                 "Автоматически нажимать «Обновить динамически», если к базе подключено приложение ИР",
+                 CHECKBOX_COLUMN_WIDTH, true, SWT.CENTER);
 
         final String  title, tooltip;
         final int     width, style;
@@ -223,12 +229,20 @@ public class ApplicationsViewHook implements IStartup
         {
             TreeViewerColumn tvc = new TreeViewerColumn((TreeViewer) viewer, col.style);
             tvc.getColumn().setText(col.title);
-            if (col.tooltip != null) tvc.getColumn().setToolTipText(col.tooltip);
+            if (col.tooltip != null)
+            {
+                String tooltip = col == Column.DYN_AUTO
+                    ? col.tooltip + Global.pluginSignForTooltip()
+                    : col.tooltip;
+                tvc.getColumn().setToolTipText(tooltip);
+            }
             tvc.getColumn().setWidth(col.width);
             tvc.getColumn().setResizable(col.resizable);
             tvc.setLabelProvider(makeLabelProvider(col, origProvider));
             if (col == Column.AUTO)
                 tvc.setEditingSupport(makeAutoEditingSupport(viewer));
+            else if (col == Column.DYN_AUTO)
+                tvc.setEditingSupport(makeDynamicAutoEditingSupport(viewer));
         }
 
         tree.setHeaderVisible(true);
@@ -315,6 +329,17 @@ public class ApplicationsViewHook implements IStartup
                     }
                 };
 
+            case DYN_AUTO:
+                return new CellLabelProvider()
+                {
+                    @Override public void update(ViewerCell cell)
+                    {
+                        boolean on = IRApplication.getInstance()
+                            .isDynamicAutoUpdate(cell.getElement());
+                        cell.setText(on ? "\u2611" : "\u2610"); //$NON-NLS-1$ //$NON-NLS-2$
+                    }
+                };
+
             default:
                 return new CellLabelProvider()
                 {
@@ -336,6 +361,24 @@ public class ApplicationsViewHook implements IStartup
             @Override protected void setValue(Object e, Object v)
             {
                 IRApplication.getInstance().setAutoConnect(e, (Boolean) v);
+                viewer.update(e, null);
+            }
+        };
+    }
+
+    private EditingSupport makeDynamicAutoEditingSupport(ColumnViewer viewer)
+    {
+        return new EditingSupport(viewer)
+        {
+            @Override protected boolean canEdit(Object e)  { return true; }
+            @Override protected Object  getValue(Object e) { return IRApplication.getInstance().isDynamicAutoUpdate(e); }
+            @Override protected org.eclipse.jface.viewers.CellEditor getCellEditor(Object e)
+            {
+                return new CheckboxCellEditor(((TreeViewer) viewer).getTree());
+            }
+            @Override protected void setValue(Object e, Object v)
+            {
+                IRApplication.getInstance().setDynamicAutoUpdate(e, (Boolean) v);
                 viewer.update(e, null);
             }
         };
@@ -453,6 +496,18 @@ public class ApplicationsViewHook implements IStartup
                 IRApplication ir = IRApplication.getInstance();
                 InfobaseReference ib = getInfobase(element);
                 if (ir.isConnected(ib)) ir.disconnect(ib);
+                break;
+            }
+            case AUTO:
+            {
+                IRApplication ir = IRApplication.getInstance();
+                ir.setAutoConnect(element, !ir.isAutoConnect(element));
+                break;
+            }
+            case DYN_AUTO:
+            {
+                IRApplication ir = IRApplication.getInstance();
+                ir.setDynamicAutoUpdate(element, !ir.isDynamicAutoUpdate(element));
                 break;
             }
             default: return;

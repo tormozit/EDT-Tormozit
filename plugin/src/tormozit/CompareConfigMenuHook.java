@@ -80,6 +80,8 @@ public class CompareConfigMenuHook implements IStartup
 
             ContentAssistManager mgr = ContentAssistManager.getInstance();
             if (mgr != null) mgr.start();
+
+            DebugInspectorHook.ensureInstalled();
         });
     }
 

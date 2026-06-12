@@ -14,6 +14,7 @@ import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.FontData;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
+import org.eclipse.swt.graphics.TextLayout;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.*;
@@ -35,6 +36,9 @@ public final class ToastNotification
 
     /** Единая дельта размера шрифта относительно системного (pt). 0 = без изменений. */
     private static final int FONT_SIZE_DELTA = 1;
+
+    private static final int MAX_MESSAGE_LINES = 3;
+    private static final String ELLIPSIS = "..."; //$NON-NLS-1$
 
     // =======================================================================
     // РЕЕСТР АКТИВНЫХ ТОСТОВ (читается/пишется только из display-потока)
@@ -164,17 +168,18 @@ public final class ToastNotification
                 { if (!shell.isDisposed()) shell.dispose(); });
             }
 
-            // --- Сообщение ---
+            // --- Сообщение (в тосте — не более MAX_MESSAGE_LINES строк) ---
             if (message != null && !message.isEmpty())
             {
                 Label msgLbl = new Label(shell, SWT.WRAP);
                 GridData gd  = new GridData(SWT.FILL, SWT.TOP, true, false);
-                gd.widthHint = WIDTH - 2 * PADDING;
+                int textWidth = WIDTH - 2 * PADDING;
+                gd.widthHint = textWidth;
                 msgLbl.setLayoutData(gd);
-                msgLbl.setText(message);
                 msgLbl.setBackground(bgColor);
                 msgLbl.setForeground(fgColor);
                 msgLbl.setFont(makeRegularFont(msgLbl, display));
+                msgLbl.setText(truncateToMaxLines(message, msgLbl.getFont(), textWidth, display));
                 msgLbl.addListener(SWT.MouseDown, clickListener);
             }
 
@@ -375,6 +380,52 @@ public final class ToastNotification
             candidateTop = clientBottom - toastHeight;
 
         return candidateTop;
+    }
+
+    // =======================================================================
+    // ОБРЕЗКА ТЕКСТА СООБЩЕНИЯ
+    // =======================================================================
+
+    private static String truncateToMaxLines(String text, Font font, int width, Display display)
+    {
+        if (text == null || text.isEmpty())
+            return text;
+
+        TextLayout layout = new TextLayout(display);
+        try
+        {
+            layout.setFont(font);
+            layout.setText(text);
+            layout.setWidth(width);
+
+            if (layout.getLineCount() <= MAX_MESSAGE_LINES)
+                return text;
+
+            int lo = 0;
+            int hi = text.length();
+            String best = ELLIPSIS;
+
+            while (lo <= hi)
+            {
+                int mid = (lo + hi) / 2;
+                String candidate = text.substring(0, mid).stripTrailing() + ELLIPSIS;
+                layout.setText(candidate);
+                if (layout.getLineCount() <= MAX_MESSAGE_LINES)
+                {
+                    best = candidate;
+                    lo = mid + 1;
+                }
+                else
+                {
+                    hi = mid - 1;
+                }
+            }
+            return best;
+        }
+        finally
+        {
+            layout.dispose();
+        }
     }
 
     // =======================================================================

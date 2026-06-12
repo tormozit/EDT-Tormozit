@@ -10,6 +10,8 @@
     <startup class="tormozit.MoxelEditorHook"/>
     <startup class="tormozit.BSLEditorMenuHook"/> 
     <startup class="tormozit.TextEditorRightClickCaretHook"/>
+    <startup class="tormozit.TextEditorMenuHook"/>
+    <startup class="tormozit.QueryTextEditDialogHook"/>
     <startup class="tormozit.FormEditorHook"/>
     <startup class="tormozit.SmartOutlineHook"/> 
     <startup class="tormozit.NavigatorFilterHook"/>
@@ -21,6 +23,9 @@
     <startup class="tormozit.PropertySheetHook"/>
     <startup class="tormozit.ChoiceParametersHook"/>
     <startup class="tormozit.PredefinedSelectionDialogHook"/>
+    <startup class="tormozit.DebugViewsMenuHook"/>
+    <startup class="tormozit.DebugInspectorHook"/>
+    <startup class="tormozit.InfobaseSyncQuestionDialogHook"/>
   </extension>
 
   <extension point="org.eclipse.ui.contexts">
@@ -61,6 +66,12 @@
           schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
           sequence="M1+3">
     </key>
+    <key
+          commandId="tormozit.PasteWithCompare"
+          contextId="org.eclipse.ui.textEditorScope"
+          schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+          sequence="M1+M3+V">
+    </key>
   </extension>
 
   <extension point="org.eclipse.ui.commands">
@@ -98,6 +109,11 @@
         name="Показать в проводнике"
         categoryId="tormozit.commands.global"
         description="Открыть проводник ОС на файле или папке выбранного элемента навигатора (Комфорт)"/>
+    <command
+        id="tormozit.PasteWithCompare"
+        name="Вставить со сравнением"
+        categoryId="tormozit.commands.global"
+        description="Сравнить выделение с буфером и вставить отредактированный текст (Комфорт)"/>
   </extension>
 
   <extension point="org.eclipse.ui.handlers">
@@ -143,6 +159,10 @@
           <equals value="com._1c.g5.v8.dt.ui2.navigator"/>
         </with>
       </activeWhen>
+    </handler>
+    <handler
+        class="tormozit.ExecutableExtensionFactory:tormozit.PasteWithCompareHandler"
+        commandId="tormozit.PasteWithCompare">
     </handler>
   </extension>
 

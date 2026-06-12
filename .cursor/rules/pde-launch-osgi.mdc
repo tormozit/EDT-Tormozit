@@ -1,0 +1,47 @@
+---
+description: PDE Eclipse Application — OSGi-профиль и launch; не ломать основной конфиг (инцидент 2026-06)
+alwaysApply: true
+---
+
+# PDE launch и OSGi-профиль (не повторять инцидент)
+
+В **июне 2026** эксперименты с вторым launch-конфигом **сломали основной** `Eclipse Application`: EDT перестал стартовать из PDE с каскадом `BundleException` (корень — `org.eclipse.jdt.core.compiler.batch`).
+
+## Симптом
+
+- В логе `…/pde.core/Eclipse Application/*.log`: нерешённые зависимости Eclipse JDT / e4.ui / EDT.
+- `bundles.info` **~249 КБ** вместо эталона **262296 байт** (пропадает ~69 бандлов, в т.ч. `org.eclipse.jdt.core.compiler.batch`).
+
+## Причины (все важны)
+
+1. **`clearConfig=true`** или **`generateProfile=true`** в launch → PDE **пересобирает** OSGi при запуске и пишет урезанный `bundles.info`.
+2. Второй launch с **общим** `configLocation` (`Eclipse Application`) → пересборка бьёт **основной** профиль.
+3. Shared `.launch` в репозитории (`launch/*.launch`) → Eclipse при открытии Run Configurations **перезаписывает** файл (`selected_workspace_bundles` только `tormozit.comfort`).
+4. Восстановление из backup **без** правки launch → при следующем Run профиль снова затирается.
+5. `attrib +R` на **рабочих** копиях в workspace → «Отказано в доступе» при записи `dev.properties` / `bundles.info`.
+
+## Запрещено агенту
+
+- Менять **основной** `EDT-plugin-WS/.metadata/.../Eclipse Application.launch` без явной просьбы пользователя.
+- Создавать/импортировать второй PDE launch с тем же `configLocation`, что у основного.
+- Ставить в любом launch `clearConfig=true` или `generateProfile=true` для «экспериментов».
+- Класть активные `.launch` в `launch/` репозитория для автоподхвата Eclipse (только **`.bak`** в `launch/backup/`).
+- Ставить `+R` на файлы в `EDT-plugin-WS/.metadata/…` (допустимо **только** на эталон в `launch/backup/`).
+- «Восстанавливать» только `bundles.info`, не проверяя launch и размер файла после копирования.
+
+## Безопасно
+
+- Эталон и восстановление: `launch/backup/`, скрипт `launch/restore-main.ps1`, `launch/README.txt`.
+- Перед restore: **закрыть** `eclipse.exe`; после restore проверить `bundles.info` = **262296** байт.
+- Рабочий launch (основной): `clearConfig=false`, `generateProfile=false`, `askclear=false`, `pde.generated.config=true`.
+- Запуск без JDWP: временно убрать `-agentlib:jdwp` в Arguments **основного** launch — без второго OSGi-профиля.
+- Если нужен отдельный launch: **другой** `configLocation`, `clearConfig=false`, `generateProfile=false`, **никогда** не shared из репозитория с `clearConfig=true`.
+
+## Диагностика перед правками launch/OSGi
+
+```text
+bundles.info: 262296 OK | 249127 сломан
+config.ini:   должен содержать osgi.splashPath (если есть в backup)
+```
+
+При поломке — `powershell -File "C:\VC\EDT.Comfort\launch\restore-main.ps1"`, затем перезапуск PDE.

@@ -2,6 +2,9 @@ package tormozit;
 
 import java.util.regex.Pattern;
 
+import org.eclipse.swt.widgets.Shell;
+
+import com.sun.jna.Pointer;
 import com.sun.jna.platform.win32.User32;
 import com.sun.jna.platform.win32.WinDef.DWORD;
 import com.sun.jna.platform.win32.WinDef.HWND;
@@ -17,11 +20,101 @@ public final class WinWindowActivator
     private static final boolean WINDOWS =
             System.getProperty("os.name", "").toLowerCase().contains("win"); //$NON-NLS-1$ //$NON-NLS-2$
 
+    /** Win32: {@code (HWND)-1} */
+    private static final HWND HWND_TOPMOST = new HWND(Pointer.createConstant(-1));
+    /** Win32: {@code (HWND)-2} */
+    private static final HWND HWND_NOTOPMOST = new HWND(Pointer.createConstant(-2));
+    private static final int WS_EX_TOPMOST = 0x00000008;
+
     private WinWindowActivator() {}
 
     public static boolean isWindows()
     {
         return WINDOWS;
+    }
+
+    /**
+     * Закрепляет SWT-shell поверх всех окон ОС (HWND_TOPMOST) или снимает закрепление.
+     * На не-Windows платформах не выполняет действий.
+     */
+    public static void setShellAlwaysOnTop(Shell shell, boolean alwaysOnTop)
+    {
+        if (!WINDOWS || shell == null || shell.isDisposed())
+            return;
+
+        HWND hwnd = hwndFromShell(shell);
+        if (hwnd == null)
+            return;
+
+        HWND insertAfter = alwaysOnTop ? HWND_TOPMOST : HWND_NOTOPMOST;
+        User32.INSTANCE.SetWindowPos(hwnd, insertAfter, 0, 0, 0, 0,
+            WinUser.SWP_NOMOVE | WinUser.SWP_NOSIZE | WinUser.SWP_NOACTIVATE);
+    }
+
+    /**
+     * Снимает WS_EX_TOPMOST / HWND_TOPMOST у shell (hover с SWT.ON_TOP).
+     * На не-Windows не выполняет действий.
+     */
+    public static void clearShellTopmost(Shell shell)
+    {
+        if (!WINDOWS || shell == null || shell.isDisposed())
+            return;
+        HWND hwnd = hwndFromShell(shell);
+        if (hwnd != null)
+            clearTopmostStyle(hwnd);
+    }
+
+    /**
+     * Держит popup поверх окна-владельца внутри приложения (Win32 owner), без HWND_TOPMOST.
+     * Другие программы могут перекрыть инспектор; окна EDT над выбранным workbench-shell — нет.
+     */
+    public static void setShellAboveOwner(Shell shell, Shell ownerShell, boolean aboveOwner)
+    {
+        if (!WINDOWS || shell == null || shell.isDisposed())
+            return;
+
+        HWND hwnd = hwndFromShell(shell);
+        if (hwnd == null)
+            return;
+
+        clearTopmostStyle(hwnd);
+
+        HWND ownerHwnd = null;
+        if (aboveOwner && ownerShell != null && !ownerShell.isDisposed())
+            ownerHwnd = hwndFromShell(ownerShell);
+
+        Pointer ownerPtr = ownerHwnd != null ? ownerHwnd.getPointer() : Pointer.NULL;
+        User32.INSTANCE.SetWindowLongPtr(hwnd, WinUser.GWL_HWNDPARENT, ownerPtr);
+
+        if (aboveOwner && ownerHwnd != null)
+        {
+            User32.INSTANCE.SetWindowPos(hwnd, new HWND(), 0, 0, 0, 0,
+                WinUser.SWP_NOMOVE | WinUser.SWP_NOSIZE | WinUser.SWP_NOACTIVATE);
+        }
+    }
+
+    private static void clearTopmostStyle(HWND hwnd)
+    {
+        int exStyle = User32.INSTANCE.GetWindowLong(hwnd, WinUser.GWL_EXSTYLE);
+        if ((exStyle & WS_EX_TOPMOST) != 0)
+        {
+            User32.INSTANCE.SetWindowLong(hwnd, WinUser.GWL_EXSTYLE, exStyle & ~WS_EX_TOPMOST);
+        }
+        User32.INSTANCE.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+            WinUser.SWP_NOMOVE | WinUser.SWP_NOSIZE | WinUser.SWP_NOACTIVATE);
+    }
+
+    private static HWND hwndFromShell(Shell shell)
+    {
+        if (shell == null || shell.isDisposed())
+            return null;
+        Object handle = Global.getField(shell, "handle"); //$NON-NLS-1$
+        if (!(handle instanceof Number number))
+            return null;
+        long hwndVal = number.longValue();
+        if (hwndVal == 0)
+            return null;
+        return new HWND(Pointer.createConstant(hwndVal));
     }
 
     /**

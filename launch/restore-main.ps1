@@ -1,0 +1,49 @@
+# Восстановление Eclipse Application. Закройте Eclipse PDE!
+$ErrorActionPreference = "Stop"
+
+$eclipse = Get-Process -Name "eclipse*" -ErrorAction SilentlyContinue
+if ($eclipse) {
+    Write-Host "Останавливаю eclipse (PID $($eclipse.Id -join ','))..."
+    $eclipse | Stop-Process -Force
+    Start-Sleep -Seconds 2
+}
+
+$here = $PSScriptRoot
+$wsOsgi = "C:\VC\EDT-plugin-WS\.metadata\.plugins\org.eclipse.pde.core\Eclipse Application"
+$wsLaunch = "C:\VC\EDT-plugin-WS\.metadata\.plugins\org.eclipse.debug.core\.launches\Eclipse Application.launch"
+$bakOsgi = Join-Path $here "backup\osgi"
+$bakLaunch = Join-Path $here "backup\Eclipse Application.launch.bak"
+$bundlesSrc = "$bakOsgi\org.eclipse.equinox.simpleconfigurator\bundles.info"
+$bundlesDst = "$wsOsgi\org.eclipse.equinox.simpleconfigurator\bundles.info"
+
+cmd /c "attrib -R `"$bakOsgi\*`" /S /D" | Out-Null
+cmd /c "attrib -R `"$wsOsgi\*`" /S /D" | Out-Null
+
+New-Item -ItemType Directory -Force -Path "$wsOsgi\org.eclipse.equinox.simpleconfigurator" | Out-Null
+Copy-Item "$bakOsgi\config.ini" "$wsOsgi\config.ini" -Force
+Copy-Item "$bakOsgi\dev.properties" "$wsOsgi\dev.properties" -Force
+Copy-Item $bundlesSrc $bundlesDst -Force
+
+$expected = (Get-Item $bundlesSrc).Length
+$actual = (Get-Item $bundlesDst).Length
+if ($actual -ne $expected) {
+    throw "bundles.info: $actual байт, нужно $expected"
+}
+
+Copy-Item $bakLaunch $wsLaunch -Force
+$launch = Get-Content $wsLaunch -Raw
+$launch = $launch -replace 'key="clearConfig" value="true"', 'key="clearConfig" value="false"'
+$launch = $launch -replace 'key="askclear" value="true"', 'key="askclear" value="false"'
+$launch = $launch -replace 'key="generateProfile" value="true"', 'key="generateProfile" value="false"'
+$launch = $launch -replace 'key="pde.generated.config" value="false"', 'key="pde.generated.config" value="true"'
+Set-Content -Path $wsLaunch -Value $launch -NoNewline -Encoding UTF8
+cmd /c "attrib -R `"$wsLaunch`"" | Out-Null
+
+attrib +R "$bundlesDst"
+attrib +R "$wsOsgi\config.ini"
+
+Remove-Item "C:\VC\EDT-plugin-WS\.metadata\.plugins\org.eclipse.debug.core\.launches\Comfort EDT Experimental.launch" -Force -ErrorAction SilentlyContinue
+Remove-Item "C:\VC\EDT-plugin-WS\.metadata\.plugins\org.eclipse.pde.core\Comfort EDT Experimental" -Recurse -Force -ErrorAction SilentlyContinue
+
+Write-Host "OK: bundles.info $actual bytes; clearConfig=false; generateProfile=false"
+Write-Host "bundles.info и config.ini — read-only. Запустите PDE, Eclipse Application."

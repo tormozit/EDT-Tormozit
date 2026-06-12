@@ -9,6 +9,7 @@ import java.nio.charset.Charset;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
@@ -27,6 +28,7 @@ import java.util.concurrent.Future;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
+import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IAdaptable;
 import org.eclipse.core.runtime.IStatus;
@@ -123,6 +125,7 @@ public final class IRApplication
      *  Пусто = ещё не определён или не найден. */
     static private volatile String               portableIrFolder   = ""; //$NON-NLS-1$
     private final Map<String, Boolean> autoConnectMap = new ConcurrentHashMap<>();
+    private final Map<String, Boolean> dynamicAutoUpdateMap = new ConcurrentHashMap<>();
     public void addChangeListener(Runnable l)    { if (l != null) changeListeners.add(l); }
     public void removeChangeListener(Runnable l) { changeListeners.remove(l); }
     public boolean isConnected(Object infobase)
@@ -167,16 +170,148 @@ public final class IRApplication
 
     public boolean isAutoConnect(Object element)
     {
-        InfobaseReference infobase = ApplicationsViewHook.getInfobaseFromApplication(element);
-        return autoConnectMap.getOrDefault(sessionKey(infobase), false);
+        return isAutoConnect(ApplicationsViewHook.getInfobaseFromApplication(element));
+    }
+
+    public boolean isAutoConnect(InfobaseReference infobase)
+    {
+        return getInfobaseBooleanSetting(infobase, autoConnectMap,
+            ComfortSettings.DEFAULT_IR_AUTO_CONNECT, ComfortSettings::isAutoConnect);
     }
 
     public void setAutoConnect(Object element, boolean auto)
     {
-        InfobaseReference infobase = ApplicationsViewHook.getInfobaseFromApplication(element);
-        autoConnectMap.put(sessionKey(infobase), auto);
+        setAutoConnect(ApplicationsViewHook.getInfobaseFromApplication(element), auto);
     }
-    
+
+    public void setAutoConnect(InfobaseReference infobase, boolean auto)
+    {
+        setInfobaseBooleanSetting(infobase, autoConnectMap, auto, ComfortSettings::setAutoConnect);
+    }
+
+    public boolean isDynamicAutoUpdate(Object element)
+    {
+        return isDynamicAutoUpdate(ApplicationsViewHook.getInfobaseFromApplication(element));
+    }
+
+    public boolean isDynamicAutoUpdate(InfobaseReference infobase)
+    {
+        return getInfobaseBooleanSetting(infobase, dynamicAutoUpdateMap,
+            ComfortSettings.DEFAULT_IR_DYNAMIC_AUTO_UPDATE, ComfortSettings::isDynamicAutoUpdate);
+    }
+
+    public void setDynamicAutoUpdate(Object element, boolean enabled)
+    {
+        setDynamicAutoUpdate(ApplicationsViewHook.getInfobaseFromApplication(element), enabled);
+    }
+
+    public void setDynamicAutoUpdate(InfobaseReference infobase, boolean enabled)
+    {
+        setInfobaseBooleanSetting(infobase, dynamicAutoUpdateMap, enabled,
+            ComfortSettings::setDynamicAutoUpdate);
+    }
+
+    private static boolean getInfobaseBooleanSetting(
+        InfobaseReference infobase,
+        Map<String, Boolean> cache,
+        boolean defaultValue,
+        java.util.function.Function<String, Boolean> readByUuid)
+    {
+        if (infobase == null)
+            return defaultValue;
+        String key = sessionKey(infobase);
+        if (cache.containsKey(key))
+            return cache.get(key);
+        String uuid = extractInfobaseUuid(infobase);
+        if (!uuid.isEmpty())
+            return readByUuid.apply(uuid);
+        return defaultValue;
+    }
+
+    private static void setInfobaseBooleanSetting(
+        InfobaseReference infobase,
+        Map<String, Boolean> cache,
+        boolean value,
+        java.util.function.BiConsumer<String, Boolean> writeByUuid)
+    {
+        if (infobase == null)
+            return;
+        String key = sessionKey(infobase);
+        cache.put(key, value);
+        String uuid = extractInfobaseUuid(infobase);
+        if (!uuid.isEmpty())
+            writeByUuid.accept(uuid, value);
+        notifyListeners();
+    }
+
+    /** Инфобазы с активной IR-сессией в состоянии CONNECTED. */
+    public List<InfobaseReference> getConnectedInfobases()
+    {
+        List<InfobaseReference> result = new ArrayList<>();
+        for (IRSession s : sessions.values())
+            if (s.state == State.CONNECTED && s.infobase != null)
+                result.add(s.infobase);
+        return result;
+    }
+
+    /**
+     * Переподключает приложение ИР к указанной инфобазе: отключает старую сессию
+     * и запускает фоновое подключение новой.
+     */
+    public void reconnectInfobase(InfobaseReference infobase)
+    {
+        if (infobase == null)
+        {
+            ToastNotification.show(toastTitle(), "Не указана инфобаза для переподключения ИР", 8_000); //$NON-NLS-1$
+            return;
+        }
+        IInfobaseApplication application = findApplicationForInfobase(infobase);
+        if (application == null)
+        {
+            ToastNotification.show(toastTitle(),
+                "Не найдено приложение EDT для переподключения ИР", 8_000); //$NON-NLS-1$
+            return;
+        }
+        connectInfobaseApplication(application);
+    }
+
+    private IInfobaseApplication findApplicationForInfobase(InfobaseReference infobase)
+    {
+        String targetKey = sessionKey(infobase);
+        BundleContext ctx = Global.ourContext();
+        if (ctx == null)
+            return null;
+        ServiceReference<IApplicationManager> ref = ctx.getServiceReference(IApplicationManager.class);
+        if (ref == null)
+            return null;
+        IApplicationManager mgr = ctx.getService(ref);
+        try
+        {
+            for (IProject project : ResourcesPlugin.getWorkspace().getRoot().getProjects())
+            {
+                if (!project.isOpen())
+                    continue;
+                for (IApplication app : mgr.getApplications(project))
+                {
+                    if (!(app instanceof IInfobaseApplication ibApp))
+                        continue;
+                    InfobaseReference ib = ApplicationsViewHook.getInfobaseFromApplication(ibApp);
+                    if (ib != null && targetKey.equals(sessionKey(ib)))
+                        return ibApp;
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            Global.log("findApplicationForInfobase: " + e.getMessage()); //$NON-NLS-1$
+        }
+        finally
+        {
+            ctx.ungetService(ref);
+        }
+        return null;
+    }
+
     public void connectInfobaseApplication(IInfobaseApplication element)
     {
         InfobaseReference infobase = ApplicationsViewHook.getInfobaseFromApplication(element);
@@ -222,7 +357,7 @@ public final class IRApplication
     {
         String appLabel = DesignerSessionPoolAccessor.nameOf(infobase);
         Shell connectingToast = ToastNotification.show(toastTitle(),
-            "Подключается приложение ИР \"" + appLabel + "\". Закрыть командой \"Отключить приложение ИР\"", 60_000);
+            "Подключается приложение ИР \"" + appLabel + "\". Закрыть его можно в списке приложений", 60_000);
         try
         {
             doConnectInternal(project, infobase);
@@ -877,8 +1012,13 @@ public final class IRApplication
 
     static String extractInfobaseUuid(Object infobase)
     {
+        if (infobase == null)
+            return ""; //$NON-NLS-1$
         Object uuid = Global.call(infobase, "getUuid"); //$NON-NLS-1$
-        if (uuid instanceof String && !((String) uuid).isEmpty()) return (String) uuid;
+        if (uuid instanceof String s && !s.isEmpty())
+            return s;
+        if (uuid instanceof java.util.UUID u)
+            return u.toString();
 
         java.util.regex.Matcher m = DesignerSessionPoolAccessor.UUID_PATTERN
             .matcher(infobase.toString());

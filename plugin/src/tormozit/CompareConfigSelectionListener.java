@@ -16,7 +16,6 @@ import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.IViewPart;
 import org.eclipse.ui.navigator.CommonNavigator;
-import org.eclipse.jdt.annotation.Nullable;
 
 import com._1c.g5.v8.dt.compare.core.IComparisonSession;
 import com._1c.g5.v8.dt.compare.model.ComparisonSide;
@@ -107,7 +106,7 @@ public class CompareConfigSelectionListener implements ISelectionChangedListener
         return result instanceof Boolean && (Boolean) result;
     }
     
-    public EObject resolveEObject(ISelection selection, @Nullable ComparisonSide side, boolean allowNearestParent)
+    public EObject resolveEObject(ISelection selection, ComparisonSide side, boolean allowNearestParent)
     {
         if (!(selection instanceof IStructuredSelection))
             return null;

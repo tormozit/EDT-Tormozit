@@ -1,0 +1,726 @@
+package tormozit;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import org.eclipse.jface.action.Action;
+import org.eclipse.jface.action.IAction;
+import org.eclipse.jface.dialogs.InputDialog;
+import org.eclipse.jface.viewers.TreePath;
+import org.eclipse.jface.viewers.TreeSelection;
+import org.eclipse.swt.SWT;
+import org.eclipse.swt.custom.BusyIndicator;
+import org.eclipse.swt.dnd.Clipboard;
+import org.eclipse.swt.dnd.TextTransfer;
+import org.eclipse.swt.dnd.Transfer;
+import org.eclipse.swt.events.MouseAdapter;
+import org.eclipse.swt.events.MouseEvent;
+import org.eclipse.swt.graphics.Color;
+import org.eclipse.swt.graphics.Device;
+import org.eclipse.swt.graphics.Point;
+import org.eclipse.swt.graphics.RGB;
+import org.eclipse.swt.graphics.Rectangle;
+import org.eclipse.swt.widgets.Control;
+import org.eclipse.swt.widgets.Display;
+import org.eclipse.swt.widgets.Event;
+import org.eclipse.swt.widgets.Listener;
+import org.eclipse.swt.widgets.Shell;
+import org.eclipse.swt.widgets.Tree;
+import org.eclipse.swt.widgets.TreeItem;
+
+/**
+ * Улучшения дерева инспектора отладки: выбор строки по клику в любой колонке,
+ * подсветка активной ячейки, копирование и поиск по всем колонкам.
+ */
+final class DebugInspectorTreeEnhancement
+{
+    private static final String ENHANCED_KEY = "tormozit.debugInspectorTreeEnhanced"; //$NON-NLS-1$
+    private static final String COPY_HOOKED_KEY = "tormozit.debugInspectorCopyHooked"; //$NON-NLS-1$
+    private static final String COPY_ACTION_SUFFIX = ".VirtualCopyToClipboardAction"; //$NON-NLS-1$
+    private static final String COLUMN_MARKER_RU = "\u0424\u0430\u043a\u0442\u0438\u0447\u0435\u0441\u043a\u0438\u0439 \u0442\u0438\u043f"; //$NON-NLS-1$
+    private static final String COLUMN_MARKER_EN = "Actual type"; //$NON-NLS-1$
+
+    private final Tree tree;
+    private final Object viewer;
+    private final Object dialog;
+
+    private TreeItem selectedItem;
+    private int activeColumn;
+    private String findText = ""; //$NON-NLS-1$
+    private int findGeneration;
+
+    private Listener eraseItemListener;
+    private Listener paintItemListener;
+    private Listener focusListener;
+    private Listener selectionListener;
+    private Listener keyFilter;
+    private Listener treeKeyListener;
+    private MouseAdapter mouseListener;
+    private Color ownedRowBg;
+    private Color ownedActiveCellBg;
+
+    private DebugInspectorTreeEnhancement(Tree tree, Object viewer, Object dialog)
+    {
+        this.tree = tree;
+        this.viewer = viewer;
+        this.dialog = dialog;
+    }
+
+    boolean isAttached()
+    {
+        return tree != null && !tree.isDisposed() && tree.getData(ENHANCED_KEY) == this;
+    }
+
+    static DebugInspectorTreeEnhancement install(Object dialog, Shell shell)
+    {
+        Tree tree = resolveInspectorTree(dialog, shell);
+        if (tree == null || tree.isDisposed())
+        {
+            DebugInspectorDebug.step("tree", "no tree dialog=" + DebugInspectorDebug.cn(dialog)); //$NON-NLS-1$ //$NON-NLS-2$
+            return null;
+        }
+        if (tree.getData(ENHANCED_KEY) != null)
+            return (DebugInspectorTreeEnhancement) tree.getData(ENHANCED_KEY);
+
+        Object viewer = resolveViewer(dialog);
+        DebugInspectorTreeEnhancement enhancement = new DebugInspectorTreeEnhancement(tree, viewer, dialog);
+        if (!enhancement.installHooks())
+        {
+            DebugInspectorDebug.step("tree", "hooks failed columns=" + tree.getColumnCount()); //$NON-NLS-1$ //$NON-NLS-2$
+            return null;
+        }
+
+        enhancement.scheduleCopyActionHook();
+        tree.setData(ENHANCED_KEY, enhancement);
+        tree.addDisposeListener(e -> enhancement.dispose());
+        DebugInspectorDebug.step("tree", "OK columns=" + tree.getColumnCount() //$NON-NLS-1$ //$NON-NLS-2$
+            + " dialog=" + DebugInspectorDebug.cn(dialog));
+        return enhancement;
+    }
+
+    private static Tree resolveInspectorTree(Object dialog, Shell shell)
+    {
+        if (dialog != null)
+        {
+            Object treeObj = Global.invoke(dialog, "getTree"); //$NON-NLS-1$
+            if (treeObj instanceof Tree tree && !tree.isDisposed())
+                return tree;
+            treeObj = Global.getField(dialog, "tree"); //$NON-NLS-1$
+            if (treeObj instanceof Tree tree && !tree.isDisposed())
+                return tree;
+        }
+        return findTreeWithInspectorColumns(shell);
+    }
+
+    private static Object resolveViewer(Object dialog)
+    {
+        if (dialog == null)
+            return null;
+        Object viewer = Global.getField(dialog, "viewer"); //$NON-NLS-1$
+        if (viewer != null)
+            return viewer;
+        return Global.invoke(dialog, "getViewer"); //$NON-NLS-1$
+    }
+
+    private static Tree findTreeWithInspectorColumns(Shell shell)
+    {
+        if (shell == null || shell.isDisposed())
+            return null;
+        return findTreeInControl(shell);
+    }
+
+    private static Tree findTreeInControl(org.eclipse.swt.widgets.Control root)
+    {
+        if (root == null || root.isDisposed())
+            return null;
+        if (root instanceof Tree tree && treeHasInspectorColumns(tree))
+            return tree;
+        if (root instanceof org.eclipse.swt.widgets.Composite composite)
+        {
+            for (org.eclipse.swt.widgets.Control child : composite.getChildren())
+            {
+                Tree found = findTreeInControl(child);
+                if (found != null)
+                    return found;
+            }
+        }
+        return null;
+    }
+
+    private static boolean treeHasInspectorColumns(Tree tree)
+    {
+        org.eclipse.swt.widgets.TreeColumn[] columns = tree.getColumns();
+        if (columns == null || columns.length < 3)
+            return false;
+        for (org.eclipse.swt.widgets.TreeColumn column : columns)
+        {
+            String text = column.getText();
+            if (text != null && (text.contains(COLUMN_MARKER_RU) || text.contains(COLUMN_MARKER_EN)))
+                return true;
+        }
+        return false;
+    }
+
+    private boolean installHooks()
+    {
+        if (tree.isDisposed())
+            return false;
+
+        syncFromTreeSelection();
+
+        mouseListener = new MouseAdapter()
+        {
+            @Override
+            public void mouseDown(MouseEvent e)
+            {
+                if (e.button != 1)
+                    return;
+                TreeItem item = itemAt(tree, e.x, e.y);
+                if (item == null)
+                    return;
+                int column = columnAt(tree, e.x, e.y, item);
+                if (column < 0)
+                    column = 0;
+                selectCell(item, column);
+            }
+        };
+        tree.addMouseListener(mouseListener);
+
+        eraseItemListener = this::onEraseItem;
+        tree.addListener(SWT.EraseItem, eraseItemListener);
+
+        paintItemListener = this::onPaintItem;
+        tree.addListener(SWT.PaintItem, paintItemListener);
+
+        focusListener = e ->
+        {
+            invalidateHighlightColor();
+            tree.redraw();
+        };
+        tree.addListener(SWT.FocusIn, focusListener);
+        tree.addListener(SWT.FocusOut, focusListener);
+
+        selectionListener = e ->
+        {
+            syncFromTreeSelection();
+            invalidateHighlightColor();
+            tree.redraw();
+        };
+        tree.addListener(SWT.Selection, selectionListener);
+
+        keyFilter = this::onKeyFilter;
+        tree.getDisplay().addFilter(SWT.KeyDown, keyFilter);
+
+        treeKeyListener = this::onTreeKeyDown;
+        tree.addListener(SWT.KeyDown, treeKeyListener);
+
+        return true;
+    }
+
+    private void scheduleCopyActionHook()
+    {
+        Display display = tree.getDisplay();
+        for (int delay : new int[] { 0, 50, 150, 400, 800, 1500 })
+        {
+            display.timerExec(delay, () ->
+            {
+                if (!tree.isDisposed())
+                    hookGlobalCopyAction();
+            });
+        }
+    }
+
+    private void hookGlobalCopyAction()
+    {
+        if (dialog == null || Boolean.TRUE.equals(tree.getData(COPY_HOOKED_KEY)))
+            return;
+
+        Object globalActions = Global.getField(dialog, "globalActions"); //$NON-NLS-1$
+        if (!(globalActions instanceof List<?> actions))
+            return;
+
+        for (int i = 0; i < actions.size(); i++)
+        {
+            Object item = actions.get(i);
+            if (!(item instanceof IAction original))
+                continue;
+            String className = item.getClass().getName();
+            if (!className.endsWith(COPY_ACTION_SUFFIX))
+                continue;
+
+            IAction replacement = new Action()
+            {
+                {
+                    setText(original.getText());
+                    setToolTipText(original.getToolTipText());
+                    setImageDescriptor(original.getImageDescriptor());
+                    setAccelerator(original.getAccelerator());
+                    setActionDefinitionId(original.getActionDefinitionId());
+                }
+
+                @Override
+                public void run()
+                {
+                    copyActiveCellToClipboard();
+                }
+            };
+            @SuppressWarnings("unchecked")
+            List<IAction> mutable = (List<IAction>) globalActions;
+            mutable.set(i, replacement);
+            tree.setData(COPY_HOOKED_KEY, Boolean.TRUE);
+            DebugInspectorDebug.log("copy action hooked"); //$NON-NLS-1$
+            return;
+        }
+    }
+
+    private void onEraseItem(Event e)
+    {
+        if (!(e.item instanceof TreeItem item))
+            return;
+        TreeItem row = currentSelectedRow();
+        if (row == null || item != row)
+            return;
+
+        Color rowBg = rowSelectionBackground();
+        Color bg = e.index == activeColumn ? activeCellBackground(rowBg) : rowBg;
+        e.gc.setBackground(bg);
+        e.gc.fillRectangle(e.x, e.y, e.width, e.height);
+        e.detail &= ~SWT.BACKGROUND;
+    }
+
+    private TreeItem currentSelectedRow()
+    {
+        TreeItem[] selection = tree.getSelection();
+        if (selection.length > 0)
+            return selection[0];
+        return selectedItem;
+    }
+
+    private Color rowSelectionBackground()
+    {
+        if (ownedRowBg != null && !ownedRowBg.isDisposed())
+            return ownedRowBg;
+        Display display = tree.getDisplay();
+        Color base = tree.getBackground();
+        if (base == null || base.isDisposed())
+            base = display.getSystemColor(SWT.COLOR_LIST_BACKGROUND);
+        double factor = tree.isFocusControl() ? 0.12 : 0.08;
+        ownedRowBg = slightlyDarker(base, factor);
+        return ownedRowBg;
+    }
+
+    private Color activeCellBackground(Color rowBg)
+    {
+        if (ownedActiveCellBg != null && !ownedActiveCellBg.isDisposed())
+            return ownedActiveCellBg;
+        ownedActiveCellBg = slightlyDarker(rowBg, tree.isFocusControl() ? 0.08 : 0.06);
+        return ownedActiveCellBg;
+    }
+
+    private static Color slightlyDarker(Color base, double factor)
+    {
+        Device device = base.getDevice();
+        RGB rgb = base.getRGB();
+        int r = clampChannel((int) (rgb.red * (1.0 - factor)));
+        int g = clampChannel((int) (rgb.green * (1.0 - factor)));
+        int b = clampChannel((int) (rgb.blue * (1.0 - factor)));
+        return new Color(device, r, g, b);
+    }
+
+    private static int clampChannel(int value)
+    {
+        return Math.max(0, Math.min(255, value));
+    }
+
+    private void invalidateHighlightColor()
+    {
+        if (ownedRowBg != null && !ownedRowBg.isDisposed())
+            ownedRowBg.dispose();
+        if (ownedActiveCellBg != null && !ownedActiveCellBg.isDisposed())
+            ownedActiveCellBg.dispose();
+        ownedRowBg = null;
+        ownedActiveCellBg = null;
+    }
+
+    private void onPaintItem(Event e)
+    {
+        if (!(e.item instanceof TreeItem item) || item != currentSelectedRow() || e.index != activeColumn)
+            return;
+        Rectangle bounds = item.getBounds(e.index);
+        if (bounds == null || bounds.isEmpty())
+            return;
+        Color rowBg = rowSelectionBackground();
+        Color base = activeCellBackground(rowBg);
+        Color frame = slightlyDarker(base, 0.12);
+        try
+        {
+            e.gc.setForeground(frame);
+            e.gc.drawRectangle(bounds.x, bounds.y, Math.max(0, bounds.width - 1), Math.max(0, bounds.height - 1));
+        }
+        finally
+        {
+            if (!frame.isDisposed())
+                frame.dispose();
+        }
+    }
+
+    private void onTreeKeyDown(Event e)
+    {
+        if (handleCopyKey(e))
+            e.doit = false;
+    }
+
+    private void onKeyFilter(Event e)
+    {
+        if (tree.isDisposed() || !tree.isVisible() || !isInspectorShellFocused())
+            return;
+        if (handleCopyKey(e))
+        {
+            e.doit = false;
+            return;
+        }
+        if ((e.stateMask & SWT.CTRL) != 0 && (e.keyCode == 'f' || e.keyCode == 'F'))
+        {
+            e.doit = false;
+            promptFind();
+            return;
+        }
+        if (e.keyCode == SWT.F3)
+        {
+            e.doit = false;
+            findNext((e.stateMask & SWT.SHIFT) == 0);
+        }
+    }
+
+    private boolean handleCopyKey(Event e)
+    {
+        if ((e.stateMask & SWT.CTRL) == 0 || (e.keyCode != 'c' && e.keyCode != 'C'))
+            return false;
+        copyActiveCellToClipboard();
+        return true;
+    }
+
+    private void selectCell(TreeItem item, int column)
+    {
+        selectedItem = item;
+        activeColumn = column;
+        invalidateHighlightColor();
+        tree.setSelection(item);
+        applyViewerSelection(item);
+        fireSelectionEvent(item);
+        tree.redraw();
+    }
+
+    private void syncFromTreeSelection()
+    {
+        TreeItem[] selection = tree.getSelection();
+        if (selection.length == 0)
+            return;
+        selectedItem = selection[0];
+        if (activeColumn < 0 || activeColumn >= tree.getColumnCount())
+            activeColumn = 0;
+    }
+
+    private void applyViewerSelection(TreeItem item)
+    {
+        if (viewer == null || item == null)
+            return;
+        Object data = item.getData();
+        if (data == null)
+            return;
+        List<Object> path = new ArrayList<>();
+        TreeItem current = item;
+        while (current != null)
+        {
+            Object element = current.getData();
+            if (element != null)
+                path.add(0, element);
+            current = current.getParentItem();
+        }
+        if (path.isEmpty())
+            return;
+        TreeSelection selection = new TreeSelection(new TreePath(path.toArray()));
+        Global.invoke(viewer, "setSelection", selection); //$NON-NLS-1$
+    }
+
+    private void fireSelectionEvent(TreeItem item)
+    {
+        Event event = new Event();
+        event.widget = tree;
+        event.item = item;
+        tree.notifyListeners(SWT.Selection, event);
+    }
+
+    private void copyActiveCellToClipboard()
+    {
+        TreeItem[] selection = tree.getSelection();
+        if (selection.length > 0)
+            selectedItem = selection[0];
+        if (selectedItem == null || selectedItem.isDisposed())
+            return;
+
+        int column = activeColumn;
+        if (column < 0 || column >= tree.getColumnCount())
+            column = 0;
+
+        String text = resolveCellText(selectedItem, column);
+        Clipboard clipboard = new Clipboard(tree.getDisplay());
+        try
+        {
+            clipboard.setContents(new Object[] { text }, new Transfer[] { TextTransfer.getInstance() });
+        }
+        finally
+        {
+            clipboard.dispose();
+        }
+        DebugInspectorDebug.step("copy", "column=" + column + " len=" + text.length()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    private void promptFind()
+    {
+        Shell shell = tree.getShell();
+        InputDialog dialog = new InputDialog(shell,
+            "\u041f\u043e\u0438\u0441\u043a \u0432 \u0438\u043d\u0441\u043f\u0435\u043a\u0442\u043e\u0440\u0435", //$NON-NLS-1$
+            "\u0422\u0435\u043a\u0441\u0442 \u0432 \u043b\u044e\u0431\u043e\u0439 \u043a\u043e\u043b\u043e\u043d\u043a\u0435" + Global.pluginSignForTooltip(), //$NON-NLS-1$
+            findText,
+            null);
+        if (dialog.open() != InputDialog.OK)
+            return;
+        findText = dialog.getValue();
+        if (findText == null || findText.isBlank())
+            return;
+        findGeneration++;
+        findNext(true);
+    }
+
+    private void findNext(boolean forward)
+    {
+        if (findText == null || findText.isBlank())
+        {
+            promptFind();
+            return;
+        }
+
+        int generation = findGeneration;
+        BusyIndicator.showWhile(tree.getDisplay(), () ->
+        {
+            if (generation != findGeneration)
+                return;
+            List<TreeItem> items = new ArrayList<>();
+            collectItems(tree.getItems(), items);
+            if (items.isEmpty())
+                return;
+
+            String needle = findText.toLowerCase();
+            int start = 0;
+            if (selectedItem != null)
+            {
+                int idx = items.indexOf(selectedItem);
+                if (idx >= 0)
+                    start = forward ? idx + 1 : idx - 1;
+            }
+
+            TreeItem found = null;
+            for (int pass = 0; pass < 2 && found == null; pass++)
+            {
+                if (forward)
+                {
+                    for (int i = start; i < items.size(); i++)
+                    {
+                        if (itemMatches(items.get(i), needle))
+                        {
+                            found = items.get(i);
+                            break;
+                        }
+                    }
+                }
+                else
+                {
+                    for (int i = start; i >= 0; i--)
+                    {
+                        if (itemMatches(items.get(i), needle))
+                        {
+                            found = items.get(i);
+                            break;
+                        }
+                    }
+                }
+                start = forward ? 0 : items.size() - 1;
+            }
+
+            if (found == null)
+            {
+                DebugInspectorDebug.step("find", "no match for \"" + findText + "\""); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                return;
+            }
+
+            int column = firstMatchingColumn(found, needle);
+            if (column < 0)
+                column = 0;
+            expandTo(found);
+            selectCell(found, column);
+            tree.showItem(found);
+            DebugInspectorDebug.step("find", "match column=" + column); //$NON-NLS-1$ //$NON-NLS-2$
+        });
+    }
+
+    private static void collectItems(TreeItem[] roots, List<TreeItem> out)
+    {
+        if (roots == null)
+            return;
+        for (TreeItem item : roots)
+        {
+            if (item == null || item.isDisposed())
+                continue;
+            out.add(item);
+            collectItems(item.getItems(), out);
+        }
+    }
+
+    private boolean itemMatches(TreeItem item, String needle)
+    {
+        return firstMatchingColumn(item, needle) >= 0;
+    }
+
+    private int firstMatchingColumn(TreeItem item, String needle)
+    {
+        int columns = Math.max(1, tree.getColumnCount());
+        for (int c = 0; c < columns; c++)
+        {
+            String text = resolveCellText(item, c);
+            if (!text.isEmpty() && text.toLowerCase().contains(needle))
+                return c;
+        }
+        return -1;
+    }
+
+    private String resolveCellText(TreeItem item, int column)
+    {
+        if (item == null || item.isDisposed())
+            return ""; //$NON-NLS-1$
+
+        String text = item.getText(column);
+        if (text != null && !text.isEmpty())
+            return text;
+
+        Object element = item.getData();
+        if (viewer != null && element != null)
+        {
+            Object label = Global.invoke(viewer, "getColumnText", element, Integer.valueOf(column)); //$NON-NLS-1$
+            if (label instanceof String s && !s.isEmpty())
+                return s;
+            label = Global.invoke(viewer, "getLabelText", element, Integer.valueOf(column)); //$NON-NLS-1$
+            if (label instanceof String s && !s.isEmpty())
+                return s;
+        }
+
+        return text != null ? text : ""; //$NON-NLS-1$
+    }
+
+    private static String cellText(TreeItem item, int column)
+    {
+        if (item == null || item.isDisposed())
+            return ""; //$NON-NLS-1$
+        String text = item.getText(column);
+        return text != null ? text : ""; //$NON-NLS-1$
+    }
+
+    private void expandTo(TreeItem item)
+    {
+        TreeItem parent = item.getParentItem();
+        while (parent != null)
+        {
+            parent.setExpanded(true);
+            parent = parent.getParentItem();
+        }
+    }
+
+    private static int columnAt(Tree tree, int x, int y, TreeItem item)
+    {
+        for (int i = 0; i < tree.getColumnCount(); i++)
+        {
+            Rectangle bounds = item.getBounds(i);
+            if (bounds != null && bounds.contains(x, y))
+                return i;
+        }
+        return 0;
+    }
+
+    private static TreeItem itemAt(Tree tree, int x, int y)
+    {
+        TreeItem item = tree.getItem(new Point(x, y));
+        if (item != null)
+            return item;
+        for (TreeItem root : tree.getItems())
+        {
+            TreeItem found = findInItem(root, x, y);
+            if (found != null)
+                return found;
+        }
+        return null;
+    }
+
+    private boolean isInspectorShellFocused()
+    {
+        Shell inspector = tree.getShell();
+        if (inspector == null || inspector.isDisposed())
+            return false;
+        Control focus = tree.getDisplay().getFocusControl();
+        for (Control c = focus; c != null; c = c.getParent())
+        {
+            if (c == inspector)
+                return true;
+        }
+        return false;
+    }
+
+    private static TreeItem findInItem(TreeItem item, int x, int y)
+    {
+        for (int i = 0; i < item.getParent().getColumnCount(); i++)
+        {
+            Rectangle bounds = item.getBounds(i);
+            if (bounds != null && bounds.contains(x, y))
+                return item;
+        }
+        for (TreeItem child : item.getItems())
+        {
+            TreeItem found = findInItem(child, x, y);
+            if (found != null)
+                return found;
+        }
+        return null;
+    }
+
+    void dispose()
+    {
+        if (tree != null && !tree.isDisposed())
+        {
+            if (mouseListener != null)
+                tree.removeMouseListener(mouseListener);
+            if (eraseItemListener != null)
+                tree.removeListener(SWT.EraseItem, eraseItemListener);
+            if (paintItemListener != null)
+                tree.removeListener(SWT.PaintItem, paintItemListener);
+            if (focusListener != null)
+            {
+                tree.removeListener(SWT.FocusIn, focusListener);
+                tree.removeListener(SWT.FocusOut, focusListener);
+            }
+            if (selectionListener != null)
+                tree.removeListener(SWT.Selection, selectionListener);
+            if (treeKeyListener != null)
+                tree.removeListener(SWT.KeyDown, treeKeyListener);
+            tree.setData(ENHANCED_KEY, null);
+            tree.setData(COPY_HOOKED_KEY, null);
+        }
+        invalidateHighlightColor();
+        if (keyFilter != null)
+        {
+            Display display = Display.getCurrent();
+            if (display != null && !display.isDisposed())
+                display.removeFilter(SWT.KeyDown, keyFilter);
+            keyFilter = null;
+        }
+        findGeneration++;
+    }
+}

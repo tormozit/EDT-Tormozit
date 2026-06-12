@@ -1,0 +1,47 @@
+---
+description: Единое логирование плагина — только журнал Комфорт, только флажок «Общее логирование»
+alwaysApply: true
+---
+
+# Логирование плагина Комфорт
+
+Весь плагин пишет логи **единообразно**:
+
+- **Куда:** только журнал «Комфорт» (`ContentAssistLog` / вид «Журнал Комфорт»).
+- **Когда:** только если пользователь включил **«Общее логирование»** (Параметры → Комфорт → `ComfortSettings.isDebugLogEnabled()` → `Global.isLogEnabled()`).
+
+Других каналов и обходных путей нет.
+
+## Как писать
+
+- Всегда через **`Global.log(tag, message)`** (или `Global.logError`).
+- В модулях — хелпер `*Debug` с `TAG` и проверкой `Global.isLogEnabled()` перед записью.
+- Эталон: `PropertySheetDebug`, `DebugInspectorDebug`.
+
+```java
+public static void log(String msg)
+{
+    if (Global.isLogEnabled())
+        Global.log(TAG, msg);
+}
+```
+
+## Запрещено
+
+- Прямой **`ContentAssistLog.append(...)`** в обход `Global.isLogEnabled()`.
+- **`System.out.println`** / `System.err` без явной договорённости с пользователем.
+- JVM-флаги вида **`-Dtormozit.*.debug`** / **`-Dtormozit.*.verbose`** для включения логов — единственный выключатель у пользователя в настройках.
+- Дублировать запись в Eclipse Error Log, если это не отдельная осознанная задача.
+- Логировать «всегда», минуя флажок — даже для `problem`, `trace`, `step`.
+
+## Диагностические хелперы
+
+- `problem(msg)` — тот же флажок, префикс `[!]` в сообщении.
+- `step(phase, detail)` — тот же флажок, фаза + детали в одной строке через `Global.log`.
+- Отдельные «verbose»-уровни и системные свойства **не вводить**; при необходимости детализации — обычные `log`/`step` под общим флажком.
+
+## Новый модуль
+
+1. Класс `FooDebug` с `TAG = "Foo"`.
+2. `isEnabled()` → `Global.isLogEnabled()`.
+3. Все методы записи — только через `Global.log(TAG, …)` после проверки флажка.
