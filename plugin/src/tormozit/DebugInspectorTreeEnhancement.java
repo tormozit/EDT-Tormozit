@@ -265,8 +265,9 @@ final class DebugInspectorTreeEnhancement
                 }
             };
             @SuppressWarnings("unchecked")
-            List<IAction> mutable = (List<IAction>) globalActions;
+            List<IAction> mutable = new ArrayList<>((List<IAction>) globalActions);
             mutable.set(i, replacement);
+            Global.setField(dialog, "globalActions", mutable); //$NON-NLS-1$
             tree.setData(COPY_HOOKED_KEY, Boolean.TRUE);
             DebugInspectorDebug.log("copy action hooked"); //$NON-NLS-1$
             return;

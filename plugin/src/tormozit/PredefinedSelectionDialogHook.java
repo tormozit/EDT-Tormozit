@@ -34,6 +34,8 @@ public class PredefinedSelectionDialogHook implements IStartup
             if (!(event.widget instanceof Shell))
                 return;
             Shell shell = (Shell) event.widget;
+            if (shell.isDisposed())
+                return;
             if (shell.getData(PATCHED_KEY) != null)
                 return;
             if (!isPredefinedSelectionShell(shell))

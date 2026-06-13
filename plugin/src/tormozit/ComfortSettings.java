@@ -15,6 +15,9 @@ public final class ComfortSettings
     /** Ключ: общий отладочный журнал ({@link ContentAssistLogView}). */
     public static final String PREF_DEBUG_LOG = "comfort.debugLog"; //$NON-NLS-1$
 
+    /** Ключ: автопрокрутка журнала к последней строке ({@link ContentAssistLogView}). */
+    public static final String PREF_LOG_AUTOSCROLL = "comfort.log.autoscroll"; //$NON-NLS-1$
+
     /** Устаревший ключ; читается при миграции настроек. */
     private static final String PREF_CONTENT_ASSIST_LOG_LEGACY = "comfort.contentAssistLog"; //$NON-NLS-1$
 
@@ -36,6 +39,9 @@ public final class ComfortSettings
     /** Общее логирование выключено по умолчанию. */
     public static final boolean DEFAULT_DEBUG_LOG = false;
 
+    /** Автопрокрутка журнала включена по умолчанию. */
+    public static final boolean DEFAULT_LOG_AUTOSCROLL = true;
+
     /** Префикс ключа «Авто» (автоподключение ИР) per infobase UUID. */
     public static final String PREF_IR_AUTO_CONNECT_PREFIX = "comfort.ir.autoConnect."; //$NON-NLS-1$
 
@@ -53,12 +59,6 @@ public final class ComfortSettings
 
     /** Закрытие независимого инспектора включено по умолчанию. */
     public static final boolean DEFAULT_DEBUG_INSPECTOR_AUTO_CLOSE = true;
-
-    /** Ключ: hover-инспектор следует за наведением в редакторе («Обновлять»). */
-    public static final String PREF_DEBUG_INSPECTOR_HOVER_UPDATE = "comfort.debug.inspectorHoverUpdate"; //$NON-NLS-1$
-
-    /** Hover-инспектор обновляется по умолчанию. */
-    public static final boolean DEFAULT_DEBUG_INSPECTOR_HOVER_UPDATE = true;
 
     private static ComfortSettings instance;
 
@@ -106,6 +106,30 @@ public final class ComfortSettings
         if (store.contains(PREF_CONTENT_ASSIST_LOG_LEGACY))
             return store.getBoolean(PREF_CONTENT_ASSIST_LOG_LEGACY);
         return DEFAULT_DEBUG_LOG;
+    }
+
+    public static boolean isLogAutoscroll()
+    {
+        ComfortSettings settings = instance;
+        if (settings == null)
+            return DEFAULT_LOG_AUTOSCROLL;
+        return settings.preferenceStore.getBoolean(PREF_LOG_AUTOSCROLL);
+    }
+
+    public static void setLogAutoscroll(boolean enabled)
+    {
+        ComfortSettings settings = instance;
+        if (settings == null)
+            return;
+        settings.preferenceStore.setValue(PREF_LOG_AUTOSCROLL, enabled);
+        try
+        {
+            settings.preferenceStore.save();
+        }
+        catch (Exception ex)
+        {
+            Global.log("ComfortSettings save error (logAutoscroll): " + ex); //$NON-NLS-1$
+        }
     }
 
     public static String dynamicAutoUpdatePrefKey(String infobaseUuid)
@@ -163,17 +187,6 @@ public final class ComfortSettings
     public static void setDebugInspectorAutoClose(boolean enabled)
     {
         saveInspectorBoolean(PREF_DEBUG_INSPECTOR_AUTO_CLOSE, enabled, "inspectorAutoClose"); //$NON-NLS-1$
-    }
-
-    public static boolean isDebugInspectorHoverUpdate()
-    {
-        return getInspectorBoolean(
-            PREF_DEBUG_INSPECTOR_HOVER_UPDATE, DEFAULT_DEBUG_INSPECTOR_HOVER_UPDATE);
-    }
-
-    public static void setDebugInspectorHoverUpdate(boolean enabled)
-    {
-        saveInspectorBoolean(PREF_DEBUG_INSPECTOR_HOVER_UPDATE, enabled, "inspectorHoverUpdate"); //$NON-NLS-1$
     }
 
     private static boolean getInspectorBoolean(String key, boolean defaultValue)

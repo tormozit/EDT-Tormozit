@@ -41,6 +41,8 @@ public class OpenMdObjectHook implements IStartup {
             public void handleEvent(Event event) {
                 if (!(event.widget instanceof Shell)) return;
                 Shell shell = (Shell) event.widget;
+                if (shell.isDisposed())
+                    return;
                 Object dialog = shell.getData();
                 String dialogName = dialog != null ? dialog.getClass().getName() : "";
                 String shellName = shell.getClass().getName();

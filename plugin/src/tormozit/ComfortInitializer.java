@@ -30,5 +30,8 @@ public class ComfortInitializer extends AbstractPreferenceInitializer
         store.setDefault(
             ComfortSettings.PREF_DEBUG_LOG,
             ComfortSettings.DEFAULT_DEBUG_LOG);
+        store.setDefault(
+            ComfortSettings.PREF_LOG_AUTOSCROLL,
+            ComfortSettings.DEFAULT_LOG_AUTOSCROLL);
     }
 }

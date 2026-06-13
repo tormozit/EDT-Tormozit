@@ -1,26 +1,20 @@
 package tormozit;
 
 import java.lang.reflect.Constructor;
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
+import java.net.URL;
 
-import org.eclipse.jface.text.TextViewer;
+import org.eclipse.jface.resource.ImageDescriptor;
 import org.eclipse.jface.text.source.ISourceViewer;
 import org.eclipse.jface.text.source.SourceViewer;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.StyledText;
-import org.eclipse.swt.events.MouseMoveListener;
 import org.eclipse.swt.graphics.Color;
+import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
 
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
-import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
@@ -32,11 +26,7 @@ import org.eclipse.swt.widgets.ToolItem;
 import org.eclipse.swt.widgets.Tree;
 import org.eclipse.swt.widgets.TreeColumn;
 import org.eclipse.swt.widgets.TreeItem;
-import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.Platform;
-import org.eclipse.debug.core.DebugPlugin;
-import org.eclipse.debug.core.IDebugEventSetListener;
-import org.eclipse.debug.core.model.IExpression;
 import org.eclipse.debug.core.model.IWatchExpression;
 import org.eclipse.jface.text.ITextViewer;
 import org.eclipse.ui.IEditorPart;
@@ -46,18 +36,15 @@ import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.forms.editor.IFormPage;
 
-import org.osgi.framework.Bundle;
-
 import com._1c.g5.v8.dt.bsl.ui.editor.BslXtextEditor;
 import com._1c.g5.v8.dt.debug.core.model.IBslStackFrame;
-import com._1c.g5.v8.dt.debug.core.model.IBslVariable;
 import com._1c.g5.v8.dt.debug.core.model.IDebugMonitoringManager;
 import com._1c.g5.v8.dt.md.ui.editor.base.DtGranularEditor;
 import com._1c.g5.v8.dt.md.ui.editor.base.DtGranularEditorXtextEditorPage;
 
 /**
- * Патч окон инспектора отладки (F9 / hover): флажок «Обновлять», «Инспектировать» (hover) и кнопка закрытия.
- * Независимое окно (F9) всегда закреплено (без авто-закрытия по клику вне окна).
+ * Патч окон инспектора отладки (F9 / hover): «Инспектировать» (hover) и кнопка закрытия.
+ * Независимое окно (F9) закреплено без авто-закрытия по деактивации; hover — lifecycle у EDT.
  */
 public final class DebugInspectorHook implements IStartup
 {
@@ -66,6 +53,7 @@ public final class DebugInspectorHook implements IStartup
     private static final String PATCHED_KEY = "tormozit.debugInspectorPatched"; //$NON-NLS-1$
     private static final String SESSION_KEY = "tormozit.debugInspectorSession"; //$NON-NLS-1$
     private static final String COMFORT_HEADER_KEY = "tormozit.inspectorComfortHeader"; //$NON-NLS-1$
+    private static final String COMFORT_MENU_LAYOUT_KEY = "tormozit.inspectorMenuBarOriginalLayout"; //$NON-NLS-1$
     private static final String DETECT_LOG_KEY = "tormozit.debugInspectorDetectLog"; //$NON-NLS-1$
 
     private static final String WINDOW_DATA_KEY = "org.eclipse.jface.window.Window"; //$NON-NLS-1$
@@ -76,33 +64,16 @@ public final class DebugInspectorHook implements IStartup
         "com._1c.g5.v8.dt.internal.debug.ui.hover.DebugElementInformationControlCreator$ExpressionInformationControl$DebugExpressionInformationControl"; //$NON-NLS-1$
     private static final String CLASS_DEBUG_ELEMENT_DIALOG =
         "com._1c.g5.v8.dt.internal.debug.ui.hover.DebugElementDialog"; //$NON-NLS-1$
+    private static final String BUNDLE_DEBUG_UI = "com._1c.g5.v8.dt.debug.ui"; //$NON-NLS-1$
+    private static final String ICON_INSPECT_EDT = "icons/etool16/insp_sbook.gif"; //$NON-NLS-1$
     private static final String COLUMN_MARKER_RU = "Фактический тип"; //$NON-NLS-1$
     private static final String COLUMN_MARKER_EN = "Actual type"; //$NON-NLS-1$
-    /** Подъём блока «флажок / меню» в hover-шапке. */
+    /** Подъём блока кнопок в hover-шапке. */
     private static final int HEADER_LIFT_PX = -6;
-    /** Дополнительный подъём «Инспектировать» и × в hover (флажок не трогаем). */
+    /** Дополнительный подъём «Инспектировать» и × в hover. */
     private static final int HOVER_HEADER_LIFT_EXTRA_PX = -3;
-
-    private static final String BUNDLE_DEBUG_UI = "com._1c.g5.v8.dt.debug.ui"; //$NON-NLS-1$
-
-    /** Штатная команда EDT «Инспектировать» в контекстном меню BSL-редактора (Ctrl+F9). */
-    private static final String CMD_INSPECT = "com._1c.g5.v8.dt.debug.ui.commands.Inspect"; //$NON-NLS-1$
-
-    /** Отвязанный от редактора hover-инспектор (флажок «Обновлять» снят). */
-    private static final Map<Object, PinnedHoverLink> PINNED_HOVER_BY_MANAGER = new ConcurrentHashMap<>();
-
-    /** Последний живой hover-shell редактора (для снятия дубликатов). */
-    private static final Map<Object, Shell> ACTIVE_HOVER_SHELL_BY_MANAGER = new ConcurrentHashMap<>();
-
-    private record PinnedHoverLink(
-        Shell shell,
-        Object textHoverManager,
-        Object pinnedInfoControl,
-        Object savedManagerIc,
-        Object savedReplacerIc,
-        Object blockerIc,
-        Boolean savedProcessMouseHover,
-        Boolean savedManagerEnabled) {}
+    /** Опускание иконки «Инспектировать» относительно шапки hover. */
+    private static final int INSPECT_BUTTON_DROP_PX = 4;
 
     @Override
     public void earlyStartup()
@@ -131,19 +102,23 @@ public final class DebugInspectorHook implements IStartup
         {
             if (!(event.widget instanceof Shell shell))
                 return;
-            if (!mightBeInspectorShell(shell))
+            if (shell.isDisposed())
+                return;
+            if (isWorkbenchShell(shell))
+                return;
+            if (!isInspectorCandidateShell(shell))
                 return;
             logInspectorDetectOnce(shell, event.type);
-            if (shouldSuppressDuplicateHoverShell(shell))
-            {
-                suppressHoverShell(shell);
-                return;
-            }
             Object sessionObj = shell.getData(SESSION_KEY);
             if (sessionObj instanceof InspectorPatchSession session)
-                scheduleSessionRefresh(display, shell, session);
-            else
-                schedulePatchAttempt(display, shell, 0);
+            {
+                if (Boolean.TRUE.equals(shell.getData(PATCHED_KEY)))
+                    scheduleSessionRefresh(display, shell, session);
+                else
+                    schedulePatchAttempt(display, shell, 0);
+                return;
+            }
+            schedulePatchAttempt(display, shell, 0);
         };
 
         display.addFilter(SWT.Show, listener);
@@ -164,21 +139,34 @@ public final class DebugInspectorHook implements IStartup
     {
         if (shell.isDisposed())
             return;
-        if (shouldSuppressDuplicateHoverShell(shell))
+        if (!mightBeInspectorShell(shell))
+            return;
+        if (attempt == 0)
         {
-            suppressHoverShell(shell);
+            if (!isInspectorCandidateShell(shell))
+            {
+                schedulePatchAttempt(display, shell, 1);
+                return;
+            }
+            DebugInspectorDebug.step("patch", "try a=0"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (tryPatch(shell, 0))
+                return;
+            schedulePatchAttempt(display, shell, 1);
             return;
         }
-        if (attempt >= 6 && shouldAbortTransientHoverShell(shell))
-        {
-            suppressHoverShell(shell);
-            return;
-        }
-        int delay = attempt == 0 ? 0 : attempt < 8 ? 50 : 100;
+        int delay = attempt < 8 ? 50 : 100;
         display.timerExec(delay, () ->
         {
             if (shell.isDisposed())
                 return;
+            if (!mightBeInspectorShell(shell))
+                return;
+            if (!isInspectorCandidateShell(shell))
+            {
+                if (attempt < 24)
+                    schedulePatchAttempt(display, shell, attempt + 1);
+                return;
+            }
             DebugInspectorDebug.step("patch", "try a=" + attempt); //$NON-NLS-1$ //$NON-NLS-2$
             if (tryPatch(shell, attempt))
                 return;
@@ -204,49 +192,11 @@ public final class DebugInspectorHook implements IStartup
 
     private static boolean tryPatchLocked(Shell shell, int attempt)
     {
-        if (shouldSuppressDuplicateHoverShell(shell))
-        {
-            suppressHoverShell(shell);
-            return true;
-        }
-        if (isShellBlockedByOtherPin(shell))
-        {
-            suppressHoverShell(shell);
-            return true;
-        }
-        if (attempt >= 6 && shouldAbortTransientHoverShell(shell))
-        {
-            suppressHoverShell(shell);
-            return true;
-        }
+        if (!isInspectorCandidateShell(shell))
+            return false;
 
         InspectorTargets targets = resolveTargets(shell);
         Object hoverManager = resolveHoverManagerForShell(shell, targets);
-        cleanupHoverManagerBlockers(hoverManager);
-        if (isBlockerInfoControl(targets.infoControl) || isBlockerShell(shell))
-        {
-            DebugInspectorDebug.step("hover", //$NON-NLS-1$
-                "reject blocker shell=" + shell //$NON-NLS-1$
-                    + " infoCtrl=" + DebugInspectorDebug.cn(targets.infoControl)); //$NON-NLS-1$
-            clearHoverManagerInfoControls(hoverManager);
-            targets = resolveTargets(shell);
-            if (isBlockerInfoControl(targets.infoControl) || isBlockerShell(shell))
-            {
-                suppressHoverShell(shell);
-                return true;
-            }
-        }
-        if (Boolean.TRUE.equals(shell.getData(PATCHED_KEY)))
-        {
-            Object manager = resolveHoverManagerForShell(shell, targets);
-            Shell active = manager != null ? ACTIVE_HOVER_SHELL_BY_MANAGER.get(manager) : null;
-            if (active != null && active != shell && !active.isDisposed())
-            {
-                DebugInspectorDebug.step("hover", "suppress superseded shell active=" + active); //$NON-NLS-1$ //$NON-NLS-2$
-                suppressHoverShell(shell);
-                return true;
-            }
-        }
 
         InspectorPatchSession existing = (InspectorPatchSession) shell.getData(SESSION_KEY);
         final InspectorPatchSession session;
@@ -285,18 +235,15 @@ public final class DebugInspectorHook implements IStartup
 
         boolean headerOk = session.installHeaderControls(menuBar);
         session.scheduleHeaderMaintenance(menuBar);
-        session.applyInspectorModeForTargets();
 
-        if (headerOk && session.isHeaderLive())
-        {
-            shell.setData(PATCHED_KEY, Boolean.TRUE);
-            session.registerHoverShellAfterPatch();
-            DebugInspectorDebug.step("PATCH OK", //$NON-NLS-1$
-                "a=" + attempt //$NON-NLS-1$
-                    + " dialog=" + targets.dialog.getClass().getSimpleName() //$NON-NLS-1$
-                    + " hover=" + (targets.infoControl != null) //$NON-NLS-1$
-                    + " menu=" + describeToolBar(menuBar)); //$NON-NLS-1$
+        if (headerOk && session.tryFinalizePatch(menuBar, attempt, hoverManager))
             return true;
+
+        if (headerOk)
+        {
+            DebugInspectorDebug.step("header", "defer finalize a=" + attempt); //$NON-NLS-1$ //$NON-NLS-2$
+            session.scheduleFinalizePatch(menuBar, attempt, hoverManager);
+            return false;
         }
 
         DebugInspectorDebug.step("header", //$NON-NLS-1$
@@ -312,13 +259,17 @@ public final class DebugInspectorHook implements IStartup
     {
         if (isWorkbenchShell(shell))
             return false;
-        if (Boolean.TRUE.equals(shell.getData(PinnedHoverBlockerInformationControl.SHELL_MARKER_KEY)))
+        return isInspectorCandidateShell(shell);
+    }
+
+    /** F9 / debug hover — не штатный doc-hover редактора (описание метода и т.п.). */
+    private static boolean isInspectorCandidateShell(Shell shell)
+    {
+        if (shell == null || shell.isDisposed())
             return false;
-        if (resolveElementDialog(shell, null) != null)
+        if (Boolean.TRUE.equals(shell.getData(PATCHED_KEY)))
             return true;
-        if (isInspectorShellData(shell.getData()) || isInspectorShellData(shell.getData(WINDOW_DATA_KEY)))
-            return true;
-        if (findHoverBindingForShell(shell) != null)
+        if (isElementDialog(resolveElementDialog(shell, null)))
             return true;
         return hasInspectorTableMarker(shell);
     }
@@ -347,6 +298,14 @@ public final class DebugInspectorHook implements IStartup
         if (!isPatchTarget(dialog) && isHoverInspectControl(infoControl) && hasInspectorTableMarker(shell))
             dialog = infoControl;
         return new InspectorTargets(dialog, infoControl, hoverManager);
+    }
+
+    private static Object resolveHoverManagerForShell(Shell shell, InspectorTargets targets)
+    {
+        if (targets != null && targets.hoverManager != null)
+            return targets.hoverManager;
+        HoverBinding binding = findHoverBindingForShell(shell);
+        return binding != null ? binding.textHoverManager() : null;
     }
 
     /** Диалог с деревом и toolBar (DebugElementDialog / PendingAwareInspectPopupDialog). */
@@ -494,10 +453,11 @@ public final class DebugInspectorHook implements IStartup
     {
         if (data == null)
             return false;
+        if (isElementDialog(data))
+            return true;
         String name = data.getClass().getName();
         return CLASS_INSPECT_POPUP.equals(name) || CLASS_HOVER_DIALOG.equals(name)
-            || CLASS_DEBUG_ELEMENT_DIALOG.equals(name)
-            || name.contains("ExpressionInformationControl"); //$NON-NLS-1$
+            || CLASS_DEBUG_ELEMENT_DIALOG.equals(name);
     }
 
     private static ToolBar resolveToolBar(Object dialog, Shell shell)
@@ -505,7 +465,7 @@ public final class DebugInspectorHook implements IStartup
         if (isElementDialog(dialog))
         {
             ToolBar menuBar = (ToolBar) Global.getField(dialog, "toolBar"); //$NON-NLS-1$
-            if (menuBar != null && !menuBar.isDisposed())
+            if (menuBar != null && !menuBar.isDisposed() && !isComfortHeader(menuBar))
                 return menuBar;
 
             Object titleObj = Global.getField(dialog, "titleAreaComposite"); //$NON-NLS-1$
@@ -665,7 +625,11 @@ public final class DebugInspectorHook implements IStartup
         if (root == null || root.isDisposed())
             return null;
         if (root instanceof ToolBar toolBar)
+        {
+            if (isComfortHeader(toolBar))
+                return null;
             return toolBar;
+        }
         if (root instanceof Composite composite)
         {
             for (Control child : composite.getChildren())
@@ -726,7 +690,7 @@ public final class DebugInspectorHook implements IStartup
         if (replacer != null)
         {
             Object replacerControl = Global.getField(replacer, "fInformationControl"); //$NON-NLS-1$
-            if (!isBlockerInfoControl(replacerControl) && infoControlShellEquals(replacerControl, shell))
+            if (infoControlShellEquals(replacerControl, shell))
                 return new HoverBinding(replacerControl, replacer, textHoverManager);
         }
 
@@ -743,13 +707,17 @@ public final class DebugInspectorHook implements IStartup
         if (!shellMatch)
             return null;
 
+        if (isHoverInspectControl(infoControl) && !hasInspectorTableMarker(shell)
+            && !Boolean.TRUE.equals(shell.getData(PATCHED_KEY)))
+            return null;
+
         Object activeControl = infoControl;
         Object closerOwner = textHoverManager;
         if (replacer != null)
         {
             closerOwner = replacer;
             Object replacerControl = Global.getField(replacer, "fInformationControl"); //$NON-NLS-1$
-            if (replacerControl != null && !isBlockerInfoControl(replacerControl))
+            if (replacerControl != null)
                 activeControl = replacerControl;
         }
 
@@ -793,17 +761,7 @@ public final class DebugInspectorHook implements IStartup
 
     private static IBslStackFrame resolveInspectStackFrame(IEditorPart editor)
     {
-        IProject project = null;
-        if (editor instanceof BslXtextEditor bsl)
-        {
-            var dtProject = DebugIRHandler.getDtProjectFromBslEditor(bsl);
-            if (dtProject != null)
-                project = dtProject.getWorkspaceProject();
-        }
-        IBslStackFrame frame = DebugSessionHelper.findSuspendedStackFrame(project);
-        if (frame == null)
-            frame = DebugSessionHelper.findSuspendedStackFrame(null);
-        return frame;
+        return BslInspectSupport.resolveInspectStackFrame(editor);
     }
 
     private static Object resolveHoverMonitoringManager(Object infoControl)
@@ -814,13 +772,13 @@ public final class DebugInspectorHook implements IStartup
             if (mm != null)
                 return mm;
         }
-        return Global.getServiceByClass(IDebugMonitoringManager.class);
+        return Global.getOsgiService(IDebugMonitoringManager.class);
     }
 
     private static IWatchExpression resolveHoverRootWatchExpression(Shell shell, Object infoControl)
     {
         Object element = resolveHoverDebugElement(infoControl);
-        IWatchExpression watch = toWatchExpression(element);
+        IWatchExpression watch = BslInspectSupport.toWatchExpression(element);
         if (watch != null)
             return watch;
 
@@ -830,7 +788,7 @@ public final class DebugInspectorHook implements IStartup
         TreeItem[] roots = tree.getItems();
         if (roots.length == 0)
             return null;
-        return toWatchExpression(roots[0].getData());
+        return BslInspectSupport.toWatchExpression(roots[0].getData());
     }
 
     private static Object resolveHoverDebugElement(Object infoControl)
@@ -840,43 +798,24 @@ public final class DebugInspectorHook implements IStartup
         Object dialog = Global.getField(infoControl, "debugElementDialog"); //$NON-NLS-1$
         if (dialog == null)
             return null;
-        Object element = Global.invoke(dialog, "getElement"); //$NON-NLS-1$
-        if (element != null)
-            return element;
-        return Global.getField(dialog, "element"); //$NON-NLS-1$
-    }
-
-    private static IWatchExpression toWatchExpression(Object element)
-    {
-        if (element instanceof IWatchExpression watch)
-            return watch;
-        if (element instanceof IBslVariable variable)
+        try
         {
-            try
-            {
-                String expr = variable.toWatchExpression();
-                return newWatchExpression(expr);
-            }
-            catch (Exception ignored)
-            {
-                return null;
-            }
+            Object element = Global.invoke(dialog, "getElement"); //$NON-NLS-1$
+            if (element != null)
+                return element;
         }
-        return null;
-    }
-
-    private static IWatchExpression newWatchExpression(String exprText)
-    {
-        if (exprText == null || exprText.isBlank())
-            return null;
-        return DebugPlugin.getDefault().getExpressionManager().newWatchExpression(exprText);
+        catch (RuntimeException ignored)
+        {
+            // DebugElementDialog.checkContent — Show/setVisible до createContent
+        }
+        return Global.getField(dialog, "element"); //$NON-NLS-1$
     }
 
     private static String resolveHoverRootExpressionText(Shell shell, Object infoControl)
     {
         IWatchExpression watch = resolveHoverRootWatchExpression(shell, infoControl);
-        String text = watchExpressionText(watch);
-        if (text != null)
+        String text = BslInspectSupport.watchExpressionText(watch);
+        if (text != null && !text.isBlank())
             return text;
 
         Tree tree = findTreeWithInspectorColumns(shell);
@@ -892,15 +831,47 @@ public final class DebugInspectorHook implements IStartup
         return null;
     }
 
-    private static String watchExpressionText(IWatchExpression watch)
+    private static void openStandaloneInspectFromHover(Shell hoverShell, IEditorPart editor, Object infoControl)
     {
-        if (watch instanceof IExpression expression)
+        IWatchExpression watch = resolveHoverRootWatchExpression(hoverShell, infoControl);
+        String exprText = BslInspectSupport.watchExpressionText(watch);
+        if (exprText == null || exprText.isBlank())
+            exprText = resolveHoverRootExpressionText(hoverShell, infoControl);
+        if (watch == null && (exprText == null || exprText.isBlank()))
         {
-            String text = expression.getExpressionText();
-            if (text != null && !text.isBlank())
-                return text.trim();
+            DebugInspectorDebug.problem("inspect: root expression not found"); //$NON-NLS-1$
+            return;
         }
-        return null;
+        if (watch == null)
+            watch = BslInspectSupport.newWatchExpression(exprText);
+
+        IBslStackFrame frame = resolveInspectStackFrame(editor);
+        if (frame == null)
+        {
+            DebugInspectorDebug.problem("inspect: no suspended frame"); //$NON-NLS-1$
+            return;
+        }
+
+        Object monitoringManagerObj = resolveHoverMonitoringManager(infoControl);
+        IDebugMonitoringManager monitoringManager = monitoringManagerObj instanceof IDebugMonitoringManager mm
+            ? mm
+            : Global.getOsgiService(IDebugMonitoringManager.class);
+        Shell parent = hoverShell;
+        if (editor != null && editor.getSite() != null)
+            parent = editor.getSite().getShell();
+        else if (parent == null || parent.isDisposed())
+        {
+            IWorkbenchWindow window = PlatformUI.getWorkbench().getActiveWorkbenchWindow();
+            parent = window != null ? window.getShell() : null;
+        }
+        if (parent == null || parent.isDisposed())
+        {
+            DebugInspectorDebug.problem("inspect: no parent shell"); //$NON-NLS-1$
+            return;
+        }
+
+        Point anchor = resolveInspectPopupAnchor(hoverShell, editor);
+        BslInspectSupport.openInspectPopup(parent, anchor, watch, frame, monitoringManager);
     }
 
     private static Point resolveInspectPopupAnchor(Shell hoverShell, IEditorPart editor)
@@ -931,80 +902,6 @@ public final class DebugInspectorHook implements IStartup
         if (editor instanceof BslXtextEditor bsl)
             return bsl.getInternalSourceViewer().getTextWidget();
         return null;
-    }
-
-    private static void openStandaloneInspectFromHover(Shell hoverShell, IEditorPart editor, Object infoControl)
-    {
-        IWatchExpression watch = resolveHoverRootWatchExpression(hoverShell, infoControl);
-        String exprText = watchExpressionText(watch);
-        if (exprText == null)
-            exprText = resolveHoverRootExpressionText(hoverShell, infoControl);
-        if (watch == null && (exprText == null || exprText.isBlank()))
-        {
-            DebugInspectorDebug.problem("inspect: root expression not found"); //$NON-NLS-1$
-            return;
-        }
-        if (watch == null)
-            watch = newWatchExpression(exprText);
-
-        IBslStackFrame frame = resolveInspectStackFrame(editor);
-        if (frame == null)
-        {
-            DebugInspectorDebug.problem("inspect: no suspended frame"); //$NON-NLS-1$
-            return;
-        }
-
-        Object monitoringManager = resolveHoverMonitoringManager(infoControl);
-        Shell parent = hoverShell;
-        if (editor != null && editor.getSite() != null)
-            parent = editor.getSite().getShell();
-        else if (parent == null || parent.isDisposed())
-        {
-            IWorkbenchWindow window = PlatformUI.getWorkbench().getActiveWorkbenchWindow();
-            parent = window != null ? window.getShell() : null;
-        }
-        if (parent == null || parent.isDisposed())
-        {
-            DebugInspectorDebug.problem("inspect: no parent shell"); //$NON-NLS-1$
-            return;
-        }
-
-        Point anchor = resolveInspectPopupAnchor(hoverShell, editor);
-        try
-        {
-            Class<?> dialogClass = loadDebugUiClass(CLASS_INSPECT_POPUP);
-            Constructor<?> ctor = dialogClass.getConstructor(
-                Shell.class, Point.class, String.class, IWatchExpression.class, IDebugMonitoringManager.class);
-            Object dialog = ctor.newInstance(parent, anchor, CMD_INSPECT, watch, monitoringManager);
-            watch.setExpressionContext(frame);
-            Global.invoke(dialog, "open"); //$NON-NLS-1$
-            DebugInspectorDebug.step("inspect", "opened expr=\"" //$NON-NLS-1$ //$NON-NLS-2$
-                + (exprText != null ? exprText : watchExpressionText(watch)) + "\""); //$NON-NLS-1$
-        }
-        catch (Exception e)
-        {
-            DebugInspectorDebug.problem("inspect open: " + e.getMessage()); //$NON-NLS-1$
-        }
-    }
-
-    /** Internal-класс EDT: только через classloader bundle debug.ui, не Class.forName. */
-    private static Class<?> loadDebugUiClass(String className) throws ClassNotFoundException
-    {
-        Bundle bundle = Platform.getBundle(BUNDLE_DEBUG_UI);
-        if (bundle == null)
-            throw new ClassNotFoundException(className + " (bundle " + BUNDLE_DEBUG_UI + " not installed)"); //$NON-NLS-1$ //$NON-NLS-2$
-        if (bundle.getState() != Bundle.ACTIVE)
-        {
-            try
-            {
-                bundle.start(Bundle.START_TRANSIENT);
-            }
-            catch (Exception e)
-            {
-                DebugInspectorDebug.problem("debug.ui bundle start: " + e.getMessage()); //$NON-NLS-1$
-            }
-        }
-        return bundle.loadClass(className);
     }
 
     private static Object findTextHoverManagerFromActiveEditor()
@@ -1093,49 +990,19 @@ public final class DebugInspectorHook implements IStartup
 
     private static final class InspectorPatchSession
     {
-        private static final NoOpInformationControlCloser NOOP_CLOSER = new NoOpInformationControlCloser();
-
         private final Shell shell;
         private InspectorTargets targets;
 
-        private Button autoCloseCheckbox;
-        private Button inspectButton;
+        private ToolBar leftInspectToolBar;
         private ToolBar closeToolBar;
-        private Composite rightArea;
         private ToolBar menuBarRef;
         private Composite titleAreaRef;
         private Listener keepDeactivateOffListener;
-        private Listener hoverAutoCloseGuardListener;
         private Listener headerMaintainListener;
         private Listener shellPinListener;
-        private Listener hoverPinVisibleListener;
-        private Listener hoverPinCloseListener;
-        private Listener hoverPinMoveListener;
         private boolean hoverPinDisposeAllowed;
-        private boolean pinnedShellMovedByUser;
-        private Object savedTextHoverCloser;
-        private Object savedReplacerCloser;
-        private int hoverGuardGeneration;
-        private boolean hoverPollingScheduled;
-        private boolean hoverDisableLogged;
-        private boolean hoverClosersSwizzled;
-        private boolean hoverIcListenersCleared;
-        private Listener savedHoverDeactivationListener;
-        private Listener savedHoverActivationListener;
-        private Object innerDebugDialog;
-        private IDebugEventSetListener savedDebugEventsListener;
-        private boolean innerDebugEventsSuspended;
         private boolean shellPinnedOnTop;
         private boolean headerGuardInstalled;
-        private Listener savedFShellListener;
-        private Listener pinnedFShellListenerProxy;
-        private Listener savedDeactivateListener;
-        private Listener pinnedDeactivateListenerProxy;
-        private MouseMoveListener savedMouseMoveListener;
-        private Control savedMouseMoveSubject;
-        private Object savedViewportListener;
-        private Listener pinnedOutsideMouseFilter;
-        private boolean hoverEditorReleased;
         private DebugInspectorTreeEnhancement treeEnhancement;
 
         InspectorPatchSession(Shell shell, InspectorTargets targets)
@@ -1152,25 +1019,20 @@ public final class DebugInspectorHook implements IStartup
             if (!isPatchTarget(dialog))
                 dialog = resolveElementDialog(shell, fresh.infoControl);
             if (isPatchTarget(dialog))
-            {
-                Object infoControl = fresh.infoControl;
-                Object hoverManager = fresh.hoverManager;
-                PinnedHoverLink pin = findPinnedLinkForShell(shell);
-                if (pin != null)
-                {
-                    if (infoControl == null)
-                        infoControl = pin.pinnedInfoControl();
-                    if (hoverManager == null)
-                        hoverManager = pin.textHoverManager();
-                }
-                targets = new InspectorTargets(dialog, infoControl, hoverManager);
-            }
+                targets = new InspectorTargets(dialog, fresh.infoControl, fresh.hoverManager);
         }
 
         void refresh()
         {
             if (shell.isDisposed())
                 return;
+            if (hoverPinDisposeAllowed)
+                return;
+            if (!Boolean.TRUE.equals(shell.getData(PATCHED_KEY)))
+            {
+                DebugInspectorDebug.step("hover", "patch aborted zombie shell=" + shell); //$NON-NLS-1$ //$NON-NLS-2$
+                return;
+            }
             updateTargets(resolveTargets(shell));
             ToolBar menuBar = resolveToolBar(targets.dialog, shell);
             if (!isPatchTarget(targets.dialog))
@@ -1194,11 +1056,14 @@ public final class DebugInspectorHook implements IStartup
                 schedulePatchAttempt(shell.getDisplay(), shell, 0);
                 return;
             }
-            applyInspectorModeForTargets();
+            if (!isHeaderLive())
+            {
+                DebugInspectorDebug.step("hover", "patch aborted zombie shell=" + shell); //$NON-NLS-1$ //$NON-NLS-2$
+                return;
+            }
             installTreeEnhancements();
             scheduleHeaderMaintenance(menuBar);
-            shell.setData(PATCHED_KEY, Boolean.TRUE);
-            registerHoverShellAfterPatch();
+            applyInspectorModeForTargets();
             DebugInspectorDebug.step("refresh", "OK dialog=" + targets.dialog.getClass().getSimpleName() //$NON-NLS-1$ //$NON-NLS-2$
                 + " menu=" + describeToolBar(menuBar));
         }
@@ -1210,86 +1075,28 @@ public final class DebugInspectorHook implements IStartup
 
         private void registerHoverShellAfterPatch()
         {
-            if (!isHoverSession())
-                return;
-            Object manager = resolveTextHoverManager();
-            if (manager == null)
-                manager = targets.hoverManager;
-            if (manager == null)
-                return;
-            Shell previous = ACTIVE_HOVER_SHELL_BY_MANAGER.get(manager);
-            if (previous != null && previous.isDisposed())
-                ACTIVE_HOVER_SHELL_BY_MANAGER.remove(manager);
-                if (isHoverFollowEnabled())
-                {
-                    previous = ACTIVE_HOVER_SHELL_BY_MANAGER.get(manager);
-                    if (previous != null && previous != shell && !previous.isDisposed()
-                        && !isPinnedShell(previous)
-                        && Boolean.TRUE.equals(previous.getData(PATCHED_KEY)))
-                    {
-                        DebugInspectorDebug.step("hover", "retire previous shell=" + previous); //$NON-NLS-1$ //$NON-NLS-2$
-                        suppressHoverShell(previous);
-                    }
-                }
-            ACTIVE_HOVER_SHELL_BY_MANAGER.put(manager, shell);
+            // hover lifecycle — у EDT, без регистрации/retire
         }
 
         void requestClose()
         {
             if (shell.isDisposed())
                 return;
-            PinnedHoverLink pin = findPinnedLinkForShell(shell);
-            Object icToDispose = pin != null ? pin.pinnedInfoControl() : null;
-            Object textHoverManager = resolveTextHoverManager();
-            if (textHoverManager == null)
-                textHoverManager = findTextHoverManagerFromActiveEditor();
             hoverPinDisposeAllowed = true;
-            removePinnedOutsideMouseFilter();
-            removeHoverPinCloseGuard();
-            removeHoverPinVisibleGuard();
-            removeHoverPinMoveGuard();
             removeKeepDeactivateOffListener();
-            removeHoverAutoCloseGuard();
             removeShellPinMaintenance();
-            cancelHoverAutoClosePolling();
-            clearPinnedHoverForClose(pin, icToDispose != null ? icToDispose : targets.infoControl);
-            savedDebugEventsListener = null;
-            innerDebugEventsSuspended = false;
-            innerDebugDialog = null;
-            restoreHoverAutoClose();
 
-            Object ic = icToDispose;
-            if (ic == null)
-                ic = targets.infoControl;
-            if (isHoverInspectControl(ic) && textHoverManager != null && !isInfoControlDisposed(ic))
+            if (isHoverMode())
             {
-                hoverEditorReleased = true;
-                relinkHoverInfoControlForDispose(textHoverManager, ic);
-                disposeHoverViaManager(textHoverManager);
-                releaseHoverManagerForEditor(textHoverManager);
-                restoreShellOnTop(false);
-                dropActiveHoverShell(shell);
-                scheduleHoverManagerReady(textHoverManager);
+                Object ic = targets.infoControl;
+                if (isHoverInspectControl(ic))
+                    Global.invoke(ic, "dispose"); //$NON-NLS-1$
+                else if (!shell.isDisposed())
+                    shell.dispose();
                 return;
             }
-            releaseHoverManagerForEditor(textHoverManager);
-            restoreShellOnTop(false);
-            dropActiveHoverShell(shell);
 
-            if (isHoverInspectControl(ic))
-            {
-                Global.invoke(ic, "dispose"); //$NON-NLS-1$
-                scheduleHoverManagerReady(textHoverManager);
-                return;
-            }
-            if (isHoverInspectControl(targets.dialog))
-            {
-                Global.invoke(targets.dialog, "dispose"); //$NON-NLS-1$
-                return;
-            }
-            if (targets.infoControl != null)
-                Global.invoke(targets.infoControl, "setVisible", Boolean.FALSE); //$NON-NLS-1$
-            else if (isElementDialog(targets.dialog))
+            if (isElementDialog(targets.dialog))
                 Global.invoke(targets.dialog, "close"); //$NON-NLS-1$
             else if (!shell.isDisposed())
                 shell.dispose();
@@ -1342,25 +1149,108 @@ public final class DebugInspectorHook implements IStartup
             if (titleArea == null || titleArea.isDisposed())
                 return false;
 
-            if (rightArea != null && !rightArea.isDisposed())
+            if (leftInspectToolBar != null && !leftInspectToolBar.isDisposed())
             {
-                rightArea.setVisible(true);
-                if (autoCloseCheckbox != null && !autoCloseCheckbox.isDisposed())
-                {
-                    autoCloseCheckbox.setVisible(true);
-                    configureHeaderCheckbox();
-                }
-                if (inspectButton != null && !inspectButton.isDisposed())
-                {
-                    inspectButton.setVisible(true);
-                    configureInspectButton();
-                }
+                leftInspectToolBar.setVisible(true);
+                if (leftInspectToolBar.getItemCount() > 0)
+                    configureInspectToolItem(leftInspectToolBar.getItem(0));
             }
             if (closeToolBar != null && !closeToolBar.isDisposed())
                 closeToolBar.setVisible(true);
+            if (isHoverMode())
+                layoutHoverHeader(titleArea, menuBar, menuBar.getData(COMFORT_MENU_LAYOUT_KEY));
+            else
+            {
+                syncHeaderBackground(titleArea);
+                titleArea.layout(true, true);
+            }
+            return true;
+        }
+
+        private void layoutHoverHeader(Composite titleArea, ToolBar menuBar, Object menuBarLayout)
+        {
+            if (!isHoverMode() || titleArea == null || titleArea.isDisposed()
+                || menuBar == null || menuBar.isDisposed())
+                return;
+
+            if (leftInspectToolBar != null && !leftInspectToolBar.isDisposed()
+                && menuBar.getParent() == titleArea)
+                leftInspectToolBar.moveAbove(menuBar);
+
+            applyMenuBarLeftGridData(menuBar, menuBarLayout);
+
+            if (closeToolBar != null && !closeToolBar.isDisposed()
+                && menuBar.getParent() == titleArea)
+            {
+                closeToolBar.moveBelow(menuBar);
+                applyCloseButtonGridData(closeToolBar, menuBar, true);
+            }
+
+            applyTitleAreaLeftGridData(titleArea);
+
+            if (titleArea.getLayout() instanceof GridLayout titleGrid)
+                titleGrid.numColumns = Math.max(titleGrid.numColumns, 4);
+
             syncHeaderBackground(titleArea);
             titleArea.layout(true, true);
+            Composite headerRow = titleArea.getParent();
+            if (headerRow instanceof Composite row && !row.isDisposed()
+                && row != titleArea && row.getLayout() instanceof GridLayout)
+                row.layout(true, true);
+
+            DebugInspectorDebug.step("header-layout", //$NON-NLS-1$
+                "left=" + describeToolBar(leftInspectToolBar) //$NON-NLS-1$
+                    + " menu=" + describeToolBar(menuBar) //$NON-NLS-1$
+                    + " titleArea=" + describeTitleAreaGrid(titleArea)); //$NON-NLS-1$
+        }
+
+        boolean tryFinalizePatch(ToolBar menuBar, int attempt, Object hoverManager)
+        {
+            if (shell.isDisposed() || menuBar == null || menuBar.isDisposed())
+                return false;
+            if (!isHeaderLive())
+                return false;
+            if (Boolean.TRUE.equals(shell.getData(PATCHED_KEY)))
+                return true;
+            shell.setData(PATCHED_KEY, Boolean.TRUE);
+            registerHoverShellAfterPatch();
+            applyInspectorModeForTargets();
+            maintainHeaderControls(menuBar);
+            if (!shell.isDisposed())
+            {
+                if (!shell.getVisible())
+                    shell.setVisible(true);
+                shell.layout(true, true);
+            }
+            DebugInspectorDebug.step("PATCH OK", //$NON-NLS-1$
+                "a=" + attempt //$NON-NLS-1$
+                    + " dialog=" + targets.dialog.getClass().getSimpleName() //$NON-NLS-1$
+                    + " hover=" + (targets.infoControl != null) //$NON-NLS-1$
+                    + " menu=" + describeToolBar(menuBar)); //$NON-NLS-1$
             return true;
+        }
+
+        void scheduleFinalizePatch(ToolBar menuBar, int attempt, Object hoverManager)
+        {
+            if (shell.isDisposed())
+                return;
+            Display display = shell.getDisplay();
+            if (display == null || display.isDisposed())
+                return;
+            display.timerExec(0, () ->
+            {
+                if (shell.isDisposed() || Boolean.TRUE.equals(shell.getData(PATCHED_KEY)))
+                    return;
+                synchronized (shell)
+                {
+                    InspectorTargets latest = resolveTargets(shell);
+                    updateTargets(latest);
+                    ToolBar bar = resolveToolBar(targets.dialog, shell);
+                    if (bar != null && !bar.isDisposed() && tryFinalizePatch(bar, attempt, hoverManager))
+                        return;
+                    schedulePatchAttempt(display, shell, attempt + 1);
+                }
+            });
         }
 
         private boolean isHeaderInstalled()
@@ -1369,9 +1259,8 @@ public final class DebugInspectorHook implements IStartup
                 return false;
             if (!isHoverMode())
                 return true;
-            return rightArea != null && !rightArea.isDisposed()
-                && autoCloseCheckbox != null && !autoCloseCheckbox.isDisposed()
-                && inspectButton != null && !inspectButton.isDisposed();
+            return leftInspectToolBar != null && !leftInspectToolBar.isDisposed()
+                && leftInspectToolBar.getItemCount() > 0;
         }
 
         boolean isHeaderLive()
@@ -1424,65 +1313,64 @@ public final class DebugInspectorHook implements IStartup
         private boolean installHeaderControlsInTitleArea(
             Composite titleArea, ToolBar menuBar, Color titleBg, Object menuBarLayout)
         {
-            ensureMenuBarInTitleArea(titleArea, menuBar, menuBarLayout);
-
             if (isHoverMode())
             {
-                rightArea = new Composite(titleArea, SWT.NONE);
-                markComfortHeader(rightArea);
-                GridLayout rightGrid = new GridLayout(2, false);
-                rightGrid.marginWidth = 0;
-                rightGrid.marginHeight = 0;
-                rightGrid.horizontalSpacing = 4;
-                rightArea.setLayout(rightGrid);
-                rightArea.setBackground(titleBg);
-                rightArea.setLayoutData(rightAreaGridData());
+                ensureMenuBarInParent(titleArea, menuBar, menuBarLayout);
 
-                autoCloseCheckbox = new Button(rightArea, SWT.CHECK);
-                markComfortHeader(autoCloseCheckbox);
-                autoCloseCheckbox.setBackground(titleBg);
-                autoCloseCheckbox.setLayoutData(checkboxInRightAreaGridData());
-                configureHeaderCheckbox();
-                autoCloseCheckbox.setSelection(ComfortSettings.isDebugInspectorHoverUpdate());
-                autoCloseCheckbox.addListener(SWT.Selection, e ->
+                leftInspectToolBar = new ToolBar(titleArea, SWT.FLAT | SWT.LEFT);
+                markComfortHeader(leftInspectToolBar);
+                leftInspectToolBar.setBackground(titleBg);
+                leftInspectToolBar.setLayoutData(leftInspectToolBarGridData());
+                ToolItem inspectItem = new ToolItem(leftInspectToolBar, SWT.PUSH);
+                Image inspectImage = loadInspectCommandImage();
+                if (inspectImage != null)
                 {
-                    boolean enabled = autoCloseCheckbox.getSelection();
-                    ComfortSettings.setDebugInspectorHoverUpdate(enabled);
-                    applyInspectorMode(enabled);
-                });
+                    inspectItem.setImage(inspectImage);
+                    leftInspectToolBar.addDisposeListener(e -> inspectImage.dispose());
+                }
+                else
+                    inspectItem.setText("Инспектировать"); //$NON-NLS-1$
+                configureInspectToolItem(inspectItem);
+                inspectItem.addListener(SWT.Selection, e -> runInspectFromHover());
 
-                inspectButton = new Button(rightArea, SWT.PUSH);
-                markComfortHeader(inspectButton);
-                inspectButton.setBackground(titleBg);
-                inspectButton.setLayoutData(inspectButtonGridData());
-                configureInspectButton();
-                inspectButton.addListener(SWT.Selection, e -> runInspectFromHover());
+                closeToolBar = new ToolBar(titleArea, SWT.FLAT | SWT.RIGHT);
+                markComfortHeader(closeToolBar);
+                closeToolBar.setBackground(titleBg);
+                closeToolBar.setLayoutData(closeButtonGridData(true));
+                ToolItem closeItem = new ToolItem(closeToolBar, SWT.PUSH);
+                closeItem.setText("\u2715"); //$NON-NLS-1$
+                closeItem.setToolTipText(
+                    "Закрыть окно инспектора" //$NON-NLS-1$
+                        + Global.pluginSignForTooltip());
+                closeItem.addListener(SWT.Selection, e -> closeInspector());
+
+                layoutHoverHeader(titleArea, menuBar, menuBarLayout);
             }
-
-            closeToolBar = new ToolBar(titleArea, SWT.FLAT | SWT.RIGHT);
-            markComfortHeader(closeToolBar);
-            closeToolBar.setBackground(titleBg);
-            closeToolBar.setLayoutData(closeButtonGridData(isHoverMode()));
-            ToolItem closeItem = new ToolItem(closeToolBar, SWT.PUSH);
-            closeItem.setText("\u2715"); //$NON-NLS-1$
-            closeItem.setToolTipText(
-                "Закрыть окно инспектора" //$NON-NLS-1$
-                    + Global.pluginSignForTooltip());
-            closeItem.addListener(SWT.Selection, e -> closeInspector());
-
-            if (menuBar.getParent() == titleArea)
+            else
             {
-                if (rightArea != null && !rightArea.isDisposed())
-                    rightArea.moveAbove(menuBar);
-                closeToolBar.moveBelow(menuBar);
-            }
+                ensureMenuBarInParent(titleArea, menuBar, menuBarLayout);
 
-            if (titleArea.getLayout() instanceof GridLayout gridLayout)
-                gridLayout.numColumns = Math.max(gridLayout.numColumns, 4);
+                closeToolBar = new ToolBar(titleArea, SWT.FLAT | SWT.RIGHT);
+                markComfortHeader(closeToolBar);
+                closeToolBar.setBackground(titleBg);
+                closeToolBar.setLayoutData(closeButtonGridData(false));
+                ToolItem closeItem = new ToolItem(closeToolBar, SWT.PUSH);
+                closeItem.setText("\u2715"); //$NON-NLS-1$
+                closeItem.setToolTipText(
+                    "Закрыть окно инспектора" //$NON-NLS-1$
+                        + Global.pluginSignForTooltip());
+                closeItem.addListener(SWT.Selection, e -> closeInspector());
+
+                if (menuBar.getParent() == titleArea)
+                    closeToolBar.moveBelow(menuBar);
+
+                if (titleArea.getLayout() instanceof GridLayout gridLayout)
+                    gridLayout.numColumns = Math.max(gridLayout.numColumns, 4);
+            }
 
             menuBarRef = menuBar;
-            if (rightArea != null && !rightArea.isDisposed())
-                rightArea.setVisible(true);
+            if (leftInspectToolBar != null && !leftInspectToolBar.isDisposed())
+                leftInspectToolBar.setVisible(true);
             if (closeToolBar != null && !closeToolBar.isDisposed())
                 closeToolBar.setVisible(true);
             titleAreaRef = titleArea;
@@ -1490,7 +1378,7 @@ public final class DebugInspectorHook implements IStartup
             titleArea.layout(true, true);
             installTreeEnhancements();
             DebugInspectorDebug.step("header", //$NON-NLS-1$
-                "installed rightArea=" + (rightArea != null ? controlPath(rightArea) : "null") //$NON-NLS-1$ //$NON-NLS-2$
+                "installed left=" + describeToolBar(leftInspectToolBar) //$NON-NLS-1$
                     + " menu=" + describeToolBar(menuBar)); //$NON-NLS-1$
             return true;
         }
@@ -1505,17 +1393,17 @@ public final class DebugInspectorHook implements IStartup
                     + DebugInspectorDebug.cn(targets.dialog));
         }
 
-        private static void ensureMenuBarInTitleArea(
-            Composite titleArea, ToolBar menuBar, Object menuBarLayout)
+        private static void ensureMenuBarInParent(
+            Composite parent, ToolBar menuBar, Object menuBarLayout)
         {
-            if (menuBar == null || menuBar.isDisposed() || titleArea == null || titleArea.isDisposed())
+            if (menuBar == null || menuBar.isDisposed() || parent == null || parent.isDisposed())
                 return;
-            if (menuBar.getParent() == titleArea)
+            if (menuBar.getParent() == parent)
                 return;
-            Control parent = menuBar.getParent();
-            if (parent instanceof Composite composite && isComfortHeader(composite))
+            Control oldParent = menuBar.getParent();
+            if (oldParent instanceof Composite composite && isComfortHeader(composite))
             {
-                menuBar.setParent(titleArea);
+                menuBar.setParent(parent);
                 if (menuBarLayout instanceof GridData gd)
                     menuBar.setLayoutData(gd);
             }
@@ -1533,13 +1421,20 @@ public final class DebugInspectorHook implements IStartup
 
         private void removeOrphanComfortControls(Composite titleArea, ToolBar menuBar)
         {
-            autoCloseCheckbox = null;
-            inspectButton = null;
+            leftInspectToolBar = null;
             closeToolBar = null;
-            rightArea = null;
             menuBarRef = null;
+            int removed = removeComfortOrphansIn(titleArea, menuBar);
+            if (removed > 0)
+                DebugInspectorDebug.step("header", "removed orphans=" + removed); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        private int removeComfortOrphansIn(Composite area, ToolBar menuBar)
+        {
+            if (area == null || area.isDisposed())
+                return 0;
             int removed = 0;
-            for (Control child : titleArea.getChildren())
+            for (Control child : area.getChildren())
             {
                 if (!isComfortHeader(child))
                     continue;
@@ -1552,8 +1447,8 @@ public final class DebugInspectorHook implements IStartup
                     {
                         if (grand == menuBar)
                         {
-                            Object layoutData = composite.getLayoutData();
-                            menuBar.setParent(titleArea);
+                            Object layoutData = menuBar.getLayoutData();
+                            menuBar.setParent(area);
                             if (layoutData instanceof GridData gd)
                                 menuBar.setLayoutData(gd);
                             break;
@@ -1562,8 +1457,7 @@ public final class DebugInspectorHook implements IStartup
                 }
                 child.dispose();
             }
-            if (removed > 0)
-                DebugInspectorDebug.step("header", "removed orphans=" + removed); //$NON-NLS-1$ //$NON-NLS-2$
+            return removed;
         }
 
         private void syncHeaderBackground(Composite titleArea)
@@ -1571,14 +1465,10 @@ public final class DebugInspectorHook implements IStartup
             if (titleArea == null || titleArea.isDisposed())
                 return;
             Color titleBg = titleArea.getBackground();
-            if (autoCloseCheckbox != null && !autoCloseCheckbox.isDisposed())
-                autoCloseCheckbox.setBackground(titleBg);
-            if (inspectButton != null && !inspectButton.isDisposed())
-                inspectButton.setBackground(titleBg);
+            if (leftInspectToolBar != null && !leftInspectToolBar.isDisposed())
+                leftInspectToolBar.setBackground(titleBg);
             if (closeToolBar != null && !closeToolBar.isDisposed())
                 closeToolBar.setBackground(titleBg);
-            if (rightArea != null && !rightArea.isDisposed())
-                rightArea.setBackground(titleBg);
         }
 
         private void installHeaderGuard(Composite titleArea)
@@ -1589,8 +1479,6 @@ public final class DebugInspectorHook implements IStartup
             headerMaintainListener = e ->
             {
                 if (shell.isDisposed())
-                    return;
-                if (e.type == SWT.Move && isHoverMode() && !isHoverFollowEnabled())
                     return;
                 ToolBar menuBar = resolveToolBar(targets.dialog, shell);
                 if (menuBar != null && !menuBar.isDisposed())
@@ -1621,35 +1509,30 @@ public final class DebugInspectorHook implements IStartup
         void applyInspectorModeForTargets()
         {
             if (!isHoverMode())
-            {
                 applyInspectorMode(false);
+        }
+
+
+        private void configureInspectToolItem(ToolItem inspectItem)
+        {
+            if (inspectItem == null || inspectItem.isDisposed() || !isHoverMode())
                 return;
+            if (inspectItem.getImage() == null)
+            {
+                Image img = loadInspectCommandImage();
+                if (img != null)
+                {
+                    inspectItem.setImage(img);
+                    if (leftInspectToolBar != null && !leftInspectToolBar.isDisposed())
+                        leftInspectToolBar.addDisposeListener(e -> img.dispose());
+                }
+                else
+                    inspectItem.setText("Инспектировать"); //$NON-NLS-1$
             }
-            if (autoCloseCheckbox == null || autoCloseCheckbox.isDisposed())
-                applyInspectorMode(ComfortSettings.isDebugInspectorHoverUpdate());
-            else
-                applyInspectorMode(autoCloseCheckbox.getSelection());
-        }
-
-        private void configureHeaderCheckbox()
-        {
-            if (autoCloseCheckbox == null || autoCloseCheckbox.isDisposed() || !isHoverMode())
-                return;
-            autoCloseCheckbox.setText("Обновлять"); //$NON-NLS-1$
-            autoCloseCheckbox.setToolTipText(
-                "Обновлять окно при наведении в редакторе и закрывать по сигналам редактора" //$NON-NLS-1$
-                    + Global.pluginSignForTooltip());
-        }
-
-        private void configureInspectButton()
-        {
-            if (inspectButton == null || inspectButton.isDisposed() || !isHoverMode())
-                return;
-            inspectButton.setText("Инспектировать"); //$NON-NLS-1$
-            inspectButton.setToolTipText(
+            inspectItem.setToolTipText(
                 "Открыть инспектор с выражением из hover-окна" //$NON-NLS-1$
                     + Global.pluginSignForTooltip());
-            inspectButton.setEnabled(true);
+            inspectItem.setEnabled(true);
         }
 
         private void runInspectFromHover()
@@ -1674,13 +1557,6 @@ public final class DebugInspectorHook implements IStartup
             return isHoverInspectControl(targets.dialog) || targets.infoControl != null;
         }
 
-        private boolean isHoverFollowEnabled()
-        {
-            return isHoverMode()
-                && autoCloseCheckbox != null
-                && !autoCloseCheckbox.isDisposed()
-                && autoCloseCheckbox.getSelection();
-        }
 
         void applyInspectorMode(boolean enabled)
         {
@@ -1697,536 +1573,7 @@ public final class DebugInspectorHook implements IStartup
                 DebugInspectorDebug.step("inspector", "skip dialog=null enabled=" + enabled); //$NON-NLS-1$ //$NON-NLS-2$
                 return;
             }
-
-            if (isHoverMode())
-                applyHoverFollow(enabled);
-            else
-                applyStandaloneAutoClose(enabled);
-        }
-
-        private void applyHoverFollow(boolean follow)
-        {
-            if (follow)
-            {
-                removePinnedOutsideMouseFilter();
-                removeHoverPinCloseGuard();
-                removeHoverPinVisibleGuard();
-                removeHoverPinMoveGuard();
-                removeKeepDeactivateOffListener();
-                restoreHoverEditorLink();
-                restoreShellOnTop(false);
-                restoreHoverAutoClose();
-                DebugInspectorDebug.step("hover", "follow ON"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            else
-            {
-                if (isOtherShellPinned())
-                {
-                    DebugInspectorDebug.step("hover", "follow OFF skip other pinned"); //$NON-NLS-1$ //$NON-NLS-2$
-                    scheduleSuppressHoverShell(shell);
-                    return;
-                }
-                if (!isAlreadyPinnedHere())
-                {
-                    pinnedShellMovedByUser = false;
-                    restoreShellOnTop(true);
-                }
-                installHoverPinCloseGuard();
-                installHoverPinVisibleGuard();
-                installHoverPinMoveGuard();
-                installKeepDeactivateOffListener();
-                installPinnedOutsideMouseFilter();
-                if (isAlreadyPinnedHere())
-                {
-                    ensureHoverManagerSuspendedForShell();
-                    disableHoverAutoClose();
-                    ensureHoverPinnedDeactivateOff();
-                    DebugInspectorDebug.step("hover", "follow OFF keep pin"); //$NON-NLS-1$ //$NON-NLS-2$
-                    return;
-                }
-                disableHoverAutoClose();
-                ensureHoverPinnedDeactivateOff();
-                detachHoverFromEditor();
-                disableHoverAutoClose();
-                ensureHoverPinnedDeactivateOff();
-                DebugInspectorDebug.step("hover", "follow OFF (pinned)"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-        }
-
-        private List<Object> collectInfoControlCandidates()
-        {
-            Set<Object> seen = new LinkedHashSet<>();
-            PinnedHoverLink pin = findPinnedLinkForShell(shell);
-            if (pin != null)
-            {
-                addInfoControlCandidate(seen, pin.pinnedInfoControl());
-                addInfoControlCandidate(seen, pin.savedManagerIc());
-                addInfoControlCandidate(seen, pin.savedReplacerIc());
-                Object manager = pin.textHoverManager();
-                addInfoControlCandidate(seen, Global.getField(manager, "fInformationControl")); //$NON-NLS-1$
-                Object replacer = Global.getField(manager, "fInformationControlReplacer"); //$NON-NLS-1$
-                if (replacer != null)
-                    addInfoControlCandidate(seen, Global.getField(replacer, "fInformationControl")); //$NON-NLS-1$
-            }
-            addInfoControlCandidate(seen, targets.infoControl);
-            addInfoControlCandidate(seen, targets.dialog);
-            HoverBinding binding = findHoverBindingForShell(shell);
-            if (binding != null)
-                addInfoControlCandidate(seen, binding.infoControl());
-            Object manager = resolveTextHoverManager();
-            if (manager != null)
-            {
-                Object replacer = Global.getField(manager, "fInformationControlReplacer"); //$NON-NLS-1$
-                addInfoControlCandidate(seen, readSavedHoverInfoControl(manager, replacer, true));
-                if (replacer != null)
-                    addInfoControlCandidate(seen, readSavedHoverInfoControl(manager, replacer, false));
-            }
-            return new ArrayList<>(seen);
-        }
-
-        private static void addInfoControlCandidate(Set<Object> seen, Object candidate)
-        {
-            if (candidate != null && !(candidate instanceof PinnedHoverBlockerInformationControl))
-                seen.add(candidate);
-        }
-
-        private Object resolvePrimaryInfoControlForShell()
-        {
-            for (Object candidate : collectInfoControlCandidates())
-            {
-                if (infoControlShellEquals(candidate, shell))
-                    return candidate;
-                Object inner = Global.getField(candidate, "debugElementDialog"); //$NON-NLS-1$
-                if (inner != null && infoControlShellEquals(inner, shell))
-                    return candidate;
-            }
-            return null;
-        }
-
-        private boolean isAlreadyPinnedHere()
-        {
-            PinnedHoverLink owned = findPinnedLinkForShell(shell);
-            return owned != null && !owned.shell().isDisposed();
-        }
-
-        private void ensureHoverManagerSuspendedForShell()
-        {
-            PinnedHoverLink owned = findPinnedLinkForShell(shell);
-            if (owned != null)
-                suspendHoverManager(owned.textHoverManager());
-        }
-
-        private Object resolvePinnedHoverInfoControl()
-        {
-            Object primary = resolvePrimaryInfoControlForShell();
-            if (primary != null)
-                return primary;
-            PinnedHoverLink pin = findPinnedLinkForShell(shell);
-            if (pin != null && pin.pinnedInfoControl() != null)
-                return pin.pinnedInfoControl();
-            if (isHoverInspectControl(targets.dialog))
-                return targets.dialog;
-            if (isHoverInspectControl(targets.infoControl))
-                return targets.infoControl;
-            return null;
-        }
-
-        private void ensureHoverPinnedDeactivateOff()
-        {
-            if (isElementDialog(targets.dialog))
-            {
-                Global.setField(targets.dialog, "listenToDeactivate", Boolean.FALSE); //$NON-NLS-1$
-                Global.setField(targets.dialog, "listenToParentDeactivate", Boolean.FALSE); //$NON-NLS-1$
-            }
-            for (Object ic : collectInfoControlCandidates())
-                suspendInnerDebugElementDialog(ic);
-            swizzleDeactivateListenerForPin();
-            swizzleFShellListenerForPin();
-            Object manager = resolveTextHoverManager();
-            if (manager != null)
-                suspendHoverEditorInteractionForPin(manager);
-        }
-
-        private void swizzleDeactivateListenerForPin()
-        {
-            if (pinnedDeactivateListenerProxy != null || shell.isDisposed())
-                return;
-            for (Object ic : collectInfoControlCandidates())
-            {
-                Object current = Global.getField(ic, "deactivationListener"); //$NON-NLS-1$
-                if (!(current instanceof Listener listener) || listener == pinnedDeactivateListenerProxy)
-                    continue;
-                savedDeactivateListener = listener;
-                shell.removeListener(SWT.Deactivate, listener);
-                break;
-            }
-            if (savedDeactivateListener == null)
-                return;
-
-            Listener original = savedDeactivateListener;
-            pinnedDeactivateListenerProxy = e ->
-            {
-                if (shouldBlockPinnedClose())
-                    return;
-                original.handleEvent(e);
-            };
-            shell.addListener(SWT.Deactivate, pinnedDeactivateListenerProxy);
-            for (Object ic : collectInfoControlCandidates())
-                Global.setField(ic, "deactivationListener", pinnedDeactivateListenerProxy); //$NON-NLS-1$
-            DebugInspectorDebug.step("hover", "deactivationListener swizzled"); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-
-        private void restoreDeactivateListenerForPin()
-        {
-            if (pinnedDeactivateListenerProxy != null && !shell.isDisposed())
-                shell.removeListener(SWT.Deactivate, pinnedDeactivateListenerProxy);
-            if (savedDeactivateListener != null && !shell.isDisposed())
-            {
-                shell.addListener(SWT.Deactivate, savedDeactivateListener);
-                for (Object ic : collectInfoControlCandidates())
-                    Global.setField(ic, "deactivationListener", savedDeactivateListener); //$NON-NLS-1$
-                DebugInspectorDebug.step("hover", "deactivationListener restored"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            savedDeactivateListener = null;
-            pinnedDeactivateListenerProxy = null;
-        }
-
-        private void swizzleFShellListenerForPin()
-        {
-            if (pinnedFShellListenerProxy != null || shell.isDisposed())
-                return;
-            for (Object ic : collectInfoControlCandidates())
-            {
-                Object current = Global.getField(ic, "fShellListener"); //$NON-NLS-1$
-                if (!(current instanceof Listener listener) || listener == pinnedFShellListenerProxy)
-                    continue;
-                savedFShellListener = listener;
-                shell.removeListener(SWT.Deactivate, listener);
-                shell.removeListener(SWT.Activate, listener);
-                break;
-            }
-            if (savedFShellListener == null)
-                return;
-
-            Listener original = savedFShellListener;
-            pinnedFShellListenerProxy = e ->
-            {
-                if (e.type == SWT.Deactivate && shouldBlockPinnedClose())
-                    return;
-                original.handleEvent(e);
-            }; //$NON-NLS-1$
-            shell.addListener(SWT.Deactivate, pinnedFShellListenerProxy);
-            shell.addListener(SWT.Activate, pinnedFShellListenerProxy);
-            for (Object ic : collectInfoControlCandidates())
-                Global.setField(ic, "fShellListener", pinnedFShellListenerProxy); //$NON-NLS-1$
-            DebugInspectorDebug.step("hover", "fShellListener swizzled"); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-
-        private void restoreFShellListenerForPin()
-        {
-            if (pinnedFShellListenerProxy != null && !shell.isDisposed())
-            {
-                shell.removeListener(SWT.Deactivate, pinnedFShellListenerProxy);
-                shell.removeListener(SWT.Activate, pinnedFShellListenerProxy);
-            }
-            if (savedFShellListener != null && !shell.isDisposed())
-            {
-                shell.addListener(SWT.Deactivate, savedFShellListener);
-                shell.addListener(SWT.Activate, savedFShellListener);
-                for (Object ic : collectInfoControlCandidates())
-                    Global.setField(ic, "fShellListener", savedFShellListener); //$NON-NLS-1$
-                DebugInspectorDebug.step("hover", "fShellListener restored"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            savedFShellListener = null;
-            pinnedFShellListenerProxy = null;
-        }
-
-        private Control resolveHoverSubjectControl(Object textHoverManager)
-        {
-            Object subject = Global.getField(textHoverManager, "fSubjectControl"); //$NON-NLS-1$
-            if (subject instanceof Control control && !control.isDisposed())
-                return control;
-            Object viewer = Global.getField(textHoverManager, "fTextViewer"); //$NON-NLS-1$
-            if (viewer instanceof TextViewer textViewer)
-            {
-                StyledText widget = textViewer.getTextWidget();
-                if (widget != null && !widget.isDisposed())
-                    return widget;
-            }
-            return null;
-        }
-
-        private void stopAllInformationControlClosers(Object textHoverManager)
-        {
-            if (textHoverManager == null)
-                return;
-            stopInformationControlCloser(textHoverManager);
-            Object current = Global.getField(textHoverManager, "fInformationControlCloser"); //$NON-NLS-1$
-            if (current != null && !(current instanceof NoOpInformationControlCloser))
-                Global.invoke(current, "stop"); //$NON-NLS-1$
-            if (savedTextHoverCloser != null)
-                Global.invoke(savedTextHoverCloser, "stop"); //$NON-NLS-1$
-            Object replacer = Global.getField(textHoverManager, "fInformationControlReplacer"); //$NON-NLS-1$
-            if (replacer != null)
-            {
-                stopInformationControlCloser(replacer);
-                Object replacerCloser = Global.getField(replacer, "fInformationControlCloser"); //$NON-NLS-1$
-                if (replacerCloser != null && !(replacerCloser instanceof NoOpInformationControlCloser))
-                    Global.invoke(replacerCloser, "stop"); //$NON-NLS-1$
-            }
-            if (savedReplacerCloser != null)
-                Global.invoke(savedReplacerCloser, "stop"); //$NON-NLS-1$
-            HoverBinding binding = findHoverBindingForShell(shell);
-            if (binding != null && binding.closerOwner() != null)
-                stopInformationControlCloser(binding.closerOwner());
-        }
-
-        private void suspendHoverEditorInteractionForPin(Object textHoverManager)
-        {
-            if (textHoverManager == null)
-                return;
-            suspendHoverManager(textHoverManager);
-            stopAllInformationControlClosers(textHoverManager);
-
-            Object stopper = Global.getField(textHoverManager, "fStopper"); //$NON-NLS-1$
-            if (stopper != null)
-                Global.invoke(stopper, "stop"); //$NON-NLS-1$
-            Object tracker = Global.getField(textHoverManager, "fMouseTracker"); //$NON-NLS-1$
-            if (tracker != null)
-                Global.invoke(tracker, "stop"); //$NON-NLS-1$
-
-            if (savedMouseMoveListener == null)
-            {
-                Object listener = Global.getField(textHoverManager, "fMouseMoveListener"); //$NON-NLS-1$
-                Control subject = resolveHoverSubjectControl(textHoverManager);
-                if (subject instanceof StyledText styledText && !styledText.isDisposed()
-                    && listener instanceof MouseMoveListener mouseMoveListener)
-                {
-                    styledText.removeMouseMoveListener(mouseMoveListener);
-                    savedMouseMoveSubject = styledText;
-                    savedMouseMoveListener = mouseMoveListener;
-                    DebugInspectorDebug.step("hover", "editor mouseMove detached"); //$NON-NLS-1$ //$NON-NLS-2$
-                }
-            }
-            if (savedViewportListener == null)
-            {
-                Object viewportListener = Global.getField(textHoverManager, "fViewportListener"); //$NON-NLS-1$
-                if (viewportListener != null)
-                {
-                    Global.invoke(textHoverManager, "removeViewportListener", viewportListener); //$NON-NLS-1$
-                    savedViewportListener = viewportListener;
-                    DebugInspectorDebug.step("hover", "editor viewport detached"); //$NON-NLS-1$ //$NON-NLS-2$
-                }
-            }
-        }
-
-        private void restoreHoverEditorInteractionForPin()
-        {
-            if (savedMouseMoveSubject instanceof StyledText styledText && !styledText.isDisposed()
-                && savedMouseMoveListener != null)
-            {
-                styledText.addMouseMoveListener(savedMouseMoveListener);
-                DebugInspectorDebug.step("hover", "editor mouseMove restored"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            savedMouseMoveSubject = null;
-            savedMouseMoveListener = null;
-            if (savedViewportListener != null)
-            {
-                Object manager = resolveTextHoverManager();
-                if (manager != null)
-                    Global.invoke(manager, "addViewportListener", savedViewportListener); //$NON-NLS-1$
-                savedViewportListener = null;
-                DebugInspectorDebug.step("hover", "editor viewport restored"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-        }
-
-        private boolean isControlInPinnedShell(Control control)
-        {
-            for (Control walk = control; walk != null; walk = walk.getParent())
-            {
-                if (walk == shell)
-                    return true;
-            }
-            return false;
-        }
-
-        private void reinforcePinnedHoverGuards()
-        {
-            if (!shouldBlockPinnedClose())
-                return;
-            Object manager = resolveTextHoverManager();
-            if (manager == null)
-            {
-                PinnedHoverLink pin = findPinnedLinkForShell(shell);
-                if (pin != null)
-                    manager = pin.textHoverManager();
-            }
-            if (manager != null)
-            {
-                stopAllInformationControlClosers(manager);
-                if (!hoverClosersSwizzled)
-                    swizzleHoverClosers(manager);
-                suspendHoverEditorInteractionForPin(manager);
-            }
-            swizzleDeactivateListenerForPin();
-            swizzleFShellListenerForPin();
-        }
-
-        private void installPinnedOutsideMouseFilter()
-        {
-            if (pinnedOutsideMouseFilter != null || shell.isDisposed())
-                return;
-            Display display = shell.getDisplay();
-            pinnedOutsideMouseFilter = e ->
-            {
-                if (!shouldBlockPinnedClose() || shell.isDisposed())
-                    return;
-                if (!(e.widget instanceof Control control) || isControlInPinnedShell(control))
-                    return;
-                reinforcePinnedHoverGuards();
-            };
-            display.addFilter(SWT.MouseDown, pinnedOutsideMouseFilter);
-            display.addFilter(SWT.MouseUp, pinnedOutsideMouseFilter);
-            DebugInspectorDebug.step("hover", "outside mouse filter installed"); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-
-        private void removePinnedOutsideMouseFilter()
-        {
-            if (pinnedOutsideMouseFilter == null)
-                return;
-            Display display = shell.isDisposed() ? null : shell.getDisplay();
-            if (display != null && !display.isDisposed())
-            {
-                display.removeFilter(SWT.MouseDown, pinnedOutsideMouseFilter);
-                display.removeFilter(SWT.MouseUp, pinnedOutsideMouseFilter);
-            }
-            pinnedOutsideMouseFilter = null;
-        }
-
-        private static boolean isInnerHoverDebugDialog(Object data)
-        {
-            if (data == null)
-                return false;
-            String name = data.getClass().getName();
-            return CLASS_HOVER_DIALOG.equals(name) || CLASS_DEBUG_ELEMENT_DIALOG.equals(name);
-        }
-
-        private Object resolveInnerDebugElementDialog(Object infoControl)
-        {
-            if (infoControl == null)
-                return null;
-            Object inner = Global.getField(infoControl, "debugElementDialog"); //$NON-NLS-1$
-            if (isInnerHoverDebugDialog(inner) || isElementDialog(inner))
-                return inner;
-            return null;
-        }
-
-        private void suspendInnerDebugElementDialog(Object infoControl)
-        {
-            Object inner = resolveInnerDebugElementDialog(infoControl);
-            if (inner == null)
-                return;
-            innerDebugDialog = inner;
-            Global.setField(inner, "listenToDeactivate", Boolean.FALSE); //$NON-NLS-1$
-            Global.setField(inner, "listenToParentDeactivate", Boolean.FALSE); //$NON-NLS-1$
-            if (innerDebugEventsSuspended)
-                return;
-            Object listener = Global.getField(inner, "debugEventsListener"); //$NON-NLS-1$
-            if (listener instanceof IDebugEventSetListener debugListener)
-            {
-                DebugPlugin.getDefault().removeDebugEventListener(debugListener);
-                savedDebugEventsListener = debugListener;
-                innerDebugEventsSuspended = true;
-                DebugInspectorDebug.step("hover", "inner debug events suspended"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            else
-            {
-                DebugInspectorDebug.step("hover", //$NON-NLS-1$
-                    "inner debug listener missing inner=" + DebugInspectorDebug.cn(inner)); //$NON-NLS-1$
-            }
-        }
-
-        private void restoreInnerDebugElementDialog()
-        {
-            if (!innerDebugEventsSuspended || savedDebugEventsListener == null)
-                return;
-            DebugPlugin.getDefault().addDebugEventListener(savedDebugEventsListener);
-            savedDebugEventsListener = null;
-            innerDebugEventsSuspended = false;
-            innerDebugDialog = null;
-            DebugInspectorDebug.step("hover", "inner debug events restored"); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-
-        private void removeHoverIcAutoCloseListeners(Object infoControl)
-        {
-            if (infoControl == null || shell.isDisposed())
-                return;
-
-            boolean removed = false;
-            for (String fieldName : new String[] { "deactivationListener", "activationListener" }) //$NON-NLS-1$ //$NON-NLS-2$
-            {
-                Object listener = Global.getField(infoControl, fieldName);
-                if (!(listener instanceof Listener l))
-                    continue;
-                int type = "deactivationListener".equals(fieldName) ? SWT.Deactivate : SWT.Activate; //$NON-NLS-1$
-                shell.removeListener(type, l);
-                Global.setField(infoControl, fieldName, null);
-                if ("deactivationListener".equals(fieldName)) //$NON-NLS-1$
-                    savedHoverDeactivationListener = l;
-                else
-                    savedHoverActivationListener = l;
-                removed = true;
-            }
-
-            if (removed)
-            {
-                hoverIcListenersCleared = true;
-                DebugInspectorDebug.step("hover", //$NON-NLS-1$
-                    "ic listeners cleared deactiv=" + (savedHoverDeactivationListener != null) //$NON-NLS-1$
-                        + " activ=" + (savedHoverActivationListener != null)); //$NON-NLS-1$
-            }
-        }
-
-        private void restoreHoverIcAutoCloseListeners(Object infoControl)
-        {
-            if (!hoverIcListenersCleared || infoControl == null || shell.isDisposed())
-                return;
-            if (savedHoverDeactivationListener != null)
-            {
-                shell.addListener(SWT.Deactivate, savedHoverDeactivationListener);
-                Global.setField(infoControl, "deactivationListener", savedHoverDeactivationListener); //$NON-NLS-1$
-            }
-            if (savedHoverActivationListener != null)
-            {
-                shell.addListener(SWT.Activate, savedHoverActivationListener);
-                Global.setField(infoControl, "activationListener", savedHoverActivationListener); //$NON-NLS-1$
-            }
-            savedHoverDeactivationListener = null;
-            savedHoverActivationListener = null;
-            hoverIcListenersCleared = false;
-        }
-
-        private boolean shouldBlockPinnedClose()
-        {
-            return isHoverMode()
-                && !isHoverFollowEnabled()
-                && !hoverPinDisposeAllowed;
-        }
-
-        private boolean isOtherShellPinned()
-        {
-            if (findPinnedLinkForShell(shell) != null)
-                return false;
-            Object manager = resolveTextHoverManager();
-            for (PinnedHoverLink link : PINNED_HOVER_BY_MANAGER.values())
-            {
-                if (link.shell().isDisposed() || link.shell() == shell)
-                    continue;
-                if (manager != null && link.textHoverManager() != manager)
-                    continue;
-                return true;
-            }
-            return false;
+            applyStandaloneAutoClose(enabled);
         }
 
         private void applyStandaloneAutoClose(boolean autoClose)
@@ -2235,7 +1582,6 @@ public final class DebugInspectorHook implements IStartup
             {
                 removeKeepDeactivateOffListener();
                 restoreShellOnTop(false);
-                restoreHoverAutoClose();
                 DebugInspectorDebug.step("standalone", "close ON"); //$NON-NLS-1$ //$NON-NLS-2$
             }
             else
@@ -2247,166 +1593,15 @@ public final class DebugInspectorHook implements IStartup
                     installKeepDeactivateOffListener();
                 }
                 restoreShellOnTop(true);
-                DebugInspectorDebug.step("standalone", "close OFF (pinned)"); //$NON-NLS-1$ //$NON-NLS-2$
+                DebugInspectorDebug.step("standalone", "close OFF"); //$NON-NLS-1$ //$NON-NLS-2$
             }
-        }
-
-        private Object resolveTextHoverManager()
-        {
-            if (targets.hoverManager != null)
-                return targets.hoverManager;
-            HoverBinding binding = findHoverBindingForShell(shell);
-            return binding != null ? binding.textHoverManager() : null;
-        }
-
-        private void detachHoverFromEditor()
-        {
-            Object textHoverManager = resolveTextHoverManager();
-            if (textHoverManager == null)
-            {
-                DebugInspectorDebug.step("hover", "detach skip manager=null"); //$NON-NLS-1$ //$NON-NLS-2$
-                return;
-            }
-
-            PinnedHoverLink existing = PINNED_HOVER_BY_MANAGER.get(textHoverManager);
-            if (existing != null)
-            {
-                if (!existing.shell().isDisposed() && existing.shell() != shell)
-                {
-                    DebugInspectorDebug.step("hover", //$NON-NLS-1$
-                        "detach skip other pinned=" + existing.shell()); //$NON-NLS-1$
-                    scheduleSuppressHoverShell(shell);
-                    return;
-                }
-                if (!existing.shell().isDisposed() && existing.shell() == shell)
-                {
-                    DebugInspectorDebug.step("hover", "detach skip already pinned"); //$NON-NLS-1$ //$NON-NLS-2$
-                    return;
-                }
-                if (existing.shell().isDisposed())
-                {
-                    if (existing.blockerIc() instanceof PinnedHoverBlockerInformationControl oldBlocker)
-                        oldBlocker.dispose();
-                    PINNED_HOVER_BY_MANAGER.remove(textHoverManager);
-                }
-            }
-
-            Object replacer = Global.getField(textHoverManager, "fInformationControlReplacer"); //$NON-NLS-1$
-            Object savedIc = readSavedHoverInfoControl(textHoverManager, replacer, true);
-            Object savedRic = replacer != null
-                ? readSavedHoverInfoControl(textHoverManager, replacer, false)
-                : null;
-            Object pinnedInfoControl = resolvePrimaryInfoControlForShell();
-            if (pinnedInfoControl == null)
-                pinnedInfoControl = targets.infoControl != null ? targets.infoControl : savedIc;
-            if (pinnedInfoControl == null || pinnedInfoControl instanceof PinnedHoverBlockerInformationControl)
-                pinnedInfoControl = savedRic;
-            if (pinnedInfoControl instanceof PinnedHoverBlockerInformationControl)
-                pinnedInfoControl = null;
-
-            Boolean savedProcessMouseHover = readBooleanField(textHoverManager, "fProcessMouseHoverEvent"); //$NON-NLS-1$
-            Boolean savedManagerEnabled = readBooleanField(textHoverManager, "fEnabled"); //$NON-NLS-1$
-            suspendHoverManager(textHoverManager);
-
-            PinnedHoverBlockerInformationControl blocker =
-                new PinnedHoverBlockerInformationControl(shell.getDisplay());
-            PINNED_HOVER_BY_MANAGER.put(textHoverManager,
-                new PinnedHoverLink(shell, textHoverManager, pinnedInfoControl, savedIc, savedRic, blocker,
-                    savedProcessMouseHover, savedManagerEnabled));
-            Global.setField(textHoverManager, "fInformationControl", blocker); //$NON-NLS-1$
-            if (replacer != null)
-                Global.setField(replacer, "fInformationControl", blocker); //$NON-NLS-1$
-            DebugInspectorDebug.step("hover", "detach manager=" + textHoverManager.getClass().getSimpleName()); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-
-        private static Object readSavedHoverInfoControl(
-            Object textHoverManager, Object replacer, boolean fromManager)
-        {
-            Object current = fromManager
-                ? Global.getField(textHoverManager, "fInformationControl") //$NON-NLS-1$
-                : Global.getField(replacer, "fInformationControl"); //$NON-NLS-1$
-            if (current != null && !(current instanceof PinnedHoverBlockerInformationControl))
-                return current;
-            PinnedHoverLink link = PINNED_HOVER_BY_MANAGER.get(textHoverManager);
-            if (link == null)
-                return null;
-            Object saved = fromManager ? link.savedManagerIc() : link.savedReplacerIc();
-            if (saved != null && !(saved instanceof PinnedHoverBlockerInformationControl))
-                return saved;
-            return link.pinnedInfoControl();
-        }
-
-        private void restoreHoverEditorLink()
-        {
-            PinnedHoverLink owned = findPinnedLinkForShell(shell);
-            Object textHoverManager = owned != null
-                ? owned.textHoverManager()
-                : resolveTextHoverManager();
-            if (textHoverManager == null)
-                return;
-            PinnedHoverLink link = PINNED_HOVER_BY_MANAGER.remove(textHoverManager);
-            if (link == null)
-                return;
-            Object restoredManagerIc = link.savedManagerIc();
-            if (restoredManagerIc != null && !(restoredManagerIc instanceof PinnedHoverBlockerInformationControl))
-                Global.setField(textHoverManager, "fInformationControl", restoredManagerIc); //$NON-NLS-1$
-            else
-                Global.setField(textHoverManager, "fInformationControl", null); //$NON-NLS-1$
-            Object replacer = Global.getField(textHoverManager, "fInformationControlReplacer"); //$NON-NLS-1$
-            if (replacer != null)
-            {
-                Object restoredReplacerIc = link.savedReplacerIc();
-                if (restoredReplacerIc == null || restoredReplacerIc instanceof PinnedHoverBlockerInformationControl)
-                    restoredReplacerIc = restoredManagerIc;
-                if (restoredReplacerIc != null && !(restoredReplacerIc instanceof PinnedHoverBlockerInformationControl))
-                    Global.setField(replacer, "fInformationControl", restoredReplacerIc); //$NON-NLS-1$
-                else
-                    Global.setField(replacer, "fInformationControl", null); //$NON-NLS-1$
-            }
-            if (link.blockerIc() instanceof PinnedHoverBlockerInformationControl blocker)
-                blocker.dispose();
-            resumeHoverManager(link);
-        }
-
-        private void clearPinnedHoverIfOwned()
-        {
-            PinnedHoverLink owned = findPinnedLinkForShell(shell);
-            if (owned != null)
-                clearPinnedHoverManager(owned);
-        }
-
-        private void clearPinnedHoverForClose(PinnedHoverLink owned, Object preferredIc)
-        {
-            if (owned == null)
-                return;
-            Object textHoverManager = owned.textHoverManager();
-            PINNED_HOVER_BY_MANAGER.remove(textHoverManager);
-            if (owned.blockerIc() instanceof PinnedHoverBlockerInformationControl blocker)
-                blocker.dispose();
-            Object ic = preferredIc != null ? preferredIc : owned.pinnedInfoControl();
-            relinkHoverInfoControlForDispose(textHoverManager, ic);
-        }
-
-        private void scheduleHoverManagerReady(Object textHoverManager)
-        {
-            Display display = shell.getDisplay();
-            if (display == null || display.isDisposed())
-                return;
-            final Object managerRef = textHoverManager;
-            display.asyncExec(() ->
-            {
-                Object manager = managerRef;
-                if (manager == null)
-                    manager = findTextHoverManagerFromActiveEditor();
-                cleanupHoverManagerBlockers(manager);
-            });
         }
 
         private void installKeepDeactivateOffListener()
         {
             if (keepDeactivateOffListener != null)
                 return;
-            keepDeactivateOffListener = (Event e) ->
+            keepDeactivateOffListener = e ->
             {
                 if (e.widget != shell || shell.isDisposed())
                     return;
@@ -2415,8 +1610,6 @@ public final class DebugInspectorHook implements IStartup
                     Global.setField(targets.dialog, "listenToDeactivate", Boolean.FALSE); //$NON-NLS-1$
                     Global.setField(targets.dialog, "listenToParentDeactivate", Boolean.FALSE); //$NON-NLS-1$
                 }
-                if (isHoverMode() && !isHoverFollowEnabled())
-                    reinforcePinnedHoverGuards();
             };
             shell.addListener(SWT.Activate, keepDeactivateOffListener);
             shell.addListener(SWT.Deactivate, keepDeactivateOffListener);
@@ -2454,8 +1647,6 @@ public final class DebugInspectorHook implements IStartup
             if (shell.isDisposed() || !shellPinnedOnTop)
                 return;
             WinWindowActivator.clearShellTopmost(shell);
-            if (pinnedShellMovedByUser)
-                return;
             WinWindowActivator.setShellAboveOwner(shell, resolveOwnerShell(), true);
         }
 
@@ -2465,7 +1656,7 @@ public final class DebugInspectorHook implements IStartup
                 return;
             shellPinListener = e ->
             {
-                if (!shell.isDisposed() && shellPinnedOnTop && !pinnedShellMovedByUser)
+                if (!shell.isDisposed() && shellPinnedOnTop)
                     applyShellPinNow();
             };
             shell.addListener(SWT.Show, shellPinListener);
@@ -2479,7 +1670,7 @@ public final class DebugInspectorHook implements IStartup
             {
                 display.timerExec(delay, () ->
                 {
-                    if (!shell.isDisposed() && shellPinnedOnTop && !pinnedShellMovedByUser)
+                    if (!shell.isDisposed() && shellPinnedOnTop)
                         applyShellPinNow();
                 });
             }
@@ -2522,319 +1713,6 @@ public final class DebugInspectorHook implements IStartup
             return null;
         }
 
-        private void disableHoverAutoClose()
-        {
-            if (!ensureHoverAutoCloseDisabled())
-                return;
-            installHoverAutoCloseGuard();
-            scheduleHoverAutoClosePollingOnce();
-            if (!hoverDisableLogged)
-            {
-                hoverDisableLogged = true;
-                HoverBinding binding = findHoverBindingForShell(shell);
-                DebugInspectorDebug.step("hover", //$NON-NLS-1$
-                    "closer swizzled replacer=" //$NON-NLS-1$
-                        + (binding != null && binding.closerOwner() != binding.textHoverManager()));
-            }
-        }
-
-        private boolean ensureHoverAutoCloseDisabled()
-        {
-            PinnedHoverLink pin = findPinnedLinkForShell(shell);
-            HoverBinding binding = findHoverBindingForShell(shell);
-            List<Object> infoControls = collectInfoControlCandidates();
-            Object textHoverManager = pin != null
-                ? pin.textHoverManager()
-                : binding != null
-                    ? binding.textHoverManager()
-                    : findTextHoverManagerFromActiveEditor();
-            if (infoControls.isEmpty() && textHoverManager == null)
-                return false;
-
-            if (textHoverManager != null)
-            {
-                stopAllInformationControlClosers(textHoverManager);
-                swizzleHoverClosers(textHoverManager);
-                suspendHoverEditorInteractionForPin(textHoverManager);
-            }
-            if (binding != null && binding.closerOwner() != null
-                && binding.closerOwner() != textHoverManager)
-                swizzleCloserOnOwner(binding.closerOwner());
-            return true;
-        }
-
-        private void swizzleCloserOnOwner(Object closerOwner)
-        {
-            stopInformationControlCloser(closerOwner);
-            Object currentCloser = Global.getField(closerOwner, "fInformationControlCloser"); //$NON-NLS-1$
-            if (!(currentCloser instanceof NoOpInformationControlCloser))
-            {
-                if (savedReplacerCloser == null)
-                    savedReplacerCloser = currentCloser;
-                Global.setField(closerOwner, "fInformationControlCloser", NOOP_CLOSER); //$NON-NLS-1$
-            }
-            hoverClosersSwizzled = true;
-        }
-
-        private Object resolveHoverInfoControl(HoverBinding binding)
-        {
-            if (binding != null)
-                return binding.infoControl();
-            if (targets.infoControl != null)
-                return targets.infoControl;
-            return null;
-        }
-
-        private void swizzleHoverClosers(Object textHoverManager)
-        {
-            stopAllInformationControlClosers(textHoverManager);
-            Object currentCloser = Global.getField(textHoverManager, "fInformationControlCloser"); //$NON-NLS-1$
-            if (!(currentCloser instanceof NoOpInformationControlCloser))
-            {
-                if (savedTextHoverCloser == null)
-                    savedTextHoverCloser = currentCloser;
-                Global.setField(textHoverManager, "fInformationControlCloser", NOOP_CLOSER); //$NON-NLS-1$
-            }
-
-            Object replacer = Global.getField(textHoverManager, "fInformationControlReplacer"); //$NON-NLS-1$
-            if (replacer != null)
-            {
-                stopInformationControlCloser(replacer);
-                Object replacerCloser = Global.getField(replacer, "fInformationControlCloser"); //$NON-NLS-1$
-                if (!(replacerCloser instanceof NoOpInformationControlCloser))
-                {
-                    if (savedReplacerCloser == null)
-                        savedReplacerCloser = replacerCloser;
-                    Global.setField(replacer, "fInformationControlCloser", NOOP_CLOSER); //$NON-NLS-1$
-                }
-            }
-            hoverClosersSwizzled = true;
-        }
-
-        private void installHoverAutoCloseGuard()
-        {
-            if (hoverAutoCloseGuardListener != null)
-                return;
-            hoverAutoCloseGuardListener = e ->
-            {
-                if (e.widget == shell && !shell.isDisposed() && isHoverMode() && !isHoverFollowEnabled())
-                    ensureHoverAutoCloseDisabled();
-            };
-            shell.addListener(SWT.Show, hoverAutoCloseGuardListener);
-            shell.addListener(SWT.Activate, hoverAutoCloseGuardListener);
-        }
-
-        private void installHoverPinVisibleGuard()
-        {
-            if (hoverPinVisibleListener != null)
-                return;
-            hoverPinVisibleListener = e ->
-            {
-                if (!isHoverMode() || isHoverFollowEnabled() || hoverPinDisposeAllowed
-                    || shell.isDisposed() || shell.getVisible())
-                    return;
-                Display display = shell.getDisplay();
-                if (display == null || display.isDisposed())
-                    return;
-                display.asyncExec(() ->
-                {
-                    if (!shell.isDisposed() && isHoverMode() && !isHoverFollowEnabled()
-                        && !hoverPinDisposeAllowed)
-                        shell.setVisible(true);
-                });
-            };
-            shell.addListener(SWT.Hide, hoverPinVisibleListener);
-        }
-
-        private void installHoverPinMoveGuard()
-        {
-            if (hoverPinMoveListener != null)
-                return;
-            hoverPinMoveListener = e ->
-            {
-                if (!isHoverMode() || isHoverFollowEnabled() || shell.isDisposed())
-                    return;
-                if (!pinnedShellMovedByUser)
-                    DebugInspectorDebug.step("hover", "pin shell moved by user"); //$NON-NLS-1$ //$NON-NLS-2$
-                pinnedShellMovedByUser = true;
-                reinforcePinnedHoverGuards();
-            };
-            shell.addListener(SWT.Move, hoverPinMoveListener);
-        }
-
-        private void removeHoverPinMoveGuard()
-        {
-            if (hoverPinMoveListener == null || shell.isDisposed())
-                return;
-            shell.removeListener(SWT.Move, hoverPinMoveListener);
-            hoverPinMoveListener = null;
-            pinnedShellMovedByUser = false;
-        }
-
-        private void installHoverPinCloseGuard()
-        {
-            if (hoverPinCloseListener != null)
-                return;
-            hoverPinCloseListener = e ->
-            {
-                if (shouldBlockPinnedClose())
-                {
-                    e.doit = false;
-                    DebugInspectorDebug.step("hover", "pin close blocked"); //$NON-NLS-1$ //$NON-NLS-2$
-                }
-            };
-            shell.addListener(SWT.Close, hoverPinCloseListener);
-        }
-
-        private void removeHoverPinCloseGuard()
-        {
-            if (hoverPinCloseListener == null || shell.isDisposed())
-                return;
-            shell.removeListener(SWT.Close, hoverPinCloseListener);
-            hoverPinCloseListener = null;
-        }
-
-        private void removeHoverPinVisibleGuard()
-        {
-            if (hoverPinVisibleListener == null || shell.isDisposed())
-                return;
-            shell.removeListener(SWT.Hide, hoverPinVisibleListener);
-            hoverPinVisibleListener = null;
-        }
-
-        private PinnedHoverLink findPinnedLinkForShell(Shell target)
-        {
-            pruneDisposedPinnedHovers();
-            for (PinnedHoverLink link : PINNED_HOVER_BY_MANAGER.values())
-            {
-                if (link.shell() == target)
-                    return link;
-            }
-            return null;
-        }
-
-        private void removeHoverAutoCloseGuard()
-        {
-            if (hoverAutoCloseGuardListener == null || shell.isDisposed())
-                return;
-            shell.removeListener(SWT.Show, hoverAutoCloseGuardListener);
-            shell.removeListener(SWT.Activate, hoverAutoCloseGuardListener);
-            hoverAutoCloseGuardListener = null;
-            cancelHoverAutoClosePolling();
-        }
-
-        private void cancelHoverAutoClosePolling()
-        {
-            hoverGuardGeneration++;
-            hoverPollingScheduled = false;
-        }
-
-        private void scheduleHoverAutoClosePollingOnce()
-        {
-            if (hoverPollingScheduled || shell.isDisposed())
-                return;
-            hoverPollingScheduled = true;
-            int generation = hoverGuardGeneration;
-            Display display = shell.getDisplay();
-            for (int delay : new int[] { 100, 300, 600, 1000, 2000, 4000, 6000 })
-            {
-                display.timerExec(delay, () ->
-                {
-                    if (generation != hoverGuardGeneration || shell.isDisposed())
-                        return;
-                    if (isHoverMode() && !isHoverFollowEnabled())
-                        ensureHoverAutoCloseDisabled();
-                });
-            }
-        }
-
-        private static void stopInformationControlCloser(Object manager)
-        {
-            if (manager == null)
-                return;
-            Object closer = Global.getField(manager, "fInformationControlCloser"); //$NON-NLS-1$
-            if (closer != null && !(closer instanceof NoOpInformationControlCloser))
-                Global.invoke(closer, "stop"); //$NON-NLS-1$
-        }
-
-        private void restoreHoverAutoClose()
-        {
-            HoverBinding binding = findHoverBindingForShell(shell);
-            Object infoControl = resolveHoverInfoControl(binding);
-            Object textHoverManager = binding != null
-                ? binding.textHoverManager()
-                : findTextHoverManagerFromActiveEditor();
-            if (textHoverManager == null)
-                textHoverManager = resolveTextHoverManager();
-
-            removeHoverAutoCloseGuard();
-
-            restoreFShellListenerForPin();
-            restoreDeactivateListenerForPin();
-            restoreHoverEditorInteractionForPin();
-            Object pinnedIc = resolvePinnedHoverInfoControl();
-            if (pinnedIc == null)
-                pinnedIc = infoControl;
-            restoreHoverIcAutoCloseListeners(pinnedIc);
-            restoreInnerDebugElementDialog();
-            forceRestoreHoverClosers(textHoverManager);
-        }
-
-        private void forceRestoreHoverClosers(Object textHoverManager)
-        {
-            if (textHoverManager == null)
-                return;
-            Object managerCloser = Global.getField(textHoverManager, "fInformationControlCloser"); //$NON-NLS-1$
-            if (savedTextHoverCloser != null)
-            {
-                Global.setField(textHoverManager, "fInformationControlCloser", savedTextHoverCloser); //$NON-NLS-1$
-                savedTextHoverCloser = null;
-            }
-            else if (managerCloser instanceof NoOpInformationControlCloser)
-                recreateHoverManagerCloser(textHoverManager, textHoverManager);
-
-            Object replacer = Global.getField(textHoverManager, "fInformationControlReplacer"); //$NON-NLS-1$
-            if (replacer != null)
-            {
-                Object replacerCloser = Global.getField(replacer, "fInformationControlCloser"); //$NON-NLS-1$
-                if (savedReplacerCloser != null)
-                {
-                    Global.setField(replacer, "fInformationControlCloser", savedReplacerCloser); //$NON-NLS-1$
-                    savedReplacerCloser = null;
-                }
-                else if (replacerCloser instanceof NoOpInformationControlCloser)
-                    recreateHoverManagerCloser(replacer, textHoverManager);
-            }
-            hoverClosersSwizzled = false;
-            hoverDisableLogged = false;
-            Object check = Global.getField(textHoverManager, "fInformationControlCloser"); //$NON-NLS-1$
-            if (!(check instanceof NoOpInformationControlCloser))
-                DebugInspectorDebug.step("hover", "closers restored"); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-
-        private void releaseHoverManagerForEditor(Object textHoverManager)
-        {
-            if (textHoverManager == null)
-                textHoverManager = resolveTextHoverManager();
-            if (textHoverManager == null)
-                textHoverManager = findTextHoverManagerFromActiveEditor();
-            if (textHoverManager == null)
-                return;
-
-            Object managerCloser = Global.getField(textHoverManager, "fInformationControlCloser"); //$NON-NLS-1$
-            if (managerCloser instanceof NoOpInformationControlCloser || savedTextHoverCloser != null)
-                forceRestoreHoverClosers(textHoverManager);
-
-            Object ic = Global.getField(textHoverManager, "fInformationControl"); //$NON-NLS-1$
-            if (ic instanceof PinnedHoverBlockerInformationControl || isBlockerInfoControl(ic))
-                clearHoverManagerInfoControls(textHoverManager);
-            else if (ic != null && isInfoControlDisposed(ic))
-                clearHoverManagerInfoControls(textHoverManager);
-
-            restartHoverManagerAfterClose(textHoverManager);
-            hoverEditorReleased = true;
-        }
-
         private void closeInspector()
         {
             requestClose();
@@ -2842,35 +1720,7 @@ public final class DebugInspectorHook implements IStartup
 
         void dispose()
         {
-            cancelHoverAutoClosePolling();
-            boolean explicitClose = hoverPinDisposeAllowed;
-            if (explicitClose)
-            {
-                if (!hoverEditorReleased)
-                {
-                    clearPinnedHoverIfOwned();
-                    restoreHoverAutoClose();
-                    releaseHoverManagerForEditor(resolveTextHoverManager());
-                }
-                restoreShellOnTop(false);
-                DebugInspectorDebug.step("hover", "pin released explicit"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            else
-            {
-                PinnedHoverLink owned = findPinnedLinkForShell(shell);
-                if (owned != null)
-                {
-                    clearPinnedHoverManager(owned);
-                    DebugInspectorDebug.step("hover", "pin shell lost accidental"); //$NON-NLS-1$ //$NON-NLS-2$
-                }
-            }
             removeHeaderGuard();
-            removePinnedOutsideMouseFilter();
-            removeKeepDeactivateOffListener();
-            removeHoverAutoCloseGuard();
-            removeHoverPinCloseGuard();
-            removeHoverPinVisibleGuard();
-            removeHoverPinMoveGuard();
             removeKeepDeactivateOffListener();
             removeShellPinMaintenance();
             if (treeEnhancement != null)
@@ -2878,516 +1728,12 @@ public final class DebugInspectorHook implements IStartup
                 treeEnhancement.dispose();
                 treeEnhancement = null;
             }
-            dropActiveHoverShell(shell);
             if (!shell.isDisposed())
             {
                 shell.setData(PATCHED_KEY, null);
                 shell.setData(SESSION_KEY, null);
             }
         }
-    }
-
-    private static void dropActiveHoverShell(Shell shell)
-    {
-        if (shell == null)
-            return;
-        ACTIVE_HOVER_SHELL_BY_MANAGER.entrySet().removeIf(e -> e.getValue() == shell);
-    }
-
-    private static void logInspectorDetectOnce(Shell shell, int eventType)
-    {
-        if (shell.getData(DETECT_LOG_KEY) != null)
-            return;
-        shell.setData(DETECT_LOG_KEY, Boolean.TRUE);
-        String evt = eventType == SWT.Show ? "Show" //$NON-NLS-1$
-            : eventType == SWT.Activate ? "Activate" : String.valueOf(eventType); //$NON-NLS-1$
-        DebugInspectorDebug.step("detect", //$NON-NLS-1$
-            "evt=" + evt + " shell=\"" + shell.getText() //$NON-NLS-1$ //$NON-NLS-2$
-                + "\" reason=" + detectInspectorShellReason(shell)); //$NON-NLS-1$
-    }
-
-    private static String detectInspectorShellReason(Shell shell)
-    {
-        if (resolveElementDialog(shell, null) != null)
-            return "elementDialog"; //$NON-NLS-1$
-        if (isInspectorShellData(shell.getData()))
-            return "shellData"; //$NON-NLS-1$
-        if (isInspectorShellData(shell.getData(WINDOW_DATA_KEY)))
-            return "windowData"; //$NON-NLS-1$
-        if (findHoverBindingForShell(shell) != null)
-            return "hoverBinding"; //$NON-NLS-1$
-        if (hasInspectorTableMarker(shell))
-            return "inspectorTree"; //$NON-NLS-1$
-        return "?"; //$NON-NLS-1$
-    }
-
-    private static Boolean readBooleanField(Object target, String fieldName)
-    {
-        Object value = Global.getField(target, fieldName);
-        if (value instanceof Boolean bool)
-            return bool;
-        return null;
-    }
-
-    private static void suspendHoverManager(Object textHoverManager)
-    {
-        if (textHoverManager == null)
-            return;
-        Global.setField(textHoverManager, "fProcessMouseHoverEvent", Boolean.FALSE); //$NON-NLS-1$
-        Global.setField(textHoverManager, "fEnabled", Boolean.FALSE); //$NON-NLS-1$
-    }
-
-    private static void resumeHoverManager(PinnedHoverLink link)
-    {
-        if (link == null)
-            return;
-        Object textHoverManager = link.textHoverManager();
-        if (textHoverManager == null)
-            return;
-        if (link.savedProcessMouseHover() != null)
-            Global.setField(textHoverManager, "fProcessMouseHoverEvent", link.savedProcessMouseHover()); //$NON-NLS-1$
-        if (link.savedManagerEnabled() != null)
-            Global.setField(textHoverManager, "fEnabled", link.savedManagerEnabled()); //$NON-NLS-1$
-    }
-
-    private static void pruneDisposedPinnedHovers()
-    {
-        for (var it = PINNED_HOVER_BY_MANAGER.entrySet().iterator(); it.hasNext();)
-        {
-            PinnedHoverLink link = it.next().getValue();
-            if (link == null || link.shell().isDisposed())
-            {
-                if (link != null)
-                    releasePinnedHoverResources(link);
-                it.remove();
-            }
-        }
-    }
-
-    private static void recreateHoverManagerCloser(Object closerHost, Object textHoverManager)
-    {
-        if (closerHost == null)
-            return;
-        Object manager = textHoverManager != null ? textHoverManager : closerHost;
-        try
-        {
-            for (Class<?> walk = manager.getClass(); walk != null; walk = walk.getSuperclass())
-            {
-                for (Class<?> inner : walk.getDeclaredClasses())
-                {
-                    if (!"Closer".equals(inner.getSimpleName())) //$NON-NLS-1$
-                        continue;
-                    if (inner.getName().contains("IInformationControlCloser")) //$NON-NLS-1$
-                        continue;
-                    Object closer = inner.getDeclaredConstructor(walk).newInstance(manager);
-                    Global.setField(closerHost, "fInformationControlCloser", closer); //$NON-NLS-1$
-                    DebugInspectorDebug.step("hover", //$NON-NLS-1$
-                        "closer recreated host=" + closerHost.getClass().getSimpleName()); //$NON-NLS-1$
-                    return;
-                }
-            }
-        }
-        catch (ReflectiveOperationException e)
-        {
-            DebugInspectorDebug.problem("recreate closer: " + e.getMessage()); //$NON-NLS-1$
-        }
-    }
-
-    private static void ensureManagerClosersNotNoOp(Object textHoverManager)
-    {
-        if (textHoverManager == null)
-            return;
-        Object managerCloser = Global.getField(textHoverManager, "fInformationControlCloser"); //$NON-NLS-1$
-        if (managerCloser instanceof NoOpInformationControlCloser)
-            recreateHoverManagerCloser(textHoverManager, textHoverManager);
-        Object replacer = Global.getField(textHoverManager, "fInformationControlReplacer"); //$NON-NLS-1$
-        if (replacer != null)
-        {
-            Object replacerCloser = Global.getField(replacer, "fInformationControlCloser"); //$NON-NLS-1$
-            if (replacerCloser instanceof NoOpInformationControlCloser)
-                recreateHoverManagerCloser(replacer, textHoverManager);
-        }
-    }
-
-    private static void clearPinnedHoverManager(PinnedHoverLink link)
-    {
-        if (link == null)
-            return;
-        Object textHoverManager = link.textHoverManager();
-        PINNED_HOVER_BY_MANAGER.remove(textHoverManager);
-        releasePinnedHoverResources(link);
-    }
-
-    private static void releasePinnedHoverResources(PinnedHoverLink link)
-    {
-        if (link == null)
-            return;
-        Object textHoverManager = link.textHoverManager();
-        if (textHoverManager != null)
-        {
-            Global.setField(textHoverManager, "fInformationControl", null); //$NON-NLS-1$
-            Object replacer = Global.getField(textHoverManager, "fInformationControlReplacer"); //$NON-NLS-1$
-            if (replacer != null)
-                Global.setField(replacer, "fInformationControl", null); //$NON-NLS-1$
-        }
-        if (link.blockerIc() instanceof PinnedHoverBlockerInformationControl blocker)
-            blocker.dispose();
-        resumeHoverManager(link);
-    }
-
-    private static boolean isInfoControlDisposed(Object infoControl)
-    {
-        if (infoControl == null)
-            return true;
-        Object icShell = Global.invoke(infoControl, "getShell"); //$NON-NLS-1$
-        return icShell instanceof Shell shell && shell.isDisposed();
-    }
-
-    private static void relinkHoverInfoControlForDispose(Object textHoverManager, Object infoControl)
-    {
-        if (textHoverManager == null || infoControl == null
-            || infoControl instanceof PinnedHoverBlockerInformationControl
-            || isInfoControlDisposed(infoControl))
-            return;
-        Global.setField(textHoverManager, "fInformationControl", infoControl); //$NON-NLS-1$
-        Object replacer = Global.getField(textHoverManager, "fInformationControlReplacer"); //$NON-NLS-1$
-        if (replacer != null)
-            Global.setField(replacer, "fInformationControl", infoControl); //$NON-NLS-1$
-    }
-
-    private static void disposeHoverViaManager(Object textHoverManager)
-    {
-        if (textHoverManager == null)
-            return;
-        Object ic = Global.getField(textHoverManager, "fInformationControl"); //$NON-NLS-1$
-        if (ic == null || ic instanceof PinnedHoverBlockerInformationControl)
-        {
-            DebugInspectorDebug.step("hover", "disposeViaManager skip ic=" + DebugInspectorDebug.cn(ic)); //$NON-NLS-1$ //$NON-NLS-2$
-            return;
-        }
-        if (Global.invokeVoid(textHoverManager, "disposeInformationControl")) //$NON-NLS-1$
-            DebugInspectorDebug.step("hover", "disposeViaManager OK ic=" + ic.getClass().getSimpleName()); //$NON-NLS-1$ //$NON-NLS-2$
-        else
-            DebugInspectorDebug.problem("disposeViaManager failed"); //$NON-NLS-1$
-    }
-
-    private static void releaseHoverWidgetToken(Object textHoverManager)
-    {
-        if (textHoverManager == null)
-            return;
-        Object viewer = Global.getField(textHoverManager, "fTextViewer"); //$NON-NLS-1$
-        if (viewer == null)
-            return;
-        if (Global.invokeVoid(viewer, "releaseWidgetToken", textHoverManager)) //$NON-NLS-1$
-            DebugInspectorDebug.step("hover", "widgetToken released"); //$NON-NLS-1$ //$NON-NLS-2$
-    }
-
-    private static void resetHoverPresenterThread(Object textHoverManager)
-    {
-        if (textHoverManager == null)
-            return;
-        Object thread = Global.getField(textHoverManager, "fThread"); //$NON-NLS-1$
-        if (thread instanceof Thread presenter && presenter.isAlive())
-            presenter.interrupt();
-        Global.setField(textHoverManager, "fThread", null); //$NON-NLS-1$
-    }
-
-    private static void startInformationControlCloser(Object closerHost)
-    {
-        if (closerHost == null)
-            return;
-        Object closer = Global.getField(closerHost, "fInformationControlCloser"); //$NON-NLS-1$
-        if (closer != null && !(closer instanceof NoOpInformationControlCloser))
-            Global.invoke(closer, "start"); //$NON-NLS-1$
-    }
-
-    private static Control resolveHoverSubjectControlStatic(Object textHoverManager)
-    {
-        if (textHoverManager == null)
-            return null;
-        Object subject = Global.getField(textHoverManager, "fSubjectControl"); //$NON-NLS-1$
-        if (subject instanceof Control control && !control.isDisposed())
-            return control;
-        Object viewer = Global.getField(textHoverManager, "fTextViewer"); //$NON-NLS-1$
-        if (viewer instanceof TextViewer textViewer)
-        {
-            StyledText widget = textViewer.getTextWidget();
-            if (widget != null && !widget.isDisposed())
-                return widget;
-        }
-        return null;
-    }
-
-    private static void ensureHoverMouseMoveListener(Object textHoverManager)
-    {
-        if (textHoverManager == null)
-            return;
-        Object listener = Global.getField(textHoverManager, "fMouseMoveListener"); //$NON-NLS-1$
-        if (!(listener instanceof MouseMoveListener mouseMoveListener))
-            return;
-        Control subject = resolveHoverSubjectControlStatic(textHoverManager);
-        if (!(subject instanceof StyledText styledText) || styledText.isDisposed())
-            return;
-        styledText.removeMouseMoveListener(mouseMoveListener);
-        styledText.addMouseMoveListener(mouseMoveListener);
-    }
-
-    private static void enableHoverManagerFlags(Object textHoverManager)
-    {
-        if (textHoverManager == null)
-            return;
-        Global.setField(textHoverManager, "fEnabled", Boolean.TRUE); //$NON-NLS-1$
-        Global.setField(textHoverManager, "fProcessMouseHoverEvent", Boolean.TRUE); //$NON-NLS-1$
-    }
-
-    private static void enableHoverManagerForEditor(Object textHoverManager)
-    {
-        if (textHoverManager == null)
-            return;
-        enableHoverManagerFlags(textHoverManager);
-        ensureManagerClosersNotNoOp(textHoverManager);
-        startInformationControlCloser(textHoverManager);
-        Object replacer = Global.getField(textHoverManager, "fInformationControlReplacer"); //$NON-NLS-1$
-        if (replacer != null)
-            startInformationControlCloser(replacer);
-        Object stopper = Global.getField(textHoverManager, "fStopper"); //$NON-NLS-1$
-        if (stopper != null)
-            Global.invoke(stopper, "start"); //$NON-NLS-1$
-        Object tracker = Global.getField(textHoverManager, "fMouseTracker"); //$NON-NLS-1$
-        if (tracker != null)
-            Global.invoke(tracker, "start"); //$NON-NLS-1$
-    }
-
-    private static void reinstallHoverManagerSubject(Object textHoverManager)
-    {
-        Control subject = resolveHoverSubjectControlStatic(textHoverManager);
-        if (subject == null || subject.isDisposed())
-            return;
-        Global.invokeVoid(textHoverManager, "install", subject); //$NON-NLS-1$
-    }
-
-    private static void restartHoverManagerAfterClose(Object textHoverManager)
-    {
-        if (textHoverManager == null)
-            return;
-        resetHoverPresenterThread(textHoverManager);
-        releaseHoverWidgetToken(textHoverManager);
-        clearHoverManagerInfoControls(textHoverManager);
-        reinstallHoverManagerSubject(textHoverManager);
-        enableHoverManagerForEditor(textHoverManager);
-        ensureHoverMouseMoveListener(textHoverManager);
-        DebugInspectorDebug.step("hover", "manager released after close closer=" //$NON-NLS-1$ //$NON-NLS-2$
-            + DebugInspectorDebug.cn(Global.getField(textHoverManager, "fInformationControlCloser"))); //$NON-NLS-1$
-    }
-
-    private static void cleanupHoverManagerBlockers(Object textHoverManager)
-    {
-        if (textHoverManager == null)
-            return;
-        pruneDisposedPinnedHovers();
-        PinnedHoverLink live = PINNED_HOVER_BY_MANAGER.get(textHoverManager);
-        if (live != null && !live.shell().isDisposed())
-            return;
-
-        Object ic = Global.getField(textHoverManager, "fInformationControl"); //$NON-NLS-1$
-        Object replacer = Global.getField(textHoverManager, "fInformationControlReplacer"); //$NON-NLS-1$
-        Object ric = replacer != null ? Global.getField(replacer, "fInformationControl") : null; //$NON-NLS-1$
-        boolean hasBlocker = ic instanceof PinnedHoverBlockerInformationControl
-            || ric instanceof PinnedHoverBlockerInformationControl;
-        if (hasBlocker)
-        {
-            DebugInspectorDebug.step("hover", "cleanup orphan blocker"); //$NON-NLS-1$ //$NON-NLS-2$
-            if (live != null)
-                clearPinnedHoverManager(live);
-            else
-                clearHoverManagerInfoControls(textHoverManager);
-            enableHoverManagerFlags(textHoverManager);
-            return;
-        }
-        if (ic != null && isHoverInspectControl(ic))
-        {
-            Object icShell = Global.invoke(ic, "getShell"); //$NON-NLS-1$
-            if (icShell instanceof Shell shell && shell.isDisposed())
-            {
-                DebugInspectorDebug.step("hover", "cleanup disposed ic on manager"); //$NON-NLS-1$ //$NON-NLS-2$
-                clearHoverManagerInfoControls(textHoverManager);
-                enableHoverManagerFlags(textHoverManager);
-            }
-            return;
-        }
-        Object enabled = Global.getField(textHoverManager, "fEnabled"); //$NON-NLS-1$
-        Object process = Global.getField(textHoverManager, "fProcessMouseHoverEvent"); //$NON-NLS-1$
-        if (Boolean.FALSE.equals(enabled) || Boolean.FALSE.equals(process))
-            enableHoverManagerFlags(textHoverManager);
-    }
-
-    private static void clearHoverManagerInfoControls(Object textHoverManager)
-    {
-        if (textHoverManager == null)
-            return;
-        Object ic = Global.getField(textHoverManager, "fInformationControl"); //$NON-NLS-1$
-        if (ic instanceof PinnedHoverBlockerInformationControl blocker)
-            blocker.dispose();
-        Global.setField(textHoverManager, "fInformationControl", null); //$NON-NLS-1$
-        Object replacer = Global.getField(textHoverManager, "fInformationControlReplacer"); //$NON-NLS-1$
-        if (replacer != null)
-        {
-            Object ric = Global.getField(replacer, "fInformationControl"); //$NON-NLS-1$
-            if (ric instanceof PinnedHoverBlockerInformationControl replacerBlocker)
-                replacerBlocker.dispose();
-            Global.setField(replacer, "fInformationControl", null); //$NON-NLS-1$
-        }
-    }
-
-    private static void scheduleSuppressHoverShell(Shell shell)
-    {
-        suppressHoverShell(shell);
-    }
-
-    private static boolean shouldAbortTransientHoverShell(Shell shell)
-    {
-        if (shell == null || shell.isDisposed())
-            return false;
-        if (hasInspectorTableMarker(shell) || isPatchTarget(resolveElementDialog(shell, null)))
-            return false;
-        return findHoverBindingForShell(shell) != null;
-    }
-
-    private static boolean isPinnedShell(Shell shell)
-    {
-        if (shell == null || shell.isDisposed())
-            return false;
-        for (PinnedHoverLink link : PINNED_HOVER_BY_MANAGER.values())
-        {
-            if (!link.shell().isDisposed() && link.shell() == shell)
-                return true;
-        }
-        return false;
-    }
-
-    private static boolean isBlockerShell(Shell shell)
-    {
-        return shell != null && !shell.isDisposed()
-            && Boolean.TRUE.equals(shell.getData(PinnedHoverBlockerInformationControl.SHELL_MARKER_KEY));
-    }
-
-    private static boolean isBlockerInfoControl(Object infoControl)
-    {
-        return infoControl instanceof PinnedHoverBlockerInformationControl;
-    }
-
-    private static void requestCloseHoverShell(Shell target)
-    {
-        if (target == null || target.isDisposed())
-            return;
-        Object sessionObj = target.getData(SESSION_KEY);
-        if (sessionObj instanceof InspectorPatchSession session)
-            session.requestClose();
-        else
-            suppressHoverShell(target);
-    }
-
-    private static boolean isShellBlockedByOtherPin(Shell shell)
-    {
-        if (shell == null || shell.isDisposed() || isStandaloneInspectorShell(shell))
-            return false;
-        pruneDisposedPinnedHovers();
-        if (PINNED_HOVER_BY_MANAGER.isEmpty())
-            return false;
-        Object incomingManager = resolveHoverManagerForShell(shell, resolveTargets(shell));
-        for (PinnedHoverLink link : PINNED_HOVER_BY_MANAGER.values())
-        {
-            if (link.shell().isDisposed() || link.shell() == shell)
-                continue;
-            if (incomingManager != null && link.textHoverManager() != incomingManager)
-                continue;
-            DebugInspectorDebug.step("hover", //$NON-NLS-1$
-                "block other pin incoming=" + shell + " pinned=" + link.shell()); //$NON-NLS-1$ //$NON-NLS-2$
-            return true;
-        }
-        return false;
-    }
-
-    private static boolean isStandaloneInspectorShell(Shell shell)
-    {
-        Object dialog = resolveElementDialog(shell, null);
-        return isElementDialog(dialog) && !isHoverInspectControl(dialog);
-    }
-
-    private static PinnedHoverLink findBlockingPinnedHover(Shell incoming)
-    {
-        if (!mightBeInspectorShell(incoming))
-            return null;
-        Object incomingManager = resolveHoverManagerForShell(incoming, resolveTargets(incoming));
-        for (PinnedHoverLink link : PINNED_HOVER_BY_MANAGER.values())
-        {
-            if (link == null || link.shell().isDisposed())
-                continue;
-            if (link.shell() == incoming)
-                return null;
-            if (incomingManager != null && link.textHoverManager() != incomingManager)
-                continue;
-            return link;
-        }
-        return null;
-    }
-
-    private static boolean shouldSuppressDuplicateHoverShell(Shell shell)
-    {
-        if (shell == null || shell.isDisposed() || isStandaloneInspectorShell(shell))
-            return false;
-        pruneDisposedPinnedHovers();
-        PinnedHoverLink blocking = findBlockingPinnedHover(shell);
-        if (blocking != null)
-        {
-            DebugInspectorDebug.step("hover", //$NON-NLS-1$
-                "suppress duplicate shell reason=pinned pinned=" + blocking.shell()); //$NON-NLS-1$
-            return true;
-        }
-        return false;
-    }
-
-    private static Object resolveHoverManagerForShell(Shell shell, InspectorTargets targets)
-    {
-        if (targets != null && targets.hoverManager != null)
-            return targets.hoverManager;
-        HoverBinding binding = findHoverBindingForShell(shell);
-        return binding != null ? binding.textHoverManager() : null;
-    }
-
-    private static void suppressHoverShell(Shell shell)
-    {
-        if (shell == null || shell.isDisposed() || isPinnedShell(shell))
-            return;
-        shell.setVisible(false);
-        HoverBinding binding = findHoverBindingForShell(shell);
-        Object infoControl = binding != null ? binding.infoControl() : null;
-        if (infoControl != null && !(infoControl instanceof PinnedHoverBlockerInformationControl))
-        {
-            Object icShell = Global.invoke(infoControl, "getShell"); //$NON-NLS-1$
-            if (icShell == shell && !isPinnedShell(shell))
-                Global.invoke(infoControl, "setVisible", Boolean.FALSE); //$NON-NLS-1$
-        }
-        if (!shell.isDisposed() && !isPinnedShell(shell) && !sharesPinnedInfoControl(shell))
-            shell.dispose();
-    }
-
-    private static boolean sharesPinnedInfoControl(Shell shell)
-    {
-        HoverBinding binding = findHoverBindingForShell(shell);
-        if (binding == null)
-            return false;
-        Object infoControl = binding.infoControl();
-        if (infoControl == null)
-            return false;
-        for (PinnedHoverLink link : PINNED_HOVER_BY_MANAGER.values())
-        {
-            if (link.shell().isDisposed())
-                continue;
-            if (infoControl == link.pinnedInfoControl())
-                return true;
-        }
-        return false;
     }
 
     private static void markComfortHeader(Control control)
@@ -3401,31 +1747,146 @@ public final class DebugInspectorHook implements IStartup
             && Boolean.TRUE.equals(control.getData(COMFORT_HEADER_KEY));
     }
 
-    /** Ячейка для блока «флажок / Инспектировать»; флажок на прежней высоте. */
-    private static GridData rightAreaGridData()
+    private static GridData copyGridData(GridData src)
     {
-        GridData gd = new GridData(SWT.END, SWT.CENTER, false, false);
-        gd.verticalIndent = HEADER_LIFT_PX;
+        GridData gd = new GridData(
+            src.horizontalAlignment, src.verticalAlignment,
+            src.grabExcessHorizontalSpace, src.grabExcessVerticalSpace);
+        gd.horizontalSpan = src.horizontalSpan;
+        gd.verticalSpan = src.verticalSpan;
+        gd.horizontalIndent = src.horizontalIndent;
+        gd.verticalIndent = src.verticalIndent;
+        gd.widthHint = src.widthHint;
+        gd.heightHint = src.heightHint;
+        gd.minimumWidth = src.minimumWidth;
+        gd.minimumHeight = src.minimumHeight;
         return gd;
     }
 
-    private static GridData checkboxInRightAreaGridData()
+    private static int resolveLeftEdgeIndent(Composite from)
     {
-        return new GridData(SWT.BEGINNING, SWT.CENTER, false, false);
+        if (from == null || from.isDisposed())
+            return 0;
+        int pull = 0;
+        for (Composite walk = from; walk != null && !walk.isDisposed() && !(walk instanceof Shell);
+            walk = walk.getParent())
+        {
+            if (walk.getLayout() instanceof GridLayout grid)
+                pull -= grid.marginWidth;
+        }
+        return pull;
     }
 
-    private static GridData inspectButtonGridData()
+    private static int computeToolBarContentWidth(ToolBar menuBar)
+    {
+        if (menuBar == null || menuBar.isDisposed())
+            return SWT.DEFAULT;
+        menuBar.pack();
+        Point size = menuBar.getSize();
+        if (size.x > 0)
+            return size.x;
+        int width = 0;
+        for (ToolItem item : menuBar.getItems())
+        {
+            if (item.isDisposed())
+                continue;
+            Rectangle bounds = item.getBounds();
+            if (bounds.width > 0)
+                width += bounds.width;
+        }
+        return width > 0 ? width : SWT.DEFAULT;
+    }
+
+    private static void saveOriginalMenuBarLayout(ToolBar menuBar, Object menuBarLayout)
+    {
+        if (menuBar == null || menuBar.isDisposed() || menuBarLayout == null)
+            return;
+        if (menuBar.getData(COMFORT_MENU_LAYOUT_KEY) == null)
+            menuBar.setData(COMFORT_MENU_LAYOUT_KEY, menuBarLayout);
+    }
+
+    private static void applyMenuBarLeftGridData(ToolBar menuBar, Object originalLayout)
+    {
+        if (menuBar == null || menuBar.isDisposed())
+            return;
+        Object layoutSource = originalLayout;
+        if (layoutSource == null)
+            layoutSource = menuBar.getData(COMFORT_MENU_LAYOUT_KEY);
+        saveOriginalMenuBarLayout(menuBar, layoutSource);
+        GridData gd = new GridData(SWT.BEGINNING, SWT.CENTER, false, false);
+        if (layoutSource instanceof GridData src)
+            gd.verticalIndent = src.verticalIndent;
+        else if (menuBar.getLayoutData() instanceof GridData current)
+            gd.verticalIndent = current.verticalIndent;
+        gd.widthHint = computeToolBarContentWidth(menuBar);
+        menuBar.setLayoutData(gd);
+    }
+
+    private static void applyTitleAreaLeftGridData(Composite titleArea)
+    {
+        if (titleArea == null || titleArea.isDisposed())
+            return;
+        Composite parent = titleArea.getParent();
+        if (!(parent instanceof Composite) || !(parent.getLayout() instanceof GridLayout))
+            return;
+        Object layoutData = titleArea.getLayoutData();
+        GridData gd;
+        if (layoutData instanceof GridData src)
+            gd = copyGridData(src);
+        else
+            gd = new GridData(SWT.BEGINNING, SWT.CENTER, true, false);
+        gd.horizontalAlignment = SWT.BEGINNING;
+        gd.grabExcessHorizontalSpace = true;
+        gd.horizontalIndent = resolveLeftEdgeIndent(titleArea);
+        titleArea.setLayoutData(gd);
+    }
+
+    private static GridData leftInspectToolBarGridData()
     {
         GridData gd = new GridData(SWT.BEGINNING, SWT.CENTER, false, false);
-        gd.verticalIndent = HOVER_HEADER_LIFT_EXTRA_PX;
+        gd.verticalIndent = HEADER_LIFT_PX + HOVER_HEADER_LIFT_EXTRA_PX + INSPECT_BUTTON_DROP_PX;
         return gd;
     }
 
     private static GridData closeButtonGridData(boolean hover)
     {
+        return closeButtonGridData(null, hover);
+    }
+
+    private static GridData closeButtonGridData(ToolBar menuBar, boolean hover)
+    {
         GridData gd = new GridData(SWT.END, SWT.CENTER, false, false);
-        gd.verticalIndent = HEADER_LIFT_PX + (hover ? HOVER_HEADER_LIFT_EXTRA_PX : 0);
+        if (hover && menuBar != null && !menuBar.isDisposed()
+            && menuBar.getLayoutData() instanceof GridData menuGd)
+            gd.verticalIndent = menuGd.verticalIndent;
+        else
+            gd.verticalIndent = HEADER_LIFT_PX + (hover ? HOVER_HEADER_LIFT_EXTRA_PX : 0);
         return gd;
+    }
+
+    private static void applyCloseButtonGridData(ToolBar closeToolBar, ToolBar menuBar, boolean hover)
+    {
+        if (closeToolBar == null || closeToolBar.isDisposed())
+            return;
+        closeToolBar.setLayoutData(closeButtonGridData(menuBar, hover));
+    }
+
+    private static Image loadInspectCommandImage()
+    {
+        try
+        {
+            org.osgi.framework.Bundle bundle = Platform.getBundle(BUNDLE_DEBUG_UI);
+            if (bundle == null)
+                return null;
+            URL url = bundle.getEntry(ICON_INSPECT_EDT);
+            if (url != null)
+                return ImageDescriptor.createFromURL(url).createImage(false);
+        }
+        catch (RuntimeException ignored)
+        {
+            // иконка опциональна
+        }
+        return null;
     }
 
     private static String describeToolBar(ToolBar bar)
@@ -3434,7 +1895,30 @@ public final class DebugInspectorHook implements IStartup
             return "null"; //$NON-NLS-1$
         if (bar.isDisposed())
             return "disposed"; //$NON-NLS-1$
-        return "items=" + bar.getItemCount() + " path=" + controlPath(bar); //$NON-NLS-1$ //$NON-NLS-2$
+        String style = (bar.getStyle() & SWT.RIGHT) != 0 ? "R" : "L"; //$NON-NLS-1$ //$NON-NLS-2$
+        String grid = ""; //$NON-NLS-1$
+        if (bar.getLayoutData() instanceof GridData gd)
+        {
+            grid = " hAlign=" + gd.horizontalAlignment //$NON-NLS-1$
+                + " widthHint=" + gd.widthHint //$NON-NLS-1$
+                + " grabH=" + gd.grabExcessHorizontalSpace; //$NON-NLS-1$
+        }
+        return "items=" + bar.getItemCount() //$NON-NLS-1$
+            + " @" + Integer.toHexString(System.identityHashCode(bar)) //$NON-NLS-1$
+            + " style=" + style + grid //$NON-NLS-1$
+            + " path=" + controlPath(bar); //$NON-NLS-1$
+    }
+
+    private static String describeTitleAreaGrid(Composite titleArea)
+    {
+        if (titleArea == null || titleArea.isDisposed())
+            return "disposed"; //$NON-NLS-1$
+        if (!(titleArea.getLayoutData() instanceof GridData gd))
+            return "noGrid"; //$NON-NLS-1$
+        return "hAlign=" + gd.horizontalAlignment //$NON-NLS-1$
+            + " indent=" + gd.horizontalIndent //$NON-NLS-1$
+            + " grabH=" + gd.grabExcessHorizontalSpace //$NON-NLS-1$
+            + " path=" + controlPath(titleArea); //$NON-NLS-1$
     }
 
     private static String controlPath(Control control)
@@ -3471,6 +1955,33 @@ public final class DebugInspectorHook implements IStartup
                 + "(inner=" + DebugInspectorDebug.cn(inner) + ')'; //$NON-NLS-1$
         }
         return label + "=reject:" + data.getClass().getSimpleName(); //$NON-NLS-1$
+    }
+
+    private static void logInspectorDetectOnce(Shell shell, int eventType)
+    {
+        if (shell.getData(DETECT_LOG_KEY) != null)
+            return;
+        shell.setData(DETECT_LOG_KEY, Boolean.TRUE);
+        String evt = eventType == SWT.Show ? "Show" //$NON-NLS-1$
+            : eventType == SWT.Activate ? "Activate" : String.valueOf(eventType); //$NON-NLS-1$
+        DebugInspectorDebug.step("detect", //$NON-NLS-1$
+            "evt=" + evt + " shell=\"" + shell.getText() //$NON-NLS-1$ //$NON-NLS-2$
+                + "\" reason=" + detectInspectorShellReason(shell)); //$NON-NLS-1$
+    }
+
+    private static String detectInspectorShellReason(Shell shell)
+    {
+        if (resolveElementDialog(shell, null) != null)
+            return "elementDialog"; //$NON-NLS-1$
+        if (isInspectorShellData(shell.getData()))
+            return "shellData"; //$NON-NLS-1$
+        if (isInspectorShellData(shell.getData(WINDOW_DATA_KEY)))
+            return "windowData"; //$NON-NLS-1$
+        if (findHoverBindingForShell(shell) != null)
+            return "hoverBinding"; //$NON-NLS-1$
+        if (hasInspectorTableMarker(shell))
+            return "inspectorTree"; //$NON-NLS-1$
+        return "?"; //$NON-NLS-1$
     }
 
     private static void traceResolveDiagnostics(

@@ -1,4 +1,9 @@
 .tmp*
+# Случайная распаковка JAR в корень (jar xf) — не коммитить
+/com/
+/org/
+/META-INF/
+/OSGI-INF/
 # Maven/Tycho build cache (не коммитить)
 site/target/
 plugin/target/

@@ -71,6 +71,8 @@ public final class QueryTextEditDialogHook implements IStartup
 
         if (!(event.widget instanceof Shell shell))
             return;
+        if (shell.isDisposed())
+            return;
         if (Boolean.TRUE.equals(shell.getData(SHELL_REGISTERED_KEY)))
             return;
         if (!isQueryTextEditShell(shell))
