@@ -48,8 +48,8 @@ public class PriorityGlobalKeyBindingHook implements IStartup
     };
 
     /**
-     * Команды ИР → USER в Xtext/embedded/window/formEditor; SYSTEM FormatAction
-     * в Xtext-контекстах снимается (E4 не отдаёт приоритет USER над designer.scheme).
+     * Команды ИР → USER в embedded/formEditor (XtextEditorScope — restore из IrKeyBindingHook);
+     * SYSTEM FormatAction в Xtext-контекстах снимается (E4 не отдаёт приоритет USER над designer.scheme).
      * Источник сочетаний — effective USER в XtextEditorScope; SYSTEM из plugin.xml не зеркалируется,
      * если пользователь уже переназначил команду в Keys.
      */
@@ -79,11 +79,9 @@ public class PriorityGlobalKeyBindingHook implements IStartup
         ORDINARY_FORM_EDITOR_CONTEXT_ID
     };
 
-    /** Контексты USER-зеркала команд ИР при подключённой сессии. */
+    /** Контексты USER-зеркала команд ИР при подключённой сессии (без Xtext/window — там restore). */
     private static final String[] IR_MIRROR_CONTEXT_IDS = {
-        XTEXT_EDITOR_CONTEXT_ID,
         XTEXT_EMBEDDED_EDITOR_CONTEXT_ID,
-        GLOBAL_CONTEXT_ID,
         FORM_EDITOR_CONTEXT_ID,
         ORDINARY_FORM_EDITOR_CONTEXT_ID
     };

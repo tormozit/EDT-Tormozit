@@ -122,7 +122,9 @@ final class ComfortKeysLocalConflictAnalyzer
 
 
 
-        String selectedCommandId = selected.getId();
+        String selectedCommandId = resolveSelectedCommandId(selected);
+        if (selectedCommandId == null || selectedCommandId.isBlank())
+            return result;
 
         BindingService bindingService = resolveBindingService(keyController);
 
@@ -177,13 +179,17 @@ final class ComfortKeysLocalConflictAnalyzer
             String contextName = resolveContextName(keyController, contextId);
             String sequenceFormatted = targetSequence.format();
 
+            BindingElement bindingElement =
+                    resolveBindingElementForBinding(keyController, binding);
+
             ComfortKeysLocalConflictRow candidate = new ComfortKeysLocalConflictRow(
                     commandId,
                     commandName,
                     contextId,
                     contextName,
                     sequenceFormatted,
-                    bindingType);
+                    bindingType,
+                    bindingElement);
 
             ComfortKeysLocalConflictRow existing = byCommandContext.get(signature);
             if (existing == null
@@ -212,6 +218,8 @@ final class ComfortKeysLocalConflictAnalyzer
 
             Global.log(TAG, "analyze seq=" + targetSequence.format() //$NON-NLS-1$
 
+                    + " selectedCmd=" + selectedCommandId //$NON-NLS-1$
+
                     + " scheme=" + activeScheme //$NON-NLS-1$
 
                     + " catalog=" + total //$NON-NLS-1$
@@ -225,6 +233,72 @@ final class ComfortKeysLocalConflictAnalyzer
     }
 
 
+
+    private static String resolveSelectedCommandId(BindingElement selected)
+    {
+        String id = selected.getId();
+        if (id != null && !id.isBlank())
+            return id;
+
+        try
+        {
+            Object modelObject = selected.getModelObject();
+            if (modelObject instanceof Binding binding)
+            {
+                ParameterizedCommand pc = binding.getParameterizedCommand();
+                if (pc != null)
+                {
+                    String commandId = pc.getId();
+                    if (commandId != null && !commandId.isBlank())
+                        return commandId;
+                }
+            }
+        }
+        catch (Exception ignored)
+        {
+            // fallback — getId()
+        }
+
+        try
+        {
+            Object pcObj = Global.invoke(selected, "getParameterizedCommand"); //$NON-NLS-1$
+            if (pcObj instanceof ParameterizedCommand parameterizedCommand)
+            {
+                String commandId = parameterizedCommand.getId();
+                if (commandId != null && !commandId.isBlank())
+                    return commandId;
+            }
+        }
+        catch (Exception ignored)
+        {
+            // package-private getParameterizedCommand
+        }
+
+        return id;
+    }
+
+    private static BindingElement resolveBindingElementForBinding(
+            KeyController keyController,
+            Binding binding)
+    {
+        if (keyController == null || binding == null)
+            return null;
+
+        try
+        {
+            Object element = keyController.getBindingModel()
+                    .getBindingToElement()
+                    .get(binding);
+            if (element instanceof BindingElement bindingElement)
+                return bindingElement;
+        }
+        catch (Exception ignored)
+        {
+            // внутренний API изменился
+        }
+
+        return null;
+    }
 
     private static int resolveBindingType(BindingElement selected)
     {
@@ -651,7 +725,7 @@ final class ComfortKeysLocalConflictAnalyzer
 
             if (contextModel == null)
 
-                return contextId;
+                return fallbackContextLabel(contextId);
 
             Object contexts = Global.invoke(contextModel, "getElements"); //$NON-NLS-1$
 
@@ -665,7 +739,7 @@ final class ComfortKeysLocalConflictAnalyzer
 
             if (!(contexts instanceof Iterable<?> iterable))
 
-                return contextId;
+                return fallbackContextLabel(contextId);
 
             for (Object ctx : iterable)
 
@@ -695,8 +769,27 @@ final class ComfortKeysLocalConflictAnalyzer
 
         }
 
-        return contextId;
+        return fallbackContextLabel(contextId);
 
+    }
+
+    private static String fallbackContextLabel(String contextId)
+    {
+        String known = knownContextLabel(contextId);
+        return known != null ? known : contextId;
+    }
+
+    private static String knownContextLabel(String contextId)
+    {
+        if ("com._1c.g5.v8.dt.form.ui.ordinaryFormEditor".equals(contextId)) //$NON-NLS-1$
+            return "Редактор формы"; //$NON-NLS-1$
+        if ("com._1c.g5.v8.dt.form.ui.formEditor".equals(contextId)) //$NON-NLS-1$
+            return "Редактор формы"; //$NON-NLS-1$
+        if ("org.eclipse.xtext.ui.XtextEditorScope".equals(contextId)) //$NON-NLS-1$
+            return "Редактирование текста"; //$NON-NLS-1$
+        if ("org.eclipse.xtext.ui.embeddedTextEditorScope".equals(contextId)) //$NON-NLS-1$
+            return "Вложенный текст"; //$NON-NLS-1$
+        return null;
     }
 
 }

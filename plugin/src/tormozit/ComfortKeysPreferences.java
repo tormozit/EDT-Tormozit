@@ -18,27 +18,43 @@ import org.eclipse.jface.preference.PreferenceDialog;
 import org.eclipse.jface.util.IPropertyChangeListener;
 import org.eclipse.jface.util.PropertyChangeEvent;
 import org.eclipse.jface.viewers.ArrayContentProvider;
+import org.eclipse.jface.viewers.IDoubleClickListener;
+import org.eclipse.jface.viewers.ISelection;
+import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.jface.viewers.ITableLabelProvider;
+import org.eclipse.jface.viewers.StructuredSelection;
 import org.eclipse.jface.viewers.TableViewer;
+import org.eclipse.jface.viewers.TreeViewer;
+import org.eclipse.jface.viewers.Viewer;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.CLabel;
 import org.eclipse.swt.custom.CTabFolder;
 import org.eclipse.swt.custom.CTabItem;
+import org.eclipse.swt.dnd.Clipboard;
+import org.eclipse.swt.dnd.TextTransfer;
+import org.eclipse.swt.dnd.Transfer;
 import org.eclipse.swt.graphics.Image;
+import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.Listener;
+import org.eclipse.swt.widgets.ScrollBar;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Table;
 import org.eclipse.swt.widgets.TableColumn;
+import org.eclipse.swt.widgets.TableItem;
+import org.eclipse.swt.widgets.Tree;
+import org.eclipse.swt.widgets.TreeItem;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.commands.ICommandService;
 import org.eclipse.ui.dialogs.FilteredTree;
 import org.eclipse.ui.dialogs.PreferencesUtil;
 import org.eclipse.ui.internal.keys.model.BindingElement;
+import org.eclipse.ui.internal.keys.model.BindingModel;
 import org.eclipse.ui.internal.keys.model.CommonModel;
 import org.eclipse.ui.internal.keys.model.ConflictModel;
 import org.eclipse.ui.internal.keys.model.KeyController;
@@ -62,11 +78,12 @@ public final class ComfortKeysPreferences
             "Глобальные горячие клавиши"; //$NON-NLS-1$
 
     /**
-     * Пояснение: строка «Редактор формы» в Keys — автозеркало привязки «В окнах».
+     * Пояснение: дубли в Keys — runtime-зеркала; канон настройки — «В окнах» или Xtext для ИР.
      */
     public static final String GLOBAL_KEYS_HINT =
-            "Настраивайте только «В окнах». «Редактор формы» с тем же сочетанием — автозеркало плагина. "
-            + "Не редактируйте (U/CU — не отдельная настройка)."; //$NON-NLS-1$
+            "Глобальные команды (Перейти к определению, Копировать ссылку) — только «В окнах». "
+            + "Команды ИР — только «Редактирование источника Xtext». Остальные контексты не редактируйте. "
+            + "(U/CU — не отдельная настройка.)"; //$NON-NLS-1$
 
     private static final String FALLBACK_CATEGORY_NAME = "Комфорт"; //$NON-NLS-1$
 
@@ -81,6 +98,15 @@ public final class ComfortKeysPreferences
 
     private static final String HIDDEN_CONFLICT_HEADER_KEY =
             "tormozit.comfort.keys.hiddenConflictHeader"; //$NON-NLS-1$
+
+    private static final String CONFLICT_TABLE_LAYOUT_KEY =
+            "tormozit.comfort.keys.conflictTableLayout"; //$NON-NLS-1$
+
+    private static final String CONFLICT_TABLE_RELAYOUT_KEY =
+            "tormozit.comfort.keys.conflictTableRelayout"; //$NON-NLS-1$
+
+    private static final String BINDINGS_TREE_COPY_KEY =
+            "tormozit.comfort.keys.bindingsTreeCopy"; //$NON-NLS-1$
 
     private ComfortKeysPreferences()
     {
@@ -242,6 +268,7 @@ public final class ComfortKeysPreferences
         FilteredTree tree = resolveFilteredTree(page);
         if (filterText != null && tree != null)
             setFilterText(tree, filterText);
+        wireBindingsTreeCopy(page);
         LocalConflictUi.install(page);
     }
 
@@ -330,6 +357,104 @@ public final class ComfortKeysPreferences
         }
     }
 
+    private static void wireBindingsTreeCopy(IPreferencePage page)
+    {
+        FilteredTree filteredTree = resolveFilteredTree(page);
+        if (filteredTree == null || filteredTree.isDisposed())
+            return;
+
+        TreeViewer viewer = filteredTree.getViewer();
+        if (viewer == null)
+            return;
+
+        Tree swtTree = viewer.getTree();
+        if (swtTree == null || swtTree.isDisposed())
+            return;
+
+        if (Boolean.TRUE.equals(swtTree.getData(BINDINGS_TREE_COPY_KEY)))
+            return;
+
+        swtTree.addListener(SWT.KeyDown, event -> {
+            if ((event.stateMask & SWT.CTRL) == 0)
+                return;
+            if (event.character != 0x03 && event.keyCode != 'c' && event.keyCode != 'C') //$NON-NLS-1$
+                return;
+            if (copyBindingsTreeSelection(filteredTree))
+                event.doit = false;
+        });
+        swtTree.setData(BINDINGS_TREE_COPY_KEY, Boolean.TRUE);
+    }
+
+    private static boolean copyBindingsTreeSelection(FilteredTree filteredTree)
+    {
+        if (filteredTree == null || filteredTree.isDisposed())
+            return false;
+
+        TreeViewer viewer = filteredTree.getViewer();
+        if (viewer == null)
+            return false;
+
+        Tree swtTree = viewer.getTree();
+        if (swtTree == null || swtTree.isDisposed())
+            return false;
+
+        ISelection selection = viewer.getSelection();
+        if (!(selection instanceof IStructuredSelection structuredSelection)
+                || structuredSelection.isEmpty()
+                || !(structuredSelection.getFirstElement() instanceof BindingElement binding))
+            return false;
+
+        String text = formatBindingElementCopyText(viewer, swtTree, binding);
+
+        Clipboard clipboard = new Clipboard(swtTree.getDisplay());
+        try
+        {
+            clipboard.setContents(
+                    new Object[] { text },
+                    new Transfer[] { TextTransfer.getInstance() });
+        }
+        finally
+        {
+            clipboard.dispose();
+        }
+        return true;
+    }
+
+    private static String formatBindingElementCopyText(
+            TreeViewer viewer,
+            Tree swtTree,
+            BindingElement binding)
+    {
+        Object labelProvider = viewer.getLabelProvider();
+        if (labelProvider instanceof ITableLabelProvider tableLabelProvider)
+        {
+            int columnCount = swtTree.getColumnCount();
+            if (columnCount > 0)
+            {
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < columnCount; i++)
+                {
+                    if (i > 0)
+                        sb.append('\t');
+                    String columnText = tableLabelProvider.getColumnText(binding, i);
+                    if (columnText != null)
+                        sb.append(columnText);
+                }
+                return sb.toString();
+            }
+        }
+
+        String command = binding.getName() != null ? binding.getName() : ""; //$NON-NLS-1$
+        String sequence = ""; //$NON-NLS-1$
+        if (binding.getTrigger() != null)
+            sequence = binding.getTrigger().format();
+        String context = ""; //$NON-NLS-1$
+        if (binding.getContext() != null && binding.getContext().getName() != null)
+            context = binding.getContext().getName();
+        String category = binding.getCategory() != null ? binding.getCategory() : ""; //$NON-NLS-1$
+        return command + '\t' + sequence + '\t' + context + '\t' + category;
+    }
+
     /**
      * Автоанализ локальных пересечений: вкладки «Глобальные» / «Локальные» в блоке конфликтов Keys.
      */
@@ -345,6 +470,8 @@ public final class ComfortKeysPreferences
         private static final String COLUMN_COMMAND = "Команда"; //$NON-NLS-1$
 
         private static final String COLUMN_WHEN = "Когда"; //$NON-NLS-1$
+
+        private static final int FALLBACK_VERTICAL_SCROLLBAR_WIDTH = 17;
 
         static void install(IPreferencePage page)
         {
@@ -397,11 +524,17 @@ public final class ComfortKeysPreferences
 
             Composite tabParent = tabFolder.getParent();
             if (tabParent != null && !tabParent.isDisposed())
-                hideConflictLabelDirectlyAbove(tabParent, tabFolder);
+            {
+                removeSpacingAboveTabFolder(tabParent, tabFolder);
+                collapseRightDataAreaLayout(tabParent, tabFolder);
+            }
 
             Composite rightDataArea = resolvePageComposite(page, "rightDataArea"); //$NON-NLS-1$
-            if (rightDataArea != null)
-                hideStaticConflictHeaderLabels(rightDataArea);
+            if (rightDataArea != null && rightDataArea != tabParent)
+            {
+                removeSpacingAboveTabFolder(rightDataArea, tabFolder);
+                collapseRightDataAreaLayout(rightDataArea, tabFolder);
+            }
 
             tightenDataAreaLayout(page);
 
@@ -411,6 +544,69 @@ public final class ComfortKeysPreferences
                 relayoutRoot.layout(true, true);
                 relayoutRoot = relayoutRoot.getParent();
             }
+
+            Display display = tabFolder.getDisplay();
+            if (display != null && !display.isDisposed())
+            {
+                display.timerExec(0, () -> {
+                    if (tabFolder == null || tabFolder.isDisposed())
+                        return;
+                    Composite area = tabFolder.getParent();
+                    if (area != null && !area.isDisposed())
+                    {
+                        removeSpacingAboveTabFolder(area, tabFolder);
+                        collapseRightDataAreaLayout(area, tabFolder);
+                        area.layout(true, true);
+                    }
+                });
+            }
+        }
+
+        private static void removeSpacingAboveTabFolder(Composite parent, Control tabFolder)
+        {
+            for (Control child : parent.getChildren())
+            {
+                if (child == tabFolder)
+                    break;
+                if (child.isDisposed())
+                    continue;
+                if (isEmptySpacingLabel(child))
+                    disposeSpacingControl(child);
+                else if (isStaticConflictsHeader(child))
+                    hideControl(child);
+            }
+        }
+
+        private static void collapseRightDataAreaLayout(Composite area, Control tabFolder)
+        {
+            if (area == null || area.isDisposed() || tabFolder == null || tabFolder.isDisposed())
+                return;
+            if (Boolean.TRUE.equals(area.getData(LOCAL_CONFLICT_TABS_KEY + ".collapsed"))) //$NON-NLS-1$
+                return;
+
+            for (Control child : area.getChildren())
+            {
+                if (child == tabFolder || child.isDisposed())
+                    continue;
+                if (isEmptySpacingLabel(child))
+                    disposeSpacingControl(child);
+                else if (isStaticConflictsHeader(child))
+                    hideControl(child);
+            }
+
+            area.setLayout(tightGridLayout(1));
+            GridData tabFolderGd = new GridData(SWT.FILL, SWT.FILL, true, true);
+            tabFolderGd.verticalIndent = 0;
+            tabFolderGd.horizontalIndent = 0;
+            tabFolder.setLayoutData(tabFolderGd);
+            area.setData(LOCAL_CONFLICT_TABS_KEY + ".collapsed", Boolean.TRUE); //$NON-NLS-1$
+        }
+
+        private static void disposeSpacingControl(Control control)
+        {
+            if (control == null || control.isDisposed())
+                return;
+            control.dispose();
         }
 
         private static Composite resolvePageComposite(IPreferencePage page, String fieldName)
@@ -423,19 +619,12 @@ public final class ComfortKeysPreferences
 
         private static void hideConflictLabelDirectlyAbove(Composite parent, Control below)
         {
-            Control previous = null;
-            for (Control child : parent.getChildren())
-            {
-                if (child == below)
-                {
-                    if (previous != null && !previous.isDisposed()
-                            && (previous instanceof Label || previous instanceof CLabel))
-                        hideControl(previous);
-                    return;
-                }
-                if (!child.isDisposed())
-                    previous = child;
-            }
+            removeSpacingAboveTabFolder(parent, below);
+        }
+
+        private static void hideRightDataAreaSpacing(Composite rightDataArea)
+        {
+            tightenCompositeGridLayout(rightDataArea);
         }
 
         private static void hideStaticConflictHeaderLabels(Composite composite)
@@ -453,6 +642,25 @@ public final class ComfortKeysPreferences
             }
         }
 
+        private static void tightenCompositeGridLayout(Composite composite)
+        {
+            Object layout = composite.getLayout();
+            if (!(layout instanceof GridLayout gridLayout))
+                return;
+            gridLayout.marginHeight = 0;
+            gridLayout.marginTop = 0;
+            gridLayout.verticalSpacing = 0;
+            composite.setLayout(gridLayout);
+        }
+
+        private static boolean isEmptySpacingLabel(Control control)
+        {
+            if (!(control instanceof Label) && !(control instanceof CLabel))
+                return false;
+            String text = readControlText(control);
+            return text == null || text.isEmpty();
+        }
+
         private static void hideControl(Control control)
         {
             if (control == null || control.isDisposed())
@@ -461,15 +669,16 @@ public final class ComfortKeysPreferences
                 return;
             control.setData(HIDDEN_CONFLICT_HEADER_KEY, Boolean.TRUE);
             control.setVisible(false);
-            Object layoutData = control.getLayoutData();
-            if (layoutData instanceof GridData gd)
-            {
-                gd.exclude = true;
-                gd.heightHint = 0;
-                gd.verticalIndent = 0;
-                gd.horizontalIndent = 0;
-                control.setLayoutData(gd);
-            }
+            GridData gd;
+            if (control.getLayoutData() instanceof GridData existing)
+                gd = existing;
+            else
+                gd = new GridData();
+            gd.exclude = true;
+            gd.heightHint = 0;
+            gd.verticalIndent = 0;
+            gd.horizontalIndent = 0;
+            control.setLayoutData(gd);
         }
 
         private static void tightenDataAreaLayout(IPreferencePage page)
@@ -483,6 +692,19 @@ public final class ComfortKeysPreferences
             {
                 gd.verticalIndent = 0;
                 gd.verticalAlignment = SWT.FILL;
+            }
+
+            Composite rightDataArea = resolvePageComposite(page, "rightDataArea"); //$NON-NLS-1$
+            if (rightDataArea != null && !rightDataArea.isDisposed())
+            {
+                tightenCompositeGridLayout(rightDataArea);
+                Object rightLayoutData = rightDataArea.getLayoutData();
+                if (rightLayoutData instanceof GridData rightGd)
+                {
+                    rightGd.verticalAlignment = SWT.FILL;
+                    rightGd.verticalIndent = 0;
+                    rightDataArea.setLayoutData(rightGd);
+                }
             }
         }
 
@@ -529,6 +751,21 @@ public final class ComfortKeysPreferences
             return gd;
         }
 
+        private static final int BINDING_VISIBILITY_MAX_ATTEMPTS = 30;
+        private static final int BINDING_VISIBILITY_POLL_MS = 50;
+
+        private static final class PendingConflictHighlight
+        {
+            final BindingElement source;
+            final boolean localTab;
+
+            PendingConflictHighlight(BindingElement source, boolean localTab)
+            {
+                this.source = source;
+                this.localTab = localTab;
+            }
+        }
+
         private final IPreferencePage page;
         private final KeyController keyController;
         private final TableViewer conflictViewer;
@@ -543,6 +780,8 @@ public final class ComfortKeysPreferences
 
         private Job analysisJob;
         private boolean disposed;
+
+        private PendingConflictHighlight pendingHighlight;
 
         private final IPropertyChangeListener keyControllerListener = this::onKeyControllerChange;
 
@@ -563,6 +802,11 @@ public final class ComfortKeysPreferences
                 return;
 
             GridData tabFolderGd = copyTableGridData(table);
+            tabFolderGd.verticalIndent = 0;
+            tabFolderGd.verticalAlignment = SWT.FILL;
+            tabFolderGd.horizontalAlignment = SWT.FILL;
+            tabFolderGd.grabExcessVerticalSpace = true;
+            tabFolderGd.grabExcessHorizontalSpace = true;
 
             tabFolder = new CTabFolder(parent, SWT.FLAT);
             tabFolder.setLayoutData(tabFolderGd);
@@ -571,20 +815,25 @@ public final class ComfortKeysPreferences
 
             globalTab = new CTabItem(tabFolder, SWT.NONE);
             Composite globalComposite = new Composite(tabFolder, SWT.NONE);
-            globalComposite.setLayout(new GridLayout(1, false));
+            globalComposite.setLayout(tightGridLayout(1));
             globalTab.setControl(globalComposite);
 
             table.setParent(globalComposite);
             GridData tableGd = new GridData(SWT.FILL, SWT.FILL, true, true);
             table.setLayoutData(tableGd);
+            applyConflictTableColumnLayout(table);
 
             localTab = new CTabItem(tabFolder, SWT.NONE);
             Composite localComposite = new Composite(tabFolder, SWT.NONE);
-            localComposite.setLayout(new GridLayout(1, false));
+            localComposite.setLayout(tightGridLayout(1));
             localTab.setControl(localComposite);
             localConflictViewer = createLocalConflictViewer(localComposite, table);
+            wireLocalConflictViewer(localConflictViewer);
+            wireGlobalConflictViewer(conflictViewer);
 
             tabFolder.setSelection(globalTab);
+            tabFolder.addSelectionListener(org.eclipse.swt.events.SelectionListener.widgetSelectedAdapter(
+                    event -> scheduleConflictTablesRelayout()));
 
             hideConflictsGroupHeader();
 
@@ -603,33 +852,526 @@ public final class ComfortKeysPreferences
 
         private TableViewer createLocalConflictViewer(Composite parent, Table referenceTable)
         {
-            int style = referenceTable.getStyle();
+            int style = SWT.SINGLE | SWT.FULL_SELECTION | SWT.BORDER
+                    | (referenceTable.getStyle() & SWT.V_SCROLL);
             Table localTable = new Table(parent, style);
             localTable.setHeaderVisible(true);
             localTable.setLinesVisible(referenceTable.getLinesVisible());
             localTable.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
 
-            TableColumn commandColumn = new TableColumn(localTable, SWT.NONE);
-            commandColumn.setText(COLUMN_COMMAND);
-            TableColumn whenColumn = new TableColumn(localTable, SWT.NONE);
-            whenColumn.setText(COLUMN_WHEN);
-
-            if (referenceTable.getColumnCount() >= 2)
-            {
-                commandColumn.setWidth(referenceTable.getColumn(0).getWidth());
-                whenColumn.setWidth(referenceTable.getColumn(1).getWidth());
-            }
-            else
-            {
-                commandColumn.setWidth(200);
-                whenColumn.setWidth(280);
-            }
+            new TableColumn(localTable, SWT.NONE).setText(COLUMN_COMMAND);
+            new TableColumn(localTable, SWT.NONE).setText(COLUMN_WHEN);
+            applyConflictTableColumnLayout(localTable);
 
             TableViewer viewer = new TableViewer(localTable);
             viewer.setContentProvider(ArrayContentProvider.getInstance());
             viewer.setLabelProvider(new LocalConflictLabelProvider());
             viewer.setInput(Collections.emptyList());
             return viewer;
+        }
+
+        private static GridLayout tightGridLayout(int columns)
+        {
+            GridLayout layout = new GridLayout(columns, false);
+            layout.marginWidth = 0;
+            layout.marginHeight = 0;
+            layout.marginTop = 0;
+            layout.verticalSpacing = 0;
+            return layout;
+        }
+
+        /** Пропорция 60/40; резерв под вертикальный скролл — без горизонтального. */
+        private static void applyConflictTableColumnLayout(Table table)
+        {
+            if (table == null || table.isDisposed() || table.getColumnCount() < 2)
+                return;
+            if (Boolean.TRUE.equals(table.getData(CONFLICT_TABLE_LAYOUT_KEY)))
+                return;
+            table.setData(CONFLICT_TABLE_LAYOUT_KEY, Boolean.TRUE);
+
+            Listener relayout = event -> scheduleConflictTableRelayout(table);
+            table.addListener(SWT.Resize, relayout);
+            ScrollBar verticalBar = table.getVerticalBar();
+            if (verticalBar != null)
+                verticalBar.addListener(SWT.Show, relayout);
+
+            scheduleConflictTableRelayout(table);
+        }
+
+        private void scheduleConflictTablesRelayout()
+        {
+            if (conflictViewer != null)
+            {
+                Table table = conflictViewer.getTable();
+                if (table != null && !table.isDisposed())
+                    scheduleConflictTableRelayout(table);
+            }
+            if (localConflictViewer != null)
+            {
+                Table table = localConflictViewer.getTable();
+                if (table != null && !table.isDisposed())
+                    scheduleConflictTableRelayout(table);
+            }
+        }
+
+        private static void scheduleConflictTableRelayout(Table table)
+        {
+            if (table == null || table.isDisposed())
+                return;
+            Display display = table.getDisplay();
+            if (display == null || display.isDisposed())
+                return;
+            if (Boolean.TRUE.equals(table.getData(CONFLICT_TABLE_RELAYOUT_KEY)))
+                return;
+            table.setData(CONFLICT_TABLE_RELAYOUT_KEY, Boolean.TRUE);
+            display.timerExec(0, () -> {
+                if (table.isDisposed())
+                    return;
+                table.setData(CONFLICT_TABLE_RELAYOUT_KEY, null);
+                relayoutConflictTableColumns(table);
+            });
+        }
+
+        private static void relayoutConflictTableColumns(Table table)
+        {
+            if (table.isDisposed() || table.getColumnCount() < 2)
+                return;
+
+            int width = table.getClientArea().width;
+            if (width <= 0)
+                return;
+
+            width = Math.max(0, width - resolveVerticalScrollReserve(table));
+            TableColumn first = table.getColumn(0);
+            TableColumn second = table.getColumn(1);
+            int firstWidth = Math.max(60, width * 60 / 100);
+            int secondWidth = Math.max(60, width - firstWidth);
+            if (firstWidth + secondWidth > width)
+                secondWidth = Math.max(60, width - firstWidth);
+
+            first.setWidth(firstWidth);
+            second.setWidth(secondWidth);
+        }
+
+        private static int resolveVerticalScrollReserve(Table table)
+        {
+            ScrollBar verticalBar = table.getVerticalBar();
+            if (verticalBar != null && verticalBar.isVisible() && verticalBar.getSize().x > 0)
+                return verticalBar.getSize().x;
+
+            int itemCount = table.getItemCount();
+            if (itemCount <= 0)
+                return 0;
+
+            int rowHeight = table.getItemHeight() + (table.getLinesVisible() ? 1 : 0);
+            int headerHeight = table.getHeaderVisible() ? table.getHeaderHeight() : 0;
+            int contentHeight = headerHeight + itemCount * rowHeight;
+            int availableHeight = table.getClientArea().height;
+            if (contentHeight <= availableHeight)
+                return 0;
+
+            if (verticalBar != null && verticalBar.getSize().x > 0)
+                return verticalBar.getSize().x;
+
+            return FALLBACK_VERTICAL_SCROLLBAR_WIDTH;
+        }
+
+        private void wireLocalConflictViewer(TableViewer viewer)
+        {
+            Table table = viewer.getTable();
+            if (table == null)
+                return;
+
+            table.addListener(SWT.MouseDown, event -> {
+                if (event.button != 1 || table.isDisposed())
+                    return;
+                TableItem item = table.getItem(new Point(event.x, event.y));
+                if (item == null)
+                    return;
+                Object data = item.getData();
+                if (data == null)
+                    return;
+                viewer.setSelection(new StructuredSelection(data));
+                table.setFocus();
+            });
+
+            table.addListener(SWT.KeyDown, event -> {
+                if ((event.stateMask & SWT.CTRL) == 0)
+                    return;
+                if (event.character != 0x03 && event.keyCode != 'c' && event.keyCode != 'C') //$NON-NLS-1$
+                    return;
+                if (copyLocalConflictSelection(viewer))
+                    event.doit = false;
+            });
+
+            viewer.addDoubleClickListener((IDoubleClickListener) event -> {
+                ComfortKeysLocalConflictRow row = getSelectedLocalConflictRow(viewer);
+                if (row == null)
+                    return;
+                BindingElement target = resolveLocalConflictBinding(row);
+                navigateFromConflictDoubleClick(target, getSelectedBinding(), true);
+            });
+        }
+
+        private static void stripConflictViewerNavigationListeners(TableViewer viewer)
+        {
+            try
+            {
+                Field field = Viewer.class.getDeclaredField("selectionChangedListeners"); //$NON-NLS-1$
+                field.setAccessible(true);
+                Object list = field.get(viewer);
+                if (list == null)
+                    return;
+                Method clear = list.getClass().getMethod("clear"); //$NON-NLS-1$
+                clear.invoke(list);
+            }
+            catch (Exception ignored)
+            {
+                // внутренний API Eclipse изменился
+            }
+        }
+
+        private void wireGlobalConflictViewer(TableViewer viewer)
+        {
+            Table table = viewer.getTable();
+            if (table == null)
+                return;
+
+            stripConflictViewerNavigationListeners(viewer);
+
+            table.addListener(SWT.MouseDown, event -> {
+                if (event.button != 1 || table.isDisposed())
+                    return;
+                TableItem item = table.getItem(new Point(event.x, event.y));
+                if (item == null)
+                    return;
+                Object data = item.getData();
+                if (data == null)
+                    return;
+                viewer.setSelection(new StructuredSelection(data));
+                table.setFocus();
+            });
+
+            table.addListener(SWT.KeyDown, event -> {
+                if ((event.stateMask & SWT.CTRL) == 0)
+                    return;
+                if (event.character != 0x03 && event.keyCode != 'c' && event.keyCode != 'C') //$NON-NLS-1$
+                    return;
+                if (copyGlobalConflictSelection(viewer))
+                    event.doit = false;
+            });
+
+            viewer.addDoubleClickListener((IDoubleClickListener) event -> {
+                if (!(event.getSelection() instanceof IStructuredSelection structuredSelection)
+                        || structuredSelection.isEmpty()
+                        || !(structuredSelection.getFirstElement() instanceof BindingElement binding))
+                    return;
+                navigateFromConflictDoubleClick(binding, getSelectedBinding(), false);
+            });
+        }
+
+        private ComfortKeysLocalConflictRow getSelectedLocalConflictRow(TableViewer viewer)
+        {
+            ISelection selection = viewer.getSelection();
+            if (!(selection instanceof IStructuredSelection structuredSelection)
+                    || structuredSelection.isEmpty())
+                return null;
+            Object element = structuredSelection.getFirstElement();
+            if (element instanceof ComfortKeysLocalConflictRow row)
+                return row;
+            return null;
+        }
+
+        private boolean copyLocalConflictSelection(TableViewer viewer)
+        {
+            ComfortKeysLocalConflictRow row = getSelectedLocalConflictRow(viewer);
+            if (row == null)
+                return false;
+
+            Table table = viewer.getTable();
+            if (table == null || table.isDisposed())
+                return false;
+
+            Clipboard clipboard = new Clipboard(table.getDisplay());
+            try
+            {
+                clipboard.setContents(
+                        new Object[] { row.copyText() },
+                        new Transfer[] { TextTransfer.getInstance() });
+            }
+            finally
+            {
+                clipboard.dispose();
+            }
+            return true;
+        }
+
+        private boolean copyGlobalConflictSelection(TableViewer viewer)
+        {
+            ISelection selection = viewer.getSelection();
+            if (!(selection instanceof IStructuredSelection structuredSelection)
+                    || structuredSelection.isEmpty()
+                    || !(structuredSelection.getFirstElement() instanceof BindingElement binding))
+                return false;
+
+            Table table = viewer.getTable();
+            if (table == null || table.isDisposed())
+                return false;
+
+            String command = binding.getName() != null ? binding.getName() : ""; //$NON-NLS-1$
+            String context = ""; //$NON-NLS-1$
+            if (binding.getContext() != null && binding.getContext().getName() != null)
+                context = binding.getContext().getName();
+
+            Clipboard clipboard = new Clipboard(table.getDisplay());
+            try
+            {
+                clipboard.setContents(
+                        new Object[] { command + '\t' + context },
+                        new Transfer[] { TextTransfer.getInstance() });
+            }
+            finally
+            {
+                clipboard.dispose();
+            }
+            return true;
+        }
+
+        private void navigateFromConflictDoubleClick(
+                BindingElement target,
+                BindingElement source,
+                boolean localTab)
+        {
+            if (target == null || source == null || sameBindingElement(target, source))
+                return;
+
+            pendingHighlight = new PendingConflictHighlight(source, localTab);
+            navigateToBindingWithFilterWait(target, this::scheduleApplyPendingHighlight);
+        }
+
+        private void navigateToBindingWithFilterWait(BindingElement binding, Runnable onDone)
+        {
+            if (binding == null)
+                return;
+
+            FilteredTree filteredTree = ComfortKeysPreferences.resolveFilteredTree(page);
+            if (filteredTree == null || filteredTree.isDisposed())
+            {
+                BindingModel bindingModel = keyController.getBindingModel();
+                bindingModel.setSelectedElement(binding);
+                if (onDone != null)
+                    onDone.run();
+                return;
+            }
+
+            if (!isBindingVisibleInTree(filteredTree, binding))
+            {
+                ComfortKeysPreferences.setFilterText(filteredTree, ""); //$NON-NLS-1$
+                filteredTree.getViewer().refresh();
+                waitForBindingVisible(filteredTree, binding, 0, () -> {
+                    selectBindingInTree(filteredTree, binding);
+                    if (onDone != null)
+                        onDone.run();
+                });
+                return;
+            }
+
+            selectBindingInTree(filteredTree, binding);
+            if (onDone != null)
+                onDone.run();
+        }
+
+        private void waitForBindingVisible(
+                FilteredTree filteredTree,
+                BindingElement binding,
+                int attempt,
+                Runnable onDone)
+        {
+            Display display = Display.getDefault();
+            if (display == null || display.isDisposed() || disposed)
+                return;
+
+            if (isBindingVisibleInTree(filteredTree, binding) || attempt >= BINDING_VISIBILITY_MAX_ATTEMPTS)
+            {
+                onDone.run();
+                return;
+            }
+
+            display.timerExec(BINDING_VISIBILITY_POLL_MS, () -> {
+                if (disposed || filteredTree.isDisposed())
+                    return;
+                waitForBindingVisible(filteredTree, binding, attempt + 1, onDone);
+            });
+        }
+
+        private void selectBindingInTree(FilteredTree filteredTree, BindingElement binding)
+        {
+            BindingModel bindingModel = keyController.getBindingModel();
+            bindingModel.setSelectedElement(binding);
+            filteredTree.getViewer().setSelection(new StructuredSelection(binding), true);
+        }
+
+        private void scheduleApplyPendingHighlight()
+        {
+            Display display = Display.getDefault();
+            if (display == null || display.isDisposed())
+                return;
+            display.asyncExec(this::applyPendingConflictHighlight);
+        }
+
+        private void applyPendingConflictHighlight()
+        {
+            if (disposed || pendingHighlight == null)
+                return;
+
+            PendingConflictHighlight highlight = pendingHighlight;
+            BindingElement source = highlight.source;
+
+            if (highlight.localTab)
+            {
+                ComfortKeysLocalConflictRow row = findLocalRowForBinding(source);
+                if (row == null || localConflictViewer == null)
+                    return;
+
+                localConflictViewer.setSelection(new StructuredSelection(row));
+                Table localTable = localConflictViewer.getTable();
+                if (localTable != null && !localTable.isDisposed())
+                    localTable.setFocus();
+                pendingHighlight = null;
+                return;
+            }
+
+            BindingElement match = findGlobalConflictForBinding(source);
+            if (match == null)
+                return;
+
+            conflictViewer.setSelection(new StructuredSelection(match));
+            Table table = conflictViewer.getTable();
+            if (table != null && !table.isDisposed())
+                table.setFocus();
+            pendingHighlight = null;
+        }
+
+        private ComfortKeysLocalConflictRow findLocalRowForBinding(BindingElement source)
+        {
+            if (source == null)
+                return null;
+
+            String commandId = source.getId();
+            String contextId = resolveBindingElementContextId(source);
+            for (ComfortKeysLocalConflictRow row : localRows)
+            {
+                if (commandId == null || !commandId.equals(row.commandId))
+                    continue;
+                if (contextId == null ? row.contextId != null : !contextId.equals(row.contextId))
+                    continue;
+                if (!matchesBindingType(source, row.bindingType))
+                    continue;
+                return row;
+            }
+            return null;
+        }
+
+        private BindingElement findGlobalConflictForBinding(BindingElement source)
+        {
+            if (source == null)
+                return null;
+
+            for (Object item : eclipseConflicts)
+            {
+                if (item instanceof BindingElement bindingElement
+                        && sameBindingElement(source, bindingElement))
+                    return bindingElement;
+            }
+            return null;
+        }
+
+        private static boolean sameBindingElement(BindingElement a, BindingElement b)
+        {
+            if (a == null || b == null)
+                return a == b;
+            if (!java.util.Objects.equals(a.getId(), b.getId()))
+                return false;
+            if (!java.util.Objects.equals(resolveBindingElementContextId(a), resolveBindingElementContextId(b)))
+                return false;
+            int typeA = a.getUserDelta() != null
+                    ? a.getUserDelta().intValue()
+                    : org.eclipse.jface.bindings.Binding.SYSTEM;
+            int typeB = b.getUserDelta() != null
+                    ? b.getUserDelta().intValue()
+                    : org.eclipse.jface.bindings.Binding.SYSTEM;
+            return typeA == typeB;
+        }
+
+        private BindingElement resolveLocalConflictBinding(ComfortKeysLocalConflictRow row)
+        {
+            if (row == null)
+                return null;
+            BindingElement binding = row.bindingElement;
+            if (binding == null)
+                binding = findBindingElement(row);
+            return binding;
+        }
+
+        private BindingElement findBindingElement(ComfortKeysLocalConflictRow row)
+        {
+            for (Object element : keyController.getBindingModel().getBindings())
+            {
+                if (!(element instanceof BindingElement bindingElement))
+                    continue;
+                if (!row.commandId.equals(bindingElement.getId()))
+                    continue;
+                String contextId = resolveBindingElementContextId(bindingElement);
+                if (!row.contextId.equals(contextId))
+                    continue;
+                if (!matchesBindingType(bindingElement, row.bindingType))
+                    continue;
+                return bindingElement;
+            }
+            return null;
+        }
+
+        private static String resolveBindingElementContextId(BindingElement bindingElement)
+        {
+            if (bindingElement.getContext() != null)
+            {
+                String id = bindingElement.getContext().getId();
+                if (id != null && !id.isBlank())
+                    return id;
+            }
+            try
+            {
+                Object id = Global.invoke(bindingElement, "getContextId"); //$NON-NLS-1$
+                if (id instanceof String contextId && !contextId.isBlank())
+                    return contextId;
+            }
+            catch (Exception ignored)
+            {
+                // package-private getContextId
+            }
+            return null;
+        }
+
+        private static boolean matchesBindingType(BindingElement bindingElement, int bindingType)
+        {
+            Integer userDelta = bindingElement.getUserDelta();
+            if (userDelta != null)
+                return userDelta.intValue() == bindingType;
+            return bindingType == org.eclipse.jface.bindings.Binding.SYSTEM;
+        }
+
+        private static boolean isBindingVisibleInTree(FilteredTree filteredTree, BindingElement binding)
+        {
+            for (TreeItem item : filteredTree.getViewer().getTree().getItems())
+            {
+                Object data = item.getData();
+                if (binding.equals(data))
+                    return true;
+                if (data instanceof BindingElement treeBinding
+                        && sameBindingElement(binding, treeBinding))
+                    return true;
+            }
+            return false;
         }
 
         private void onKeyControllerChange(PropertyChangeEvent event)
@@ -653,6 +1395,7 @@ public final class ComfortKeysPreferences
                     && CommonModel.PROP_SELECTED_ELEMENT.equals(property))
             {
                 scheduleAutoAnalysis();
+                scheduleRefreshFromEclipse();
             }
         }
 
@@ -666,6 +1409,7 @@ public final class ComfortKeysPreferences
                     return;
                 captureEclipseConflicts();
                 updateTabTitles();
+                scheduleConflictTablesRelayout();
             });
         }
 
@@ -675,15 +1419,31 @@ public final class ComfortKeysPreferences
             if (!(input instanceof Collection<?> collection))
             {
                 eclipseConflicts = Collections.emptyList();
+                if (!disposed && conflictViewer != null)
+                    conflictViewer.setInput(eclipseConflicts);
+                scheduleConflictTablesRelayout();
                 return;
             }
+
+            BindingElement selected = getSelectedBinding();
+            String selectedCommandId = selected != null ? selected.getId() : null;
+
             List<Object> items = new ArrayList<>(collection.size());
             for (Object item : collection)
             {
-                if (item instanceof BindingElement)
-                    items.add(item);
+                if (!(item instanceof BindingElement bindingElement))
+                    continue;
+                if (selected != null && sameBindingElement(selected, bindingElement))
+                    continue;
+                if (selectedCommandId != null && selectedCommandId.equals(bindingElement.getId()))
+                    continue;
+                items.add(bindingElement);
             }
             eclipseConflicts = items;
+            conflictViewer.setInput(items);
+            scheduleConflictTablesRelayout();
+            if (pendingHighlight != null && !pendingHighlight.localTab)
+                applyPendingConflictHighlight();
         }
 
         private void clearLocalRows()
@@ -701,6 +1461,9 @@ public final class ComfortKeysPreferences
                 return;
             localConflictViewer.setInput(localRows);
             updateTabTitles();
+            scheduleConflictTablesRelayout();
+            if (pendingHighlight != null && pendingHighlight.localTab)
+                applyPendingConflictHighlight();
         }
 
         private void updateTabTitles()
@@ -773,6 +1536,7 @@ public final class ComfortKeysPreferences
             if (disposed)
                 return;
             disposed = true;
+            pendingHighlight = null;
             if (analysisJob != null)
                 analysisJob.cancel();
             keyController.removePropertyChangeListener(keyControllerListener);
