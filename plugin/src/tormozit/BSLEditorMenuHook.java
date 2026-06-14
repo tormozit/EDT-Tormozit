@@ -17,8 +17,11 @@ import org.eclipse.swt.events.MenuEvent;
 import org.eclipse.swt.events.SelectionAdapter;
 import org.eclipse.swt.events.SelectionEvent;
 import org.eclipse.swt.widgets.Display;
+import org.eclipse.swt.widgets.Event;
+import org.eclipse.swt.widgets.Listener;
 import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
+import org.eclipse.ui.handlers.IHandlerService;
 import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.IEditorReference;
 import org.eclipse.ui.IPartListener2;
@@ -63,14 +66,24 @@ import com._1c.g5.v8.dt.md.ui.editor.base.DtGranularEditorXtextEditorPage;
  */
 public class BSLEditorMenuHook implements IStartup
 {
-    private static final String ITEM_TEXT_EditEmbedded = "Вложенный текст ИР";
     private static final String ITEM_TEXT_DebugIR = "Отладить объект ИР";
+    private static final String ITEM_TEXT_MethodConstructor = "Конструктор метода ИР";
+    private static final String ITEM_TEXT_FormatText = IrFormatTextHandler.MENU_LABEL;
 
     /**
      * Ключ SWT-данных для маркировки «меню уже прикреплено».
      * Храним на виджете {@link StyledText}, чтобы не дублировать при повторном вызове.
      */
     private static final String HOOK_MARKER = "tormozit.bslMenuHooked"; //$NON-NLS-1$
+
+    static final String BSL_MENU_HOOK_MARKER = HOOK_MARKER;
+
+    /** Пассивная диагностика Alt+Shift+F (без перехвата). */
+    private static final String KEY_DIAG_MARKER = "tormozit.irFormatTextKeyDiag"; //$NON-NLS-1$
+
+    private static final String KEY_DIAG_THROTTLE = "tormozit.irFormatTextKeyDiagAt"; //$NON-NLS-1$
+
+    private static final long KEY_DIAG_THROTTLE_MS = 500L;
 
     /**
      * Набор DtGranularEditor-ов, к которым уже добавлен IPageChangedListener.
@@ -138,7 +151,14 @@ public class BSLEditorMenuHook implements IStartup
                 if (ed != null) hookEditorIfNeeded(ed);
             }
 
-            @Override public void partActivated(IWorkbenchPartReference r)    {}
+            @Override public void partActivated(IWorkbenchPartReference r)
+            {
+                if (!(r instanceof IEditorReference))
+                    return;
+                IEditorPart ed = ((IEditorReference) r).getEditor(false);
+                if (ed != null)
+                    hookEditorIfNeeded(ed);
+            }
             @Override public void partBroughtToTop(IWorkbenchPartReference r) {}
             @Override public void partClosed(IWorkbenchPartReference r)       {}
             @Override public void partDeactivated(IWorkbenchPartReference r)  {}
@@ -187,7 +207,10 @@ public class BSLEditorMenuHook implements IStartup
         if (textWidget == null || textWidget.isDisposed())
             return;
 
-        // Защита от повторного прикрепления
+        // Контекст и диагностика — сразу, не ждём SWT-меню (в DtGranularEditor меню может появиться поздно).
+        ensureEmbeddedHooks(editor, textWidget);
+
+        // Защита от повторного прикрепления меню
         if (Boolean.TRUE.equals(textWidget.getData(HOOK_MARKER)))
             return;
 
@@ -201,6 +224,13 @@ public class BSLEditorMenuHook implements IStartup
 
         textWidget.setData(HOOK_MARKER, Boolean.TRUE);
 
+        if (IrFormatTextDebug.isKeyDiagnosticEnabled())
+        {
+            IrFormatTextDebug.log("bsl hook attached editor=" //$NON-NLS-1$
+                + IrFormatTextDebug.formatEditorBrief(editor)
+                + " widget=StyledText@0x" + Integer.toHexString(System.identityHashCode(textWidget))); //$NON-NLS-1$
+        }
+
         MenuAdapter listener = buildMenuListener(editor);
         menu.addMenuListener(listener);
 
@@ -210,6 +240,47 @@ public class BSLEditorMenuHook implements IStartup
             if (!menu.isDisposed())
                 menu.removeMenuListener(listener);
         });
+    }
+
+    /** Контекст Xtext и диагностика клавиш — без ожидания меню. */
+    static void ensureEmbeddedHooks(BslXtextEditor editor, StyledText textWidget)
+    {
+        if (editor == null || textWidget == null || textWidget.isDisposed())
+            return;
+        attachKeyDiagnostic(editor, textWidget);
+        EmbeddedBslXtextContextHook.attach(editor, textWidget);
+    }
+
+    private static void attachKeyDiagnostic(BslXtextEditor editor, StyledText textWidget)
+    {
+        if (!IrFormatTextDebug.isKeyDiagnosticEnabled())
+            return;
+        if (Boolean.TRUE.equals(textWidget.getData(KEY_DIAG_MARKER)))
+            return;
+
+        Listener keyListener = event ->
+        {
+            if (!IrFormatTextDebug.isKeyDiagnosticEnabled())
+                return;
+            if (IrFormatTextDebug.looksLikeAltShiftF(event))
+            {
+                long now = System.currentTimeMillis();
+                Object lastAt = textWidget.getData(KEY_DIAG_THROTTLE);
+                if (lastAt instanceof Long last && now - last < KEY_DIAG_THROTTLE_MS)
+                    return;
+                textWidget.setData(KEY_DIAG_THROTTLE, now);
+                IrFormatTextDebug.logKeyDiagnostics(editor, event);
+                return;
+            }
+            if (IrFormatTextDebug.isFKey(event))
+                IrFormatTextDebug.step("keyProbe widget F-key", IrFormatTextDebug.formatKeyEvent(event)); //$NON-NLS-1$
+            if (IrFormatTextDebug.hasAltShiftModifiers(event))
+                IrFormatTextDebug.step("keyProbe widget alt+shift", IrFormatTextDebug.formatKeyEvent(event)); //$NON-NLS-1$
+        };
+
+        textWidget.addListener(SWT.KeyDown, keyListener);
+        textWidget.setData(KEY_DIAG_MARKER, Boolean.TRUE);
+        textWidget.addDisposeListener(e -> textWidget.removeListener(SWT.KeyDown, keyListener));
     }
 
     // =========================================================================
@@ -276,10 +347,52 @@ public class BSLEditorMenuHook implements IStartup
             {
                 Menu menu = (Menu) e.widget;
 
+                Menu comfortSub = ComfortSubmenuHelper.findOrCreateComfortSubmenu(menu, menu.getShell());
+                if (comfortSub != null)
+                {
+                    MenuItem constructorItem = new MenuItem(comfortSub, SWT.PUSH);
+                    constructorItem.setText(ComfortSubmenuHelper.menuItemTextWithKeyBinding(
+                        ITEM_TEXT_MethodConstructor,
+                        IrMethodConstructorHandler.COMMAND_ID,
+                        EditEmbeddedTextCommandHandler.BINDING_CONTEXT_ID));
+                    constructorItem.setToolTipText(
+                        "Открыть конструктор метода приложения ИР" + Global.pluginSignForTooltip());
+                    constructorItem.addSelectionListener(new SelectionAdapter()
+                    {
+                        @Override
+                        public void widgetSelected(SelectionEvent ev)
+                        {
+                            runMethodConstructorCommand(editor);
+                        }
+                    });
+                    addedItems.add(constructorItem);
+
+                    MenuItem formatItem = new MenuItem(comfortSub, SWT.PUSH);
+                    formatItem.setText(ComfortSubmenuHelper.menuItemTextWithKeyBinding(
+                        ITEM_TEXT_FormatText,
+                        IrFormatTextCommandHandler.COMMAND_ID,
+                        IrFormatTextCommandHandler.BINDING_CONTEXT_ID));
+                    formatItem.setToolTipText(
+                        "Форматировать выделенный текст через приложение ИР" + Global.pluginSignForTooltip());
+                    formatItem.setEnabled(IrFormatTextHandler.isApplicableBsl(editor));
+                    formatItem.addSelectionListener(new SelectionAdapter()
+                    {
+                        @Override
+                        public void widgetSelected(SelectionEvent ev)
+                        {
+                            runFormatTextCommand(editor);
+                        }
+                    });
+                    addedItems.add(formatItem);
+                }
+
                 if (EditEmbeddedTextHandler.isApplicable(editor))
                 {
                     MenuItem item = new MenuItem(menu, SWT.PUSH);
-                    item.setText(ITEM_TEXT_EditEmbedded);
+                    item.setText(ComfortSubmenuHelper.menuItemTextWithKeyBinding(
+                        EditEmbeddedTextCommandHandler.MENU_LABEL,
+                        EditEmbeddedTextCommandHandler.COMMAND_ID,
+                        EditEmbeddedTextCommandHandler.BINDING_CONTEXT_ID));
                     item.setToolTipText(
                         "Открыть вложенный текст в редакторе текста приложения ИР" + Global.pluginSignForTooltip());
                     item.addSelectionListener(new SelectionAdapter()
@@ -287,7 +400,7 @@ public class BSLEditorMenuHook implements IStartup
                         @Override
                         public void widgetSelected(SelectionEvent e)
                         {
-                            EditEmbeddedTextHandler.editEmbeddedText(editor);
+                            runEmbeddedTextCommand(editor);
                         }
                     });
                     addedItems.add(item);
@@ -324,5 +437,61 @@ public class BSLEditorMenuHook implements IStartup
                 });
             }
         };
+    }
+
+    private static void runMethodConstructorCommand(BslXtextEditor editor)
+    {
+        try
+        {
+            IHandlerService handlerService = editor.getSite().getService(IHandlerService.class);
+            if (handlerService != null)
+            {
+                handlerService.executeCommand(IrMethodConstructorHandler.COMMAND_ID, null);
+                return;
+            }
+        }
+        catch (Exception ignored)
+        {
+            // fallback ниже
+        }
+        IrMethodConstructorHandler.openMethodConstructor(editor);
+    }
+
+    private static void runEmbeddedTextCommand(BslXtextEditor editor)
+    {
+        try
+        {
+            IHandlerService handlerService = editor.getSite().getService(IHandlerService.class);
+            if (handlerService != null)
+            {
+                handlerService.executeCommand(EditEmbeddedTextCommandHandler.COMMAND_ID, null);
+                return;
+            }
+        }
+        catch (Exception ignored)
+        {
+            // fallback ниже
+        }
+        EditEmbeddedTextHandler.editEmbeddedText(editor);
+    }
+
+    private static void runFormatTextCommand(BslXtextEditor editor)
+    {
+        try
+        {
+            IHandlerService handlerService = editor.getSite().getService(IHandlerService.class);
+            if (handlerService != null)
+            {
+                handlerService.executeCommand(IrFormatTextCommandHandler.COMMAND_ID, null);
+                IrFormatTextDebug.log("menu executeCommand OK"); //$NON-NLS-1$
+                return;
+            }
+            IrFormatTextDebug.log("menu handlerService=null → fallback"); //$NON-NLS-1$
+        }
+        catch (Exception e)
+        {
+            IrFormatTextDebug.log("menu executeCommand failed: " + e.getMessage() + " → fallback"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        IrFormatTextHandler.formatBslModule(editor);
     }
 }

@@ -1,17 +1,25 @@
 package tormozit;
 
+import org.eclipse.core.runtime.Adapters;
 import org.eclipse.core.resources.IFile;
 import org.eclipse.jface.text.BadLocationException;
 import org.eclipse.jface.text.IDocument;
 import org.eclipse.jface.text.ITextSelection;
 import org.eclipse.jface.text.source.ISourceViewer;
+import org.eclipse.swt.custom.StyledText;
+import org.eclipse.swt.widgets.Control;
+import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.dnd.Clipboard;
 import org.eclipse.swt.dnd.TextTransfer;
-import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
-import org.eclipse.ui.IEditorInput;
+import org.eclipse.text.undo.DocumentUndoManagerRegistry;
+import org.eclipse.text.undo.IDocumentUndoManager;
 import org.eclipse.ui.IEditorPart;
+import org.eclipse.ui.IEditorInput;
+import org.eclipse.ui.IWorkbenchPage;
 import org.eclipse.ui.IWorkbenchPart;
+import org.eclipse.ui.IWorkbenchWindow;
+import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.forms.editor.IFormPage;
 import org.eclipse.ui.texteditor.ITextEditor;
 import org.eclipse.xtext.ui.editor.model.IXtextDocument;
@@ -72,6 +80,107 @@ public final class TextEditorSupport
         if (textEditor == null)
             return null;
         return buildContext(textEditor);
+    }
+
+    /**
+     * Контекст текстового редактора по фокусу клавиатуры (модули, вложенные viewer,
+     * модальный «Редактор запроса» и т.п.).
+     */
+    public static Context resolveContextFromFocus()
+    {
+        Display display = Display.getCurrent();
+        if (display == null)
+            display = Display.getDefault();
+        if (display == null || display.isDisposed())
+            return null;
+        return resolveContextFromFocus(display.getFocusControl());
+    }
+
+    public static Context resolveContextFromFocus(Control focus)
+    {
+        if (focus == null || focus.isDisposed())
+            return null;
+
+        Context queryCtx = QueryTextEditDialogHook.tryBuildPasteContext(focus);
+        if (queryCtx != null)
+            return queryCtx;
+
+        Context workbenchCtx = resolveWorkbenchContextFromFocus(focus);
+        if (workbenchCtx != null)
+            return workbenchCtx;
+
+        ISourceViewer viewer = resolveViewerFromFocus(focus);
+        if (viewer == null)
+            return null;
+
+        boolean editable = true;
+        Control textWidget = viewer.getTextWidget();
+        if (textWidget instanceof StyledText styledText)
+            editable = styledText.getEditable();
+
+        return buildContext(viewer, FALLBACK_COMPARE_EXTENSION, editable);
+    }
+
+    private static Context resolveWorkbenchContextFromFocus(Control focus)
+    {
+        try
+        {
+            IWorkbenchWindow window = PlatformUI.getWorkbench().getActiveWorkbenchWindow();
+            if (window == null)
+                return null;
+            IWorkbenchPage page = window.getActivePage();
+            if (page == null)
+                return null;
+            IEditorPart activeEditor = page.getActiveEditor();
+            if (activeEditor == null)
+                return null;
+
+            ITextEditor textEditor = resolveTextEditor(activeEditor);
+            if (textEditor == null)
+                return null;
+            if (!focusInEditorViewer(focus, textEditor))
+                return null;
+            return buildContext(textEditor);
+        }
+        catch (Exception ignored)
+        {
+            return null;
+        }
+    }
+
+    private static boolean focusInEditorViewer(Control focus, ITextEditor editor)
+    {
+        ISourceViewer viewer = getSourceViewer(editor);
+        if (viewer == null)
+            return false;
+        Control textWidget = viewer.getTextWidget();
+        if (textWidget == null || textWidget.isDisposed())
+            return false;
+        for (Control c = focus; c != null && !c.isDisposed(); c = c.getParent())
+        {
+            if (c == textWidget)
+                return true;
+        }
+        return false;
+    }
+
+    private static ISourceViewer resolveViewerFromFocus(Control focus)
+    {
+        for (Control c = focus; c != null && !c.isDisposed(); c = c.getParent())
+        {
+            ISourceViewer adapted = Adapters.adapt(c, ISourceViewer.class);
+            if (adapted != null)
+                return adapted;
+
+            for (String method : new String[] {
+                "getViewer", "getSourceViewer", "getTextViewer" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            {
+                Object viewerObj = Global.invoke(c, method);
+                if (viewerObj instanceof ISourceViewer sourceViewer)
+                    return sourceViewer;
+            }
+        }
+        return null;
     }
 
     /**
@@ -271,9 +380,129 @@ public final class TextEditorSupport
         }
     }
 
+    /**
+     * Порт RDT {@code СохранитьГраницыВыделенияДляОтмены}: identity {@code doc.replace} + {@code commit()}
+     * регистрирует границы выделения в undo-стеке EDT. UI-поток, отдельно от {@code doc.modify}.
+     *
+     * @return смещение длины текста (аналог {@code СмещениеНачала} в RDT)
+     */
+    static int saveSelectionBoundsForUndo(ISourceViewer viewer)
+    {
+        if (viewer == null)
+            return 0;
+
+        IDocument doc = viewer.getDocument();
+        if (doc == null)
+            return 0;
+
+        Object sel = viewer.getSelectionProvider().getSelection();
+        if (!(sel instanceof ITextSelection textSel))
+            return 0;
+
+        int offset = textSel.getOffset();
+        int length = textSel.getLength();
+        if (length <= 0)
+            return 0;
+
+        IDocumentUndoManager undoManager = DocumentUndoManagerRegistry.getDocumentUndoManager(doc);
+        if (undoManager == null)
+            return 0;
+
+        long started = System.currentTimeMillis();
+        try
+        {
+            int lenBefore = doc.get().length();
+            String selected = doc.get(offset, length);
+            doc.replace(offset, length, selected);
+            undoManager.commit();
+            int offsetAdjust = doc.get().length() - lenBefore;
+            IRModuleSyncDebug.logSaveSelectionForUndo(
+                offset, length, offsetAdjust, System.currentTimeMillis() - started);
+            return offsetAdjust;
+        }
+        catch (BadLocationException e)
+        {
+            IRModuleSyncDebug.problem("saveSelectionForUndo: " + e.getMessage()); //$NON-NLS-1$
+            return 0;
+        }
+    }
+
     public static boolean clipboardHasText(Shell shell)
     {
         String text = readClipboardText(shell);
         return text != null && !text.isEmpty();
+    }
+
+    /**
+     * Активирует workbench и переводит фокус в BSL-редактор (в т.ч. вложенный в {@link DtGranularEditor}).
+     */
+    public static void focusBslEditor(BslXtextEditor editor)
+    {
+        if (editor == null)
+            return;
+
+        Runnable focus = () ->
+        {
+            if (WinWindowActivator.isWindows())
+                WinWindowActivator.activateWorkbench();
+
+            try
+            {
+                IWorkbenchPage page = editor.getSite().getPage();
+                if (page != null)
+                {
+                    IEditorPart toActivate = editor;
+                    IWorkbenchPart sitePart = editor.getSite().getPart();
+                    if (sitePart instanceof IEditorPart parent)
+                        toActivate = parent;
+                    page.activate(toActivate);
+                }
+            }
+            catch (Exception ignored)
+            {
+            }
+
+            editor.setFocus();
+            ISourceViewer viewer = editor.getInternalSourceViewer();
+            if (viewer != null)
+            {
+                StyledText widget = viewer.getTextWidget();
+                if (widget != null && !widget.isDisposed())
+                    widget.setFocus();
+            }
+        };
+
+        Display display = Display.getDefault();
+        if (display == null || display.isDisposed())
+            return;
+        if (Display.getCurrent() == display)
+            focus.run();
+        else
+            display.syncExec(focus);
+    }
+
+    /** Активирует workbench и переводит фокус в {@link ISourceViewer} (редактор запроса и т.п.). */
+    public static void focusSourceViewer(ISourceViewer viewer)
+    {
+        if (viewer == null)
+            return;
+
+        Runnable focus = () ->
+        {
+            if (WinWindowActivator.isWindows())
+                WinWindowActivator.activateWorkbench();
+
+            StyledText widget = viewer.getTextWidget();
+            if (widget != null && !widget.isDisposed())
+                widget.setFocus();
+        };
+
+        Display display = Display.getDefault();
+        if (display == null || display.isDisposed())
+            return;
+        if (Display.getCurrent() == display)
+            focus.run();
+        else
+            display.syncExec(focus);
     }
 }

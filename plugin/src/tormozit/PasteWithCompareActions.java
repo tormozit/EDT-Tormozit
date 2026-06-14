@@ -9,7 +9,7 @@ import org.eclipse.swt.widgets.Shell;
  */
 public final class PasteWithCompareActions
 {
-    private static final String TITLE = "Вставить со сравнением"; //$NON-NLS-1$
+    public static final String MENU_LABEL = "Вставить со сравнением"; //$NON-NLS-1$
 
     private PasteWithCompareActions()
     {
@@ -24,14 +24,14 @@ public final class PasteWithCompareActions
     {
         if (ctx == null)
         {
-            ToastNotification.show(TITLE,
+            ToastNotification.show(MENU_LABEL,
                 "Откройте текстовый редактор с фокусом в поле текста.", 4000);
             return;
         }
 
         if (!ctx.editable)
         {
-            ToastNotification.show(TITLE,
+            ToastNotification.show(MENU_LABEL,
                 "Редактор доступен только для чтения.", 4000);
             return;
         }
@@ -39,7 +39,7 @@ public final class PasteWithCompareActions
         String clipboardText = TextEditorSupport.readClipboardText(shell);
         if (clipboardText == null || clipboardText.isEmpty())
         {
-            ToastNotification.show(TITLE,
+            ToastNotification.show(MENU_LABEL,
                 "Буфер обмена пуст или не содержит текста.", 4000);
             return;
         }
@@ -60,7 +60,7 @@ public final class PasteWithCompareActions
         catch (Exception e)
         {
             Global.log("PasteWithCompareActions.run: " + e); //$NON-NLS-1$
-            ToastNotification.show(TITLE,
+            ToastNotification.show(MENU_LABEL,
                 "Не удалось открыть сравнение: " + e.getMessage(), 5000);
         }
     }

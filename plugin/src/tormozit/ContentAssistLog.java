@@ -17,6 +17,9 @@ public final class ContentAssistLog
 {
     public static final String VIEW_ID = "tormozit.ContentAssistLogView"; //$NON-NLS-1$
 
+    /** Сигнал представлению перечитать {@link #getFullText()} после обрезки буфера. */
+    static final String RESYNC = "\u0000"; //$NON-NLS-1$
+
     private static final int MAX_LINES = 800;
     private static final DateTimeFormatter TIME =
         DateTimeFormatter.ofPattern("HH:mm:ss"); //$NON-NLS-1$
@@ -34,16 +37,20 @@ public final class ContentAssistLog
         if (message == null)
             return;
         String line = LocalTime.now().format(TIME) + "  " + message; //$NON-NLS-1$
+        boolean trimmed = false;
         synchronized (LOCK)
         {
             if (lineCount >= MAX_LINES)
+            {
                 trimOldestHalf();
+                trimmed = true;
+            }
             if (buffer.length() > 0)
                 buffer.append('\n');
             buffer.append(line);
             lineCount++;
         }
-        notifyListeners(line);
+        notifyListeners(trimmed ? RESYNC : line);
     }
 
     public static String getFullText()

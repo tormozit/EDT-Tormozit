@@ -35,7 +35,7 @@ public class ChoiceParametersHook implements IStartup
     private static final String PATCHED_KEY = "tormozit.choiceParamsPatched"; //$NON-NLS-1$
     private static final String SESSION_KEY = "tormozit.choiceParamsSession"; //$NON-NLS-1$
     private static final String DIALOG_TITLE =
-            "\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u0435 \u043f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u043e\u0432 \u0432\u044b\u0431\u043e\u0440\u0430"; //$NON-NLS-1$
+            "Редактирование параметров выбора"; //$NON-NLS-1$
     private static final String DIALOG_CLASS =
             "com._1c.g5.v8.dt.md.ui.aef.components.choiceparameters.ChoiceParametersDialog"; //$NON-NLS-1$
 

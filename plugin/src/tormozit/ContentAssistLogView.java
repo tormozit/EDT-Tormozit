@@ -6,11 +6,18 @@ import org.eclipse.jface.dialogs.InputDialog;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.StyledText;
 import org.eclipse.swt.custom.StyleRange;
+import org.eclipse.swt.dnd.Clipboard;
+import org.eclipse.swt.dnd.TextTransfer;
+import org.eclipse.swt.dnd.Transfer;
 import org.eclipse.swt.graphics.Color;
+import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.widgets.Composite;
+import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Event;
 import org.eclipse.swt.widgets.Listener;
+import org.eclipse.swt.widgets.Menu;
+import org.eclipse.swt.widgets.MenuItem;
 import org.eclipse.ui.part.ViewPart;
 
 /**
@@ -38,6 +45,7 @@ public final class ContentAssistLogView extends ViewPart
 
         ContentAssistLog.addListener(logListener);
         attachFindKeyListener();
+        installContextMenu();
 
         IToolBarManager toolbar = getViewSite().getActionBars().getToolBarManager();
         Action autoScrollAction = new Action("Автопрокрутка", Action.AS_CHECK_BOX) { //$NON-NLS-1$
@@ -96,8 +104,27 @@ public final class ContentAssistLogView extends ViewPart
         logText.addDisposeListener(e -> logText.removeListener(SWT.KeyDown, keyListener));
     }
 
+    private void installContextMenu()
+    {
+        Menu menu = new Menu(logText);
+        logText.setMenu(menu);
+        MenuItem copyItem = new MenuItem(menu, SWT.PUSH);
+        copyItem.setText("Копировать в буфер обмена\tCtrl+C"); //$NON-NLS-1$
+        copyItem.addListener(SWT.Selection, e -> copySelectionToClipboard());
+        menu.addListener(SWT.Show, e -> {
+            Point sel = logText.getSelection();
+            copyItem.setEnabled(sel.y > sel.x);
+        });
+    }
+
     private void onLogKeyDown(Event event)
     {
+        if ((event.stateMask & SWT.CTRL) != 0 && (event.keyCode == 'c' || event.keyCode == 'C'))
+        {
+            event.doit = false;
+            copySelectionToClipboard();
+            return;
+        }
         if ((event.stateMask & SWT.CTRL) != 0 && (event.keyCode == 'f' || event.keyCode == 'F'))
         {
             event.doit = false;
@@ -108,6 +135,33 @@ public final class ContentAssistLogView extends ViewPart
         {
             event.doit = false;
             findNext((event.stateMask & SWT.SHIFT) == 0);
+        }
+    }
+
+    private void copySelectionToClipboard()
+    {
+        if (logText == null || logText.isDisposed())
+            return;
+        Point sel = logText.getSelection();
+        if (sel.y <= sel.x)
+            return;
+
+        String text = logText.getSelectionText();
+        if (text == null || text.isEmpty())
+            text = logText.getText(sel.x, sel.y - sel.x);
+        if (text == null || text.isEmpty())
+            return;
+
+        Clipboard cb = new Clipboard(logText.getDisplay());
+        try
+        {
+            cb.setContents(
+                new Object[] { text },
+                new Transfer[] { TextTransfer.getInstance() });
+        }
+        finally
+        {
+            cb.dispose();
         }
     }
 
@@ -185,15 +239,78 @@ public final class ContentAssistLogView extends ViewPart
             logText.setText(""); //$NON-NLS-1$
             return;
         }
+        if (ContentAssistLog.RESYNC.equals(line))
+        {
+            resyncFromBuffer();
+            return;
+        }
         if (!ComfortSettings.isDebugLogEnabled())
             return;
 
-        String existing = logText.getText();
-        String next = existing.isEmpty() ? line : existing + "\n" + line; //$NON-NLS-1$
-        logText.setText(next);
-        applyHighlight(line, existing.length() + (existing.isEmpty() ? 0 : 1));
+        appendLogLine(line);
+    }
+
+    private void appendLogLine(String line)
+    {
+        int oldCharCount = logText.getCharCount();
+        int topIndex = logText.getTopIndex();
+
+        String suffix = oldCharCount == 0 ? line : "\n" + line; //$NON-NLS-1$
+        runWithoutStealingFocus(() -> {
+            logText.replaceTextRange(oldCharCount, 0, suffix);
+            applyHighlight(line, oldCharCount + (oldCharCount == 0 ? 0 : 1));
+        });
+
         if (ComfortSettings.isLogAutoscroll())
             scrollToBottom();
+        else if (logText.getLineCount() > 0)
+            logText.setTopIndex(Math.min(topIndex, logText.getLineCount() - 1));
+    }
+
+    private void resyncFromBuffer()
+    {
+        if (!ComfortSettings.isDebugLogEnabled())
+            return;
+
+        String newText = ContentAssistLog.getFullText();
+        String oldText = logText.getText();
+        if (oldText.equals(newText))
+            return;
+
+        int topIndex = logText.getTopIndex();
+
+        runWithoutStealingFocus(() -> {
+            logText.setText(newText);
+            reapplyAllHighlights(newText);
+        });
+
+        if (ComfortSettings.isLogAutoscroll())
+            scrollToBottom();
+        else if (logText.getLineCount() > 0)
+            logText.setTopIndex(Math.min(topIndex, logText.getLineCount() - 1));
+    }
+
+    /** Обновление текста журнала без активации представления и потери фокуса редактора. */
+    private void runWithoutStealingFocus(Runnable update)
+    {
+        Control focusControl = logText.getDisplay().getFocusControl();
+        boolean logHadFocus = focusControl == logText;
+        update.run();
+        if (!logHadFocus && focusControl != null && !focusControl.isDisposed() && focusControl != logText)
+            focusControl.setFocus();
+    }
+
+    private void reapplyAllHighlights(String text)
+    {
+        int lineStart = 0;
+        for (int i = 0; i <= text.length(); i++)
+        {
+            if (i == text.length() || text.charAt(i) == '\n')
+            {
+                applyHighlight(text.substring(lineStart, i), lineStart);
+                lineStart = i + 1;
+            }
+        }
     }
 
     private void scrollToBottom()

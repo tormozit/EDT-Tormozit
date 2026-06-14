@@ -312,6 +312,38 @@ public class GetRef extends AbstractHandler
         return new ModuleRef(extensionName, ref.toString());
     }
 
+    /** Полное русское имя модуля для {@code УстановитьТекст} в ИР (параметр ИмяМодуля). */
+    static String resolveSetTextModuleName(IFile file)
+    {
+        if (file == null)
+            return ""; //$NON-NLS-1$
+        ModuleRef ref = pathToModuleRef(file.getProjectRelativePath().toString());
+        if (ref == null)
+            return ""; //$NON-NLS-1$
+        return toSetTextModuleName(ref.modulePath);
+    }
+
+    static String resolveSetTextModuleName(BslXtextEditor editor)
+    {
+        if (editor == null)
+            return ""; //$NON-NLS-1$
+        IEditorInput input = editor.getEditorInput();
+        if (input == null)
+            return ""; //$NON-NLS-1$
+        IFile file = input.getAdapter(IFile.class);
+        return resolveSetTextModuleName(file);
+    }
+
+    /** Для форм добавляет суффикс {@code .Модуль} (требование ИР). */
+    static String toSetTextModuleName(String modulePath)
+    {
+        if (modulePath == null || modulePath.isEmpty())
+            return ""; //$NON-NLS-1$
+        if (modulePath.endsWith(".Форма")) //$NON-NLS-1$
+            return modulePath + ".Модуль"; //$NON-NLS-1$
+        return modulePath;
+    }
+
     private static String stripModuleSuffix(String modulePath)
     {
         int lastDot = modulePath.lastIndexOf('.');

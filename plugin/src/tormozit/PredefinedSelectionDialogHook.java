@@ -14,7 +14,7 @@ public class PredefinedSelectionDialogHook implements IStartup
 {
     private static final String PATCHED_KEY = "tormozit.predefinedSelectionPatched"; //$NON-NLS-1$
     private static final String DIALOG_TITLE =
-            "\u0412\u044b\u0431\u043e\u0440 \u043f\u0440\u0435\u0434\u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0435\u043d\u043d\u044b\u0445 \u0434\u0430\u043d\u043d\u044b\u0445"; //$NON-NLS-1$
+            "Выбор предопределенных данных"; //$NON-NLS-1$
     private static final String DIALOG_CLASS =
             "com._1c.g5.v8.dt.internal.md.ui.controls.value.PredefinedSelectionDialog"; //$NON-NLS-1$
 

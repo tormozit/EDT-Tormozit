@@ -438,6 +438,81 @@ public final class Global
         return text.replace("\r\n", "\n").replace("\r", "\n");
     }
 
+    /** Текст в LF и границы выделения в координатах этой строки (для COM EDT→ИР). */
+    public static record LfTextSlice(String text, int start, int end) {}
+
+    /**
+     * Смещение в строке с любыми EOL → смещение в LF-нормализованной версии той же строки.
+     * {@code offset} — индекс символа в {@code text} (0…length).
+     */
+    public static int remapOffsetToLf(String text, int offset)
+    {
+        if (text == null || offset <= 0)
+            return Math.max(0, offset);
+        int lfOffset = 0;
+        int i = 0;
+        int capped = Math.min(offset, text.length());
+        while (i < capped)
+        {
+            char c = text.charAt(i);
+            if (c == '\r' && i + 1 < text.length() && text.charAt(i + 1) == '\n')
+                i += 2;
+            else
+                i++;
+            lfOffset++;
+        }
+        return lfOffset;
+    }
+
+    /**
+     * LF-offset → offset в исходной строке {@code rawText} (inverse к {@link #remapOffsetToLf}).
+     * Для {@code doc.replace} после {@link #toLfWithSelection} при sync ИР→EDT.
+     */
+    public static int remapOffsetFromLf(String rawText, int lfOffset)
+    {
+        if (rawText == null || lfOffset <= 0)
+            return Math.max(0, lfOffset);
+        int lfPos = 0;
+        int rawPos = 0;
+        while (lfPos < lfOffset && rawPos < rawText.length())
+        {
+            char c = rawText.charAt(rawPos);
+            if (c == '\r' && rawPos + 1 < rawText.length() && rawText.charAt(rawPos + 1) == '\n')
+                rawPos += 2;
+            else
+                rawPos++;
+            lfPos++;
+        }
+        return rawPos;
+    }
+
+    /** Нормализует текст к LF и пересчитывает границы выделения относительно исходной строки. */
+    public static LfTextSlice toLfWithSelection(String raw, int start, int end)
+    {
+        String source = raw != null ? raw : ""; //$NON-NLS-1$
+        int rawStart = Math.max(0, start);
+        int rawEnd = Math.max(rawStart, end);
+        String lfText = normalizeLineSeparators(source);
+        return new LfTextSlice(
+            lfText,
+            remapOffsetToLf(source, rawStart),
+            remapOffsetToLf(source, rawEnd));
+    }
+
+    /** Число пар {@code \\r\\n} в строке (для диагностики синхронизации с ИР). */
+    public static int countCrlf(String text)
+    {
+        if (text == null || text.length() < 2)
+            return 0;
+        int count = 0;
+        for (int i = 0; i < text.length() - 1; i++)
+        {
+            if (text.charAt(i) == '\r' && text.charAt(i + 1) == '\n')
+                count++;
+        }
+        return count;
+    }
+
     /** Найти первый Control по предикату в поддереве */
     public static <T extends Control> T findControl(Composite root, Class<T> type, java.util.function.Predicate<T> predicate) {
         for (Control c : root.getChildren()) {

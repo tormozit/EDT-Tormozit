@@ -61,6 +61,7 @@ public class Activator extends AbstractUIPlugin
         RecentPlaces.getInstance().init(PLUGIN_ID);
 
         ComfortUpdateChecker.startDailyScheduler();
+        IRModuleChangeCollector.installDirtyListener();
     }
 
     @Override

@@ -33,9 +33,12 @@ import org.eclipse.swt.widgets.Event;
 import org.eclipse.swt.widgets.Listener;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
+import org.eclipse.swt.widgets.ToolBar;
 import org.eclipse.swt.widgets.Tree;
 import org.eclipse.swt.widgets.TreeItem;
 import org.eclipse.ui.IStartup;
+
+import com._1c.g5.v8.dt.bsl.ui.editor.BslXtextEditor;
 
 /**
  * Перехватчик окон с деревом и полем поиска: Quick Outline, «Редактирование типа данных» (SelectTypeDialog).
@@ -52,13 +55,14 @@ public class SmartOutlineHook implements IStartup {
     
     private static final String PATCHED_KEY = "tormozit.outlinePatched";
     private static final String CLEAR_BUTTON_KEY = "tormozit.outlineClearButton"; //$NON-NLS-1$
+    private static final String HEADER_BUTTON_KEY = "tormozit.outlineHeaderButton"; //$NON-NLS-1$
     private static final String CLEAR_INSTALLED_KEY = "tormozit.outlineClearInstalled"; //$NON-NLS-1$
     private static final String LAST_PATTERN_KEY = "tormozit.outlineLastPattern"; //$NON-NLS-1$
     private static final String PENDING_CLEAR_SELECTION_KEY = "tormozit.outlinePendingClearSelection"; //$NON-NLS-1$
     private static final String SUPPRESS_RECENT_KEY = "tormozit.outlineSuppressRecent"; //$NON-NLS-1$
     /** Заголовок {@code SelectTypeDialog_title} / {@code TypeDescriptionDialogComponent_DialogTitle}. */
     private static final String SELECT_TYPE_DIALOG_TITLE =
-            "\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u0435 \u0442\u0438\u043f\u0430 \u0434\u0430\u043d\u043d\u044b\u0445"; //$NON-NLS-1$
+            "Редактирование типа данных"; //$NON-NLS-1$
 
     public static void install(Display display) {
         if (display == null || display.isDisposed()) return;
@@ -143,7 +147,7 @@ public class SmartOutlineHook implements IStartup {
             return false;
         if (findTreeWidget(shell) == null)
             return false;
-        if (title != null && (title.contains(SELECT_TYPE_DIALOG_TITLE) || title.contains("\u0442\u0438\u043f\u0430 \u0434\u0430\u043d\u043d\u044b\u0445"))) //$NON-NLS-1$
+        if (title != null && (title.contains(SELECT_TYPE_DIALOG_TITLE) || title.contains("типа данных"))) //$NON-NLS-1$
             return true;
         Object data = shell.getData();
         if (data != null) {
@@ -457,7 +461,7 @@ private static void applySmartSearch(TreeViewer viewer, Control filterControl, S
 
         if (!typeTree)
         {
-            installClearFilterButton(filterControl, viewer, patchedShell);
+            installQuickOutlineHeaderButtons(filterControl, viewer, patchedShell, dialog, dialogName);
             installOutlineRecentPlacesTracking(viewer, baseLp);
         }
 
@@ -534,7 +538,8 @@ private static void applySmartSearch(TreeViewer viewer, Control filterControl, S
         return null;
     }
 
-    private static void installClearFilterButton(Control filterControl, TreeViewer viewer, Shell shell)
+    private static void installQuickOutlineHeaderButtons(Control filterControl, TreeViewer viewer, Shell shell,
+            Object dialog, String dialogName)
     {
         if (filterControl == null || filterControl.isDisposed())
             return;
@@ -545,15 +550,16 @@ private static void applySmartSearch(TreeViewer viewer, Control filterControl, S
         if (parent == null || parent.isDisposed())
             return;
 
-        Image clearImg = loadClearImage();
+        boolean bslQuickOutline = dialogName != null && dialogName.contains("BslQuickOutlinePopup"); //$NON-NLS-1$
+        int extraButtons = bslQuickOutline ? 2 : 0;
 
+        Image clearImg = loadClearImage();
         Button clear = new Button(parent, SWT.PUSH);
         clear.setData("org.eclipse.e4.ui.css.id", "tormozit-clear-button"); //$NON-NLS-1$ //$NON-NLS-2$
         if (clearImg != null)
         {
             clear.setImage(clearImg);
             clear.setToolTipText("Очистить фильтр"); //$NON-NLS-1$
-            // Освобождаем изображение при dispose кнопки
             clear.addDisposeListener(e -> clearImg.dispose());
         }
         else
@@ -561,29 +567,51 @@ private static void applySmartSearch(TreeViewer viewer, Control filterControl, S
             clear.setText("✕"); //$NON-NLS-1$
             clear.setToolTipText("Очистить фильтр"); //$NON-NLS-1$
         }
-        // Кнопка не должна забирать фокус из поля фильтра
-        clear.addListener(SWT.MouseDown, e -> e.doit = false);
-        clear.setData("__noFocus", Boolean.TRUE); //$NON-NLS-1$
+        configureOutlineHeaderButton(clear);
+
+        Button commonBtn = null;
+        Button detailedBtn = null;
+        if (bslQuickOutline)
+        {
+            commonBtn = new Button(parent, SWT.PUSH);
+            commonBtn.setText("Общие ИР"); //$NON-NLS-1$
+            commonBtn.setToolTipText("Список общих методов в ИР" + Global.pluginSignForTooltip()); //$NON-NLS-1$
+            configureOutlineHeaderButton(commonBtn);
+
+            detailedBtn = new Button(parent, SWT.PUSH);
+            detailedBtn.setText("Подробно ИР"); //$NON-NLS-1$
+            detailedBtn.setToolTipText("Список методов модуля в ИР" + Global.pluginSignForTooltip()); //$NON-NLS-1$
+            configureOutlineHeaderButton(detailedBtn);
+        }
 
         org.eclipse.swt.widgets.Layout layout = parent.getLayout();
         if (layout instanceof GridLayout)
         {
             GridLayout gl = (GridLayout) layout;
             Object ld = filterControl.getLayoutData();
-            if (ld instanceof GridData)
-            {
-                GridData filterGd = (GridData) ld;
-                if (filterGd.horizontalSpan > 1)
-                    filterGd.horizontalSpan--;
-            }
-            clear.setLayoutData(new GridData(SWT.NONE, SWT.CENTER, false, false));
-            gl.numColumns = Math.max(gl.numColumns + 1, 2);
+            GridData filterGd = ld instanceof GridData ? (GridData) ld : null;
+            reserveHeaderColumns(filterGd, gl, 1 + extraButtons);
         }
         else if (!(layout instanceof RowLayout))
         {
             parent.setLayout(new RowLayout(SWT.HORIZONTAL));
         }
+
         clear.pack();
+        if (commonBtn != null)
+            commonBtn.pack();
+        if (detailedBtn != null)
+            detailedBtn.pack();
+
+        Control viewMenuControl = findViewMenuControl(parent, filterControl);
+        if (viewMenuControl != null && !viewMenuControl.isDisposed())
+        {
+            if (detailedBtn != null && !detailedBtn.isDisposed())
+                detailedBtn.moveAbove(viewMenuControl);
+            if (commonBtn != null && !commonBtn.isDisposed())
+                commonBtn.moveAbove(detailedBtn != null ? detailedBtn : viewMenuControl);
+            clear.moveAbove(commonBtn != null ? commonBtn : viewMenuControl);
+        }
 
         filterControl.setData(CLEAR_INSTALLED_KEY, Boolean.TRUE);
         parent.setData(CLEAR_BUTTON_KEY, clear);
@@ -591,14 +619,70 @@ private static void applySmartSearch(TreeViewer viewer, Control filterControl, S
             if (viewer != null && viewer.getSelection() instanceof IStructuredSelection)
                 filterControl.setData(PENDING_CLEAR_SELECTION_KEY, viewer.getSelection());
             setFilterText(filterControl, ""); //$NON-NLS-1$
-            // Возвращаем фокус в поле фильтра после очистки
             if (!filterControl.isDisposed())
                 filterControl.forceFocus();
         });
 
+        if (commonBtn != null)
+        {
+            commonBtn.addListener(SWT.Selection, e -> {
+                BslXtextEditor editor = IrMethodListHandler.resolveBslEditor(dialog);
+                IrMethodListHandler.openCommonMethods(editor, getFilterPattern(filterControl));
+                if (!filterControl.isDisposed())
+                    filterControl.forceFocus();
+            });
+        }
+        if (detailedBtn != null)
+        {
+            detailedBtn.addListener(SWT.Selection, e -> {
+                BslXtextEditor editor = IrMethodListHandler.resolveBslEditor(dialog);
+                IrMethodListHandler.openModuleMethods(editor, getFilterPattern(filterControl));
+                if (!filterControl.isDisposed())
+                    filterControl.forceFocus();
+            });
+        }
+
         parent.layout(true, true);
         if (shell != null && !shell.isDisposed())
             shell.layout(true, true);
+    }
+
+    private static void configureOutlineHeaderButton(Button button)
+    {
+        button.addListener(SWT.MouseDown, e -> e.doit = false);
+        button.setData("__noFocus", Boolean.TRUE); //$NON-NLS-1$
+        button.setData(HEADER_BUTTON_KEY, Boolean.TRUE);
+        button.setLayoutData(new GridData(SWT.NONE, SWT.CENTER, false, false));
+    }
+
+    private static void reserveHeaderColumns(GridData filterGd, GridLayout gl, int columns)
+    {
+        for (int i = 0; i < columns; i++)
+        {
+            if (filterGd != null && filterGd.horizontalSpan > 1)
+                filterGd.horizontalSpan--;
+            gl.numColumns = Math.max(gl.numColumns + 1, 2);
+        }
+    }
+
+    /** Штатная кнопка ▼ меню окна PopupDialog — sibling поля фильтра в строке заголовка. */
+    private static Control findViewMenuControl(Composite parent, Control filterControl)
+    {
+        if (parent == null || parent.isDisposed())
+            return null;
+        Control fallback = null;
+        for (Control child : parent.getChildren())
+        {
+            if (child == filterControl || child.isDisposed())
+                continue;
+            if (Boolean.TRUE.equals(child.getData(HEADER_BUTTON_KEY)))
+                continue;
+            if (child instanceof ToolBar)
+                return child;
+            if (fallback == null)
+                fallback = child;
+        }
+        return fallback;
     }
 
     private static IStructuredSelection takePendingClearSelection(Control filterControl)

@@ -37,7 +37,7 @@ final class DebugInspectorTreeEnhancement
     private static final String ENHANCED_KEY = "tormozit.debugInspectorTreeEnhanced"; //$NON-NLS-1$
     private static final String COPY_HOOKED_KEY = "tormozit.debugInspectorCopyHooked"; //$NON-NLS-1$
     private static final String COPY_ACTION_SUFFIX = ".VirtualCopyToClipboardAction"; //$NON-NLS-1$
-    private static final String COLUMN_MARKER_RU = "\u0424\u0430\u043a\u0442\u0438\u0447\u0435\u0441\u043a\u0438\u0439 \u0442\u0438\u043f"; //$NON-NLS-1$
+    private static final String COLUMN_MARKER_RU = "Фактический тип"; //$NON-NLS-1$
     private static final String COLUMN_MARKER_EN = "Actual type"; //$NON-NLS-1$
 
     private final Tree tree;
@@ -481,8 +481,8 @@ final class DebugInspectorTreeEnhancement
     {
         Shell shell = tree.getShell();
         InputDialog dialog = new InputDialog(shell,
-            "\u041f\u043e\u0438\u0441\u043a \u0432 \u0438\u043d\u0441\u043f\u0435\u043a\u0442\u043e\u0440\u0435", //$NON-NLS-1$
-            "\u0422\u0435\u043a\u0441\u0442 \u0432 \u043b\u044e\u0431\u043e\u0439 \u043a\u043e\u043b\u043e\u043d\u043a\u0435" + Global.pluginSignForTooltip(), //$NON-NLS-1$
+            "Поиск в инспекторе", //$NON-NLS-1$
+            "Текст в любой колонке" + Global.pluginSignForTooltip(), //$NON-NLS-1$
             findText,
             null);
         if (dialog.open() != InputDialog.OK)

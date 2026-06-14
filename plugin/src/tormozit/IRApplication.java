@@ -2,86 +2,47 @@ package tormozit;
 
 
 import java.io.File;
-import java.nio.file.Files;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.nio.charset.Charset;
+import java.nio.file.Files;
 import java.time.LocalDateTime;
-import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.IdentityHashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.CoreException;
-import org.eclipse.core.runtime.IAdaptable;
-import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Platform;
-import org.eclipse.core.runtime.Status;
-import org.eclipse.jface.viewers.ISelection;
-import org.eclipse.jface.viewers.IStructuredSelection;
+import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
-import org.eclipse.ui.IWorkbenchWindow;
-import org.eclipse.ui.PlatformUI;
-import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.FrameworkUtil;
-import org.osgi.framework.InvalidSyntaxException;
 import org.osgi.framework.ServiceReference;
 
-import com._1c.g5.v8.dt.compare.model.RelatedFeature;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
+import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessManager;
+import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessSettings;
 import com._1c.g5.v8.dt.platform.services.model.Arch;
 import com._1c.g5.v8.dt.platform.services.model.IConnectionString;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com._1c.g5.v8.dt.platform.services.model.RuntimeInstallation;
-import com._1c.g5.v8.dt.platform.services.model.impl.RuntimeInstallationImpl;
-import com._1c.g5.v8.dt.platform.version.Version;
-import com.e1c.g5.dt.applications.infobases.IInfobaseApplication;
-import com.google.common.base.Strings;
-import com.google.common.util.concurrent.Service;
-import com._1c.g5.v8.dt.core.platform.IExtensionProject;
-import com._1c.g5.v8.dt.core.platform.IV8Project;
-import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
-import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessManager;
-import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessSettings;
-import com._1c.g5.v8.dt.platform.services.core.infobases.InfobaseAccessType;
-import com._1c.g5.v8.dt.platform.services.core.infobases.sync.v2.IInfobaseSynchronizationStateManager;
-import com._1c.g5.v8.dt.platform.services.core.infobases.sync.v2.IUpdateProjectFlow;
-import com._1c.g5.v8.dt.platform.services.core.runtimes.RuntimeInstallations;
-import com._1c.g5.v8.dt.platform.services.core.runtimes.environments.IResolvableRuntimeInstallation;
-import com._1c.g5.v8.dt.platform.services.core.runtimes.environments.IResolvableRuntimeInstallationManager;
-import com._1c.g5.v8.dt.platform.services.core.runtimes.execution.ComponentExecutorInfo;
-import com._1c.g5.v8.dt.platform.services.core.runtimes.execution.IDesignerSessionThickClientLauncher;
-import com._1c.g5.v8.dt.platform.services.core.runtimes.execution.ILaunchableRuntimeComponent;
-import com._1c.g5.v8.dt.platform.services.core.runtimes.execution.IRuntimeComponentManager;
-import com._1c.g5.v8.dt.platform.services.core.runtimes.execution.IRuntimeComponentTypes;
-import com._1c.g5.v8.dt.platform.services.core.runtimes.execution.RuntimeExecutionException;
-import com._1c.g5.v8.dt.platform.services.core.runtimes.execution.impl.RuntimeExecutionCommandBuilder;
-import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
-import com._1c.g5.v8.dt.platform.services.model.RuntimeInstallation;
-import com._1c.g5.v8.dt.platform.version.Version;
-import com._1c.g5.v8.dt.team.git.infobases.IGitBranchIssueDescriptor;
 import com._1c.g5.wiring.ServiceAccess;
 import com._1c.g5.wiring.ServiceSupplier;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
+import com.e1c.g5.dt.applications.infobases.IInfobaseApplication;
+import com.google.common.base.Strings;
 
 public final class IRApplication
 {
@@ -92,12 +53,19 @@ public final class IRApplication
 
     public static String toastTitle()
     {
-        return "ИР адаптер";
+        return "Приложение ИР";
     }
 
     public static String irSubsystemTitle()
     {
         return "ИР";
+    }
+
+    private static final String WAIT_FOR_IR_CONNECTION_MSG = "Дождитесь подключения для вызова команд ИР"; //$NON-NLS-1$
+
+    public static void notifyWaitForIrConnection()
+    {
+        ToastNotification.show(toastTitle(), WAIT_FOR_IR_CONNECTION_MSG, 5_000);
     }
     
     private static final IRApplication INSTANCE = new IRApplication();
@@ -118,9 +86,6 @@ public final class IRApplication
     
     static private final Map<String, IRSession>  sessions           = new ConcurrentHashMap<>();
     static private final List<Runnable>          changeListeners    = new CopyOnWriteArrayList<>();
-    /** Ключи баз, к которым уже выполнялось хотя бы одно успешное подключение в этом сеансе EDT.
-     *  Аналог ВосстановитьЗначениеСеансаКонфигуратора("ЛиПервоеПодключениеИР"). */
-    static private final Set<String>             firstConnectedKeys = ConcurrentHashMap.newKeySet();
     /** Аналог ПапкаПортативногоИР — каталог, содержащий ирПортативный.epf и модули.
      *  Пусто = ещё не определён или не найден. */
     static private volatile String               portableIrFolder   = ""; //$NON-NLS-1$
@@ -357,7 +322,7 @@ public final class IRApplication
     {
         String appLabel = DesignerSessionPoolAccessor.nameOf(infobase);
         Shell connectingToast = ToastNotification.show(toastTitle(),
-            "Подключается приложение ИР \"" + appLabel + "\". Закрыть его можно в списке приложений", 60_000);
+            "Подключается \"" + appLabel + "\". Отключить можно в списке приложений", 60_000);
         try
         {
             doConnectInternal(project, infobase);
@@ -481,7 +446,7 @@ public final class IRApplication
         ExecutorService currentExecutor = connectingSession != null ? connectingSession.executor : null;
 
         IRSession IRSession = new IRSession(
-            State.CONNECTED, LocalDateTime.now(), pid, platformVersion,
+            State.CONNECTING, LocalDateTime.now(), pid, platformVersion,
             comDispatch, processObj, title, project, currentExecutor, infobase);
         sessions.put(key, IRSession);
         notifyListeners();
@@ -495,7 +460,6 @@ public final class IRApplication
         }
         Object irCache  = IRSession.getModule("ирКэш");  //$NON-NLS-1$
         Object irClient = IRSession.getModule("ирКлиент"); //$NON-NLS-1$
-
         long irSubsystemVersion = 0;
         try
         {
@@ -529,7 +493,6 @@ public final class IRApplication
         // МодулиИР.ирКлиент.ЗакрытьВсеЧужиеФормыЛкс()
         try { ComBridge.invoke(irClient, "ЗакрытьВсеЧужиеФормыЛкс"); } //$NON-NLS-1$
         catch (Exception ignored) {}
-
         try
         {
             Object bsp = ComBridge.getProperty(comDispatch, "СтандартныеПодсистемыКлиент"); //$NON-NLS-1$
@@ -537,44 +500,8 @@ public final class IRApplication
         }
         catch (Exception ignored) {}
 
-        boolean isFirstConnect = firstConnectedKeys.add(key); // true = ещё не подключались
-        if (isFirstConnect)
-        {
-            // МодулиИР.ирКэш.СостояниеПодготовкиКэшМДСеансаЛкс()
-            try { ComBridge.invoke(irCache, "СостояниеПодготовкиКэшМДСеансаЛкс"); } //$NON-NLS-1$
-            catch (Exception ignored) {}
-
-//                Object textField = ComBridge.getProperty(irCache, "ПолеТекстаПрограммы"); //$NON-NLS-1$
-//                ComBridge.invoke(textField, "РазобратьТекущийКонтекст");  // инициирует ИнициациюОписанияМетодовИСвойств //$NON-NLS-1$
-//                ComBridge.invoke(textField, "ПодготовитьГлобальныйКонтекст"); //$NON-NLS-1$
-//                try { ComBridge.invoke(textField, "ЗагрузитьКэшМодулейВПамятьОС"); } //$NON-NLS-1$
-//                catch (Exception ignored) {} // ИР 7.75+
-//
-//                // Проверяем обновлённые модули из папки Гита
-//                Object changedModules = null;
-//                try { changedModules = ComBridge.invoke(textField, "ПодготовитьОбновлениеИзПапкиГита"); } //$NON-NLS-1$
-//                catch (Exception ignored) {} // метод появился в ИР 8.10+
-//
-//                long changedCount = 0;
-//                if (changedModules != null)
-//                {
-//                    try
-//                    {
-//                        changedCount = ComBridge.toLong(ComBridge.invoke(changedModules, "Количество")); //$NON-NLS-1$
-//                    }
-//                    catch (Exception ignored) {}
-//                }
-//                if (changedCount > 0)
-//                {
-//                    final int cnt = changedCount;
-//                    // TODO: по клику тоста — вызвать ОбновитьКэшМодулейИзПапкиГита(changedModules)
-//                    ToastNotification.show(
-//                        toastTitle(), //$NON-NLS-1$
-//                        String.format("В папке Гита найдено %d обновлённых модулей. Перенести их в кэш модулей?", cnt), //$NON-NLS-1$
-//                        10_000);
-//                }
-        }
-        // СохранитьЗначениеСеансаКонфигуратора("ЛиПервоеПодключениеИР", Ложь) — уже отмечено в firstConnectedKeys
+        ComBridge.invoke(irClient, "УстановитьГитРепозиторийЛкс", resolveGitRepositoryPath(project)); //$NON-NLS-1$
+        performInitialIrModuleSync(irCache, IRSession);
 
         long ping = 0;
         String pingText = ""; //$NON-NLS-1$
@@ -584,7 +511,16 @@ public final class IRApplication
         }
         catch (Exception ignored) { ping = 0; } // ИР 8.06-
 
-        String connectedMsg = "Приложение " + title + " подключено за " + duration + " сек"; //$NON-NLS-1$ //$NON-NLS-2$
+        IRSession connectedSession = new IRSession(
+            State.CONNECTED, LocalDateTime.now(), IRSession.pid, IRSession.platformVersion,
+            IRSession.root, IRSession.processObj, IRSession.appTitle, IRSession.project,
+            IRSession.executor, IRSession.infobase);
+        connectedSession.moduleRoot = IRSession.moduleRoot;
+        connectedSession.codeEditor = IRSession.codeEditor;
+        sessions.put(key, connectedSession);
+        notifyListeners();
+
+        String connectedMsg = title + " подключено за " + duration + " сек"; //$NON-NLS-1$ //$NON-NLS-2$
         if (duration > 30 || ping > 5)
             connectedMsg += ". Задержка канала до сервера — " + ping + " сек"; //$NON-NLS-1$ //$NON-NLS-2$
 
@@ -610,7 +546,7 @@ public final class IRApplication
                 ToastNotification.show(toastTitle(), //$NON-NLS-1$
                     "В файловой базе ИР включены регламентные задания. Рекомендую отключить.\n" //$NON-NLS-1$
                     + "Если в коде есть их включение, подавите его проверкой файловой базы.", 10_000, //$NON-NLS-1$
-                    () -> IRSession.openJobConsole()); //$NON-NLS-1$
+                    () -> connectedSession.openJobConsole()); //$NON-NLS-1$
         }
         String[] forbiddenHandlers = {
             "ОбработчикОжиданияПроверкиДинамическогоИзмененияИБ", // БСП 2.0 //$NON-NLS-1$
@@ -623,6 +559,57 @@ public final class IRApplication
             catch (Exception ignored) {}
         }
         ToastNotification.show(toastTitle(), connectedMsg, 3_000); //$NON-NLS-1$
+    }
+
+    /** Корень EDT-проекта на диске (каталог, содержащий {@code src/}), для {@code УстановитьГитРепозиторийЛкс}. */
+    private static String resolveGitRepositoryPath(IProject project)
+    {
+        if (project == null || !project.isOpen())
+            return ""; //$NON-NLS-1$
+        org.eclipse.core.runtime.IPath location = project.getLocation();
+        if (location == null)
+            return ""; //$NON-NLS-1$
+        if (!project.getFolder("src").exists()) //$NON-NLS-1$
+            return ""; //$NON-NLS-1$
+        return location.toOSString();
+    }
+
+    /** Начальная синхронизация кэша модулей ИР из git (порт RDT ПодключениеИР). */
+    private static void performInitialIrModuleSync(Object irCache, IRSession session)
+    {
+        ComBridge.invoke(irCache, "СостояниеПодготовкиКэшМДСеансаЛкс"); //$NON-NLS-1$
+        Object codeEditor = ComBridge.invoke(irCache, "ПолеТекстаПрограммы", 0); //$NON-NLS-1$
+        session.codeEditor = codeEditor;
+        ComBridge.invoke(codeEditor, "РазобратьТекущийКонтекст"); //$NON-NLS-1$
+        ComBridge.invoke(codeEditor, "ПодготовитьГлобальныйКонтекст"); //$NON-NLS-1$
+
+        long changedCount = 0;
+        try
+        {
+            // Функция ПодготовитьОбновлениеИзПапкиГита(Знач ОтсекатьДатой = Истина) Экспорт
+            Object changedModules = ComBridge.invoke(codeEditor, "ПодготовитьОбновлениеИзПапкиГита", false); //$NON-NLS-1$
+            if (changedModules != null)
+                changedCount = ComBridge.toLong(ComBridge.invoke(changedModules, "Количество")); //$NON-NLS-1$
+            if (changedCount > 0)
+            {
+                ComBridge.invoke(codeEditor, "ОбновитьКэшМодулейИзПапкиГита", changedModules); //$NON-NLS-1$
+                Object platform = ComBridge.getProperty(codeEditor, "мПлатформа"); //$NON-NLS-1$
+                ComBridge.invoke(platform, "ОчиститьКэшАнализатораЯзыка"); //$NON-NLS-1$
+                ComBridge.invoke(codeEditor, "ПодготовитьГлобальныйКонтекст"); //$NON-NLS-1$
+            }
+        }
+        catch (RuntimeException e)
+        {
+            String detail = e.getMessage() != null ? e.getMessage() : e.toString(); //$NON-NLS-1$
+            ToastNotification.show(
+                toastTitle(),
+                "Синхронизация модулей из Git в кэш ИР не выполнена.\n" //$NON-NLS-1$
+                    + "Подключение сохранено, но кэш модулей ИР может быть неактуален.\n" //$NON-NLS-1$
+                    + detail,
+                12_000);
+        }
+        IRModuleSyncDebug.logGitSync(changedCount);
+        session.resetPushedSignatures();
     }
 
     // -----------------------------------------------------------------------
@@ -962,10 +949,11 @@ public final class IRApplication
         if (!quiet)
         {
             ToastNotification.show(toastTitle(), 
-                killed ? "Процесс приложения ИР завершён принудительно." //$NON-NLS-1$
-                       : "Приложение ИР завершено. Отключение займёт несколько секунд.", //$NON-NLS-1$
+                killed ? "Процесс завершен принудительно." //$NON-NLS-1$
+                       : "Отключение займет несколько секунд.", //$NON-NLS-1$
                 3_000);
         }
+        session.resetPushedSignatures();
         sessions.remove(key);
         if (!quiet)
             notifyListeners();
@@ -1182,23 +1170,105 @@ public final class IRApplication
 
     static private void notifyListeners()
     {
-        changeListeners.forEach(r -> { try { r.run(); } catch (Exception ignored) {} });
+        Runnable notify = () -> changeListeners.forEach(r -> {
+            try
+            {
+                r.run();
+            }
+            catch (Exception ignored)
+            {
+            }
+        });
+        Display display = Display.getDefault();
+        if (display == null || display.isDisposed())
+        {
+            notify.run();
+            return;
+        }
+        if (display.getThread() == Thread.currentThread())
+            notify.run();
+        else
+            display.asyncExec(notify);
     }
 
     private static final DateTimeFormatter LOG_TIME_FMT =
         DateTimeFormatter.ofPattern("HH:mm:ss"); //$NON-NLS-1$
 
     /**
+     * Есть ли подключённая и живая IR-сессия для проекта (без автоподключения).
+     * Состояние {@link State#CONNECTING} считается «не подключено».
+     */
+    public static boolean hasConnectedSession(IDtProject dtProject)
+    {
+        if (dtProject == null)
+            return false;
+        IProject wsProject = dtProject.getWorkspaceProject();
+        if (wsProject == null)
+            return false;
+        for (IRSession session : sessions.values())
+        {
+            if (session.project != wsProject)
+                continue;
+            if (session.state == State.CONNECTING)
+                return false;
+            if (session.state == State.CONNECTED && checkAlive(session))
+                return true;
+        }
+        return false;
+    }
+
+    /**
+     * Проверка подключения для включения горячих клавиш ИР: без COM-probe {@link #checkAlive},
+     * чтобы не блокировать UI и не ложно отключать привязки сразу после connect.
+     */
+    public static boolean hasConnectedSessionForKeys(IDtProject dtProject)
+    {
+        if (dtProject == null)
+            return false;
+        IProject wsProject = dtProject.getWorkspaceProject();
+        if (wsProject == null)
+            return false;
+        for (IRSession session : sessions.values())
+        {
+            if (session.project != wsProject)
+                continue;
+            if (session.state == State.CONNECTED && session.isProcessAlive())
+                return true;
+        }
+        return false;
+    }
+
+    /** Есть ли хотя бы одна подключённая IR-сессия (для restore, когда фокус не в BSL-редакторе). */
+    public static boolean hasAnyConnectedSessionForKeys()
+    {
+        for (IRSession session : sessions.values())
+        {
+            if (session.state == State.CONNECTED && session.isProcessAlive())
+                return true;
+        }
+        return false;
+    }
+
+    /**
      * Берем любую активную сессию IRApplication.IRSession от main проекта. Если ее нет то подключаем от основного приложения. Если его нет то подключаем от первого приложения.
     */
     public static IRSession getSession(IDtProject dtProject)
     {
+        if (dtProject == null)
+            return null;
+        IProject wsProject = dtProject.getWorkspaceProject();
         // Сначала ищем любую подключенную сессию этого проекта, отдавая предпочтение основному приложению
         for (Map.Entry<String, IRSession> entry : sessions.entrySet())
         {
-            String key = entry.getKey();
             IRSession session = entry.getValue();
-            if (session.project == dtProject.getWorkspaceProject() && checkAlive(session))
+            if (session.project != wsProject)
+                continue;
+            if (session.state == State.CONNECTING)
+            {
+                notifyWaitForIrConnection();
+                return null;
+            }
+            if (session.state == State.CONNECTED && checkAlive(session))
                 return session;
         }
         // Ищем любое приложение этого проекта, отдавая предпочтение основному приложению
@@ -1233,12 +1303,14 @@ public final class IRApplication
         if (application == null)
             return null;            
         getInstance().connectInfobaseApplication(application);
-        ToastNotification.show(toastTitle(), "Ожидайте подключения приложения ИР, затем повторите команду");
+        notifyWaitForIrConnection();
         return null;
     }
     
     private static boolean checkAlive(IRSession session)
     {
+        if (session.state != State.CONNECTED)
+            return false;
         if (!session.isProcessAlive())
             return false;
 
@@ -1273,7 +1345,7 @@ public final class IRApplication
         {
             String key = entry.getKey();
             IRSession session = entry.getValue();
-            if (session.pid == pid && checkAlive(session))
+            if (session.pid == pid && session.state == State.CONNECTED && checkAlive(session))
                 return session;
         }
         return null;

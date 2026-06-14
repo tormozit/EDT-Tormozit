@@ -151,6 +151,15 @@ public final class WmiProcessHelper
         catch (Exception e) { return 0L; }
     }
 
+    /**
+     * HWND главного окна процесса — как {@code System.Diagnostics.Process.MainWindowHandle}
+     * (видимое top-level окно процесса с заголовком, не tool window).
+     */
+    public static com.sun.jna.platform.win32.WinDef.HWND getMainWindowHandle(long pid)
+    {
+        return WinWindowActivator.findProcessMainWindowHandle((int) pid);
+    }
+
     private static String wqlDate(long epochMs)
     {
         return WQL_DATE_FMT.format(Instant.ofEpochMilli(epochMs));

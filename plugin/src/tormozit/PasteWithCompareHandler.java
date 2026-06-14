@@ -4,6 +4,9 @@ import org.eclipse.core.commands.AbstractHandler;
 import org.eclipse.core.commands.ExecutionEvent;
 import org.eclipse.core.commands.ExecutionException;
 import org.eclipse.core.expressions.IEvaluationContext;
+import org.eclipse.swt.widgets.Control;
+import org.eclipse.swt.widgets.Display;
+import org.eclipse.swt.widgets.Shell;
 import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.ISources;
 import org.eclipse.ui.IWorkbenchPart;
@@ -14,36 +17,24 @@ import org.eclipse.ui.handlers.HandlerUtil;
  */
 public class PasteWithCompareHandler extends AbstractHandler
 {
+    public static final String COMMAND_ID = "tormozit.PasteWithCompare"; //$NON-NLS-1$
+
+    /** Контекст привязки в {@code plugin.xml} («В окнах»). */
+    public static final String BINDING_CONTEXT_ID = "org.eclipse.ui.contexts.window"; //$NON-NLS-1$
+
     @Override
     public void setEnabled(Object evaluationContext)
     {
         boolean enabled = false;
-        if (evaluationContext instanceof IEvaluationContext context)
+        try
         {
-            try
-            {
-                Object part = context.getVariable(ISources.ACTIVE_PART_NAME);
-                Object editor = context.getVariable(ISources.ACTIVE_EDITOR_NAME);
-                Object shell = context.getVariable(ISources.ACTIVE_SHELL_NAME);
-
-                IWorkbenchPart workbenchPart = part instanceof IWorkbenchPart wp ? wp : null;
-                IEditorPart editorPart = editor instanceof IEditorPart ep ? ep : null;
-                if (workbenchPart == null && editorPart instanceof IWorkbenchPart wp)
-                    workbenchPart = wp;
-
-                TextEditorSupport.Context ctx =
-                    TextEditorSupport.resolveContext(workbenchPart, editorPart);
-                if (ctx != null && ctx.editable)
-                {
-                    org.eclipse.swt.widgets.Shell activeShell =
-                        shell instanceof org.eclipse.swt.widgets.Shell s ? s : null;
-                    enabled = TextEditorSupport.clipboardHasText(activeShell);
-                }
-            }
-            catch (Exception ignored)
-            {
-                // команда остаётся недоступной
-            }
+            Shell shell = resolveShell(evaluationContext);
+            TextEditorSupport.Context ctx = resolveContext(evaluationContext, null);
+            enabled = PasteWithCompareActions.isAvailable(shell, ctx);
+        }
+        catch (Exception ignored)
+        {
+            // команда остаётся недоступной
         }
         setBaseEnabled(enabled);
     }
@@ -51,10 +42,56 @@ public class PasteWithCompareHandler extends AbstractHandler
     @Override
     public Object execute(ExecutionEvent event) throws ExecutionException
     {
-        PasteWithCompareActions.run(
-            HandlerUtil.getActiveShell(event),
-            HandlerUtil.getActivePart(event),
-            HandlerUtil.getActiveEditor(event));
+        Shell shell = HandlerUtil.getActiveShell(event);
+        TextEditorSupport.Context ctx = resolveContext(null, event);
+        PasteWithCompareActions.run(shell, ctx);
+        return null;
+    }
+
+    private static TextEditorSupport.Context resolveContext(
+            Object evaluationContext, ExecutionEvent event)
+    {
+        TextEditorSupport.Context ctx = TextEditorSupport.resolveContextFromFocus();
+        if (ctx != null)
+            return ctx;
+
+        IWorkbenchPart part = event != null ? HandlerUtil.getActivePart(event) : null;
+        IEditorPart editor = event != null ? HandlerUtil.getActiveEditor(event) : null;
+        if (evaluationContext instanceof IEvaluationContext evalContext)
+        {
+            Object partVar = evalContext.getVariable(ISources.ACTIVE_PART_NAME);
+            Object editorVar = evalContext.getVariable(ISources.ACTIVE_EDITOR_NAME);
+            if (part == null && partVar instanceof IWorkbenchPart wp)
+                part = wp;
+            if (editor == null && editorVar instanceof IEditorPart ep)
+                editor = ep;
+        }
+        if (part == null && editor instanceof IWorkbenchPart wp)
+            part = wp;
+
+        return TextEditorSupport.resolveContext(part, editor);
+    }
+
+    private static Shell resolveShell(Object evaluationContext)
+    {
+        Control focus = Display.getCurrent() != null
+            ? Display.getCurrent().getFocusControl()
+            : null;
+        if (focus == null && Display.getDefault() != null && !Display.getDefault().isDisposed())
+            focus = Display.getDefault().getFocusControl();
+        if (focus != null && !focus.isDisposed())
+        {
+            Shell shell = focus.getShell();
+            if (shell != null && !shell.isDisposed())
+                return shell;
+        }
+
+        if (evaluationContext instanceof IEvaluationContext context)
+        {
+            Object shellVar = context.getVariable(ISources.ACTIVE_SHELL_NAME);
+            if (shellVar instanceof Shell shell && !shell.isDisposed())
+                return shell;
+        }
         return null;
     }
 }

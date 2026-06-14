@@ -34,9 +34,7 @@ public final class QueryTextEditDialogHook implements IStartup
         "tormozit.queryEditorComfortSubmenu"; //$NON-NLS-1$
     private static final String DIALOG_CLASS_SUFFIX = "QueryTextEditDialog"; //$NON-NLS-1$
     private static final String DIALOG_TITLE = "Редактор запроса"; //$NON-NLS-1$
-    private static final String SUBMENU_TEXT = "Комфорт"; //$NON-NLS-1$
-    private static final String ITEM_TEXT_PasteWithCompare =
-        "Вставить со сравнением\tCtrl+Alt+V"; //$NON-NLS-1$
+    private static final String SUBMENU_TEXT = ComfortSubmenuHelper.SUBMENU_TEXT;
 
     /** Открытые окна «Редактор запроса» (shell диалога). */
     private static final Set<Shell> activeQueryEditorShells =
@@ -193,20 +191,23 @@ public final class QueryTextEditDialogHook implements IStartup
         if (menu.getItemCount() > 0)
             new MenuItem(menu, SWT.SEPARATOR);
 
-        MenuItem comfortRoot = new MenuItem(menu, SWT.CASCADE);
-        comfortRoot.setText(SUBMENU_TEXT);
-        Menu comfortSub = new Menu(menu.getShell(), SWT.DROP_DOWN);
+        Menu comfortSub = ComfortSubmenuHelper.findOrCreateComfortSubmenu(menu, shell);
+        if (comfortSub == null)
+            return;
         comfortSub.setData(COMFORT_SUBMENU_MARKER, Boolean.TRUE);
-        comfortRoot.setMenu(comfortSub);
 
         MenuItem pasteItem = new MenuItem(comfortSub, SWT.PUSH);
-        pasteItem.setText(ITEM_TEXT_PasteWithCompare);
+        pasteItem.setText(ComfortSubmenuHelper.menuItemTextWithKeyBinding(
+            PasteWithCompareActions.MENU_LABEL,
+            PasteWithCompareHandler.COMMAND_ID,
+            PasteWithCompareHandler.BINDING_CONTEXT_ID));
         pasteItem.setToolTipText(
             "Сравнить выделение с буфером обмена и вставить результат"
                 + Global.pluginSignForTooltip());
 
         final Object qlEditor = qlContext.qlEditor;
         final ISourceViewer viewer = qlContext.viewer;
+        final Object queryDialog = resolveDialog(shell);
         pasteItem.setEnabled(PasteWithCompareActions.isAvailable(shell,
             TextEditorSupport.buildContext(viewer, TextEditorSupport.QL_COMPARE_EXTENSION,
                 isQlEditorEditable(qlEditor))));
@@ -218,6 +219,20 @@ public final class QueryTextEditDialogHook implements IStartup
                 PasteWithCompareActions.run(shell,
                     TextEditorSupport.buildContext(viewer, TextEditorSupport.QL_COMPARE_EXTENSION,
                         isQlEditorEditable(qlEditor)));
+            }
+        });
+
+        MenuItem formatItem = new MenuItem(comfortSub, SWT.PUSH);
+        formatItem.setText(IrFormatTextHandler.MENU_LABEL);
+        formatItem.setToolTipText(
+            "Форматировать текст запроса через приложение ИР" + Global.pluginSignForTooltip());
+        formatItem.setEnabled(IrFormatTextHandler.isApplicableQuery(viewer));
+        formatItem.addSelectionListener(new SelectionAdapter()
+        {
+            @Override
+            public void widgetSelected(SelectionEvent ev)
+            {
+                IrFormatTextHandler.formatQuery(viewer, queryDialog);
             }
         });
     }
@@ -246,7 +261,7 @@ public final class QueryTextEditDialogHook implements IStartup
                 continue;
             if (SUBMENU_TEXT.equals(text))
                 return true;
-            if (text.startsWith("Вставить со сравнением")) //$NON-NLS-1$
+            if (text.startsWith(PasteWithCompareActions.MENU_LABEL)) //$NON-NLS-1$
                 return true;
         }
         return false;
@@ -591,6 +606,30 @@ public final class QueryTextEditDialogHook implements IStartup
         if (dialog == null)
             return "null"; //$NON-NLS-1$
         return dialog.getClass().getName();
+    }
+
+    /**
+     * Контекст «Вставить со сравнением» для модального «Редактора запроса» по фокусу.
+     */
+    static TextEditorSupport.Context tryBuildPasteContext(Control focus)
+    {
+        if (focus == null || focus.isDisposed())
+            return null;
+
+        Shell shell = focus.getShell();
+        if (shell == null || shell.isDisposed())
+            return null;
+        if (!activeQueryEditorShells.contains(shell) && !isQueryTextEditShell(shell))
+            return null;
+
+        QlEditorContext qlContext = resolveQlEditorContext(shell, focus);
+        if (qlContext == null || qlContext.viewer == null)
+            return null;
+
+        return TextEditorSupport.buildContext(
+            qlContext.viewer,
+            TextEditorSupport.QL_COMPARE_EXTENSION,
+            isQlEditorEditable(qlContext.qlEditor));
     }
 
     private static final class QlEditorContext

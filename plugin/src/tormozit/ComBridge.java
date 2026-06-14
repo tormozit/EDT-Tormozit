@@ -2,6 +2,7 @@ package tormozit;
 
 
 import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
 import java.util.Iterator;
 
 /**
@@ -138,7 +139,7 @@ public final class ComBridge
         catch (Exception e)
         {
             Throwable c = unwrap(e);
-            throw new RuntimeException("Ошибка COM '" + className + "': " + c.getMessage(), c); //$NON-NLS-1$ //$NON-NLS-2$
+            throw new RuntimeException("Ошибка COM '" + className + "': " + comErrorMessage(c), c); //$NON-NLS-1$ //$NON-NLS-2$
         }
     }
 
@@ -176,7 +177,7 @@ public final class ComBridge
         catch (Exception e) 
         { 
             Throwable c = unwrap(e); 
-            throw new RuntimeException("COM." + method + "(): " + c.getMessage(), c); 
+            throw new RuntimeException("COM." + method + "(): " + comErrorMessage(c), c); 
         }
     }
 
@@ -188,7 +189,7 @@ public final class ComBridge
         }
         catch (Exception e) {
             Throwable c = unwrap(e); 
-            throw new RuntimeException("COM." + property + ": " + c.getMessage(), c); 
+            throw new RuntimeException("COM." + property + ": " + comErrorMessage(c), c); 
         }
     }
 
@@ -200,7 +201,7 @@ public final class ComBridge
         }
         catch (Exception e) { 
             Throwable c = unwrap(e); 
-            throw new RuntimeException("COM." + property + ": " + c.getMessage(), c); 
+            throw new RuntimeException("COM." + property + ": " + comErrorMessage(c), c); 
         }
     }
     
@@ -258,7 +259,7 @@ public final class ComBridge
         catch (Exception e)
         {
             Throwable c = unwrap(e);
-            throw new RuntimeException("iterateComCollection: " + c.getMessage(), c); //$NON-NLS-1$
+            throw new RuntimeException("iterateComCollection: " + comErrorMessage(c), c); //$NON-NLS-1$
         }
     }
 
@@ -319,5 +320,81 @@ public final class ComBridge
     private static Throwable unwrap(Exception e)
     {
         return e.getCause() != null ? e.getCause() : e;
+    }
+
+    /** Jacob на Windows часто отдаёт UTF-8 текст 1С как Latin-1 (ÐÐ¾Ð´…). */
+    private static String comErrorMessage(Throwable t)
+    {
+        if (t == null)
+            return ""; //$NON-NLS-1$
+        String msg = t.getMessage();
+        if (msg == null || msg.isEmpty())
+            msg = t.toString();
+        return fixUtf8Mojibake(msg);
+    }
+
+    static String fixUtf8Mojibake(String message)
+    {
+        if (message == null || message.isEmpty())
+            return ""; //$NON-NLS-1$
+        if (!looksLikeUtf8Mojibake(message))
+            return message;
+
+        // В одном сообщении COM часть строк (Invoke of:) — Latin-1 mojibake, часть (Description) — нормальная кириллица.
+        // Перекодируем только фрагменты из символов U+00FF и ниже с маркерами Ð/Ñ.
+        StringBuilder result = new StringBuilder(message.length());
+        int index = 0;
+        while (index < message.length())
+        {
+            char ch = message.charAt(index);
+            if (ch <= 0xFF)
+            {
+                int runStart = index;
+                while (index < message.length() && message.charAt(index) <= 0xFF)
+                    index++;
+                String run = message.substring(runStart, index);
+                result.append(looksLikeUtf8Mojibake(run) ? fixUtf8MojibakeRun(run) : run);
+            }
+            else
+            {
+                int runStart = index;
+                while (index < message.length() && message.charAt(index) > 0xFF)
+                    index++;
+                result.append(message, runStart, index);
+            }
+        }
+        return result.toString();
+    }
+
+    private static String fixUtf8MojibakeRun(String run)
+    {
+        try
+        {
+            String fixed = new String(run.getBytes(StandardCharsets.ISO_8859_1), StandardCharsets.UTF_8);
+            if (fixed.indexOf('\uFFFD') < 0)
+                return fixed;
+        }
+        catch (Exception ignored) {}
+        return run;
+    }
+
+    /** Текст ошибки COM для тоста: без дубля «Invoke of:» и без строки Source. */
+    static String formatErrorForNotification(String message)
+    {
+        if (message == null || message.isEmpty())
+            return ""; //$NON-NLS-1$
+        String detail = fixUtf8Mojibake(message);
+        if (!detail.startsWith("COM.")) //$NON-NLS-1$
+            return detail;
+        detail = detail.replaceFirst(
+            "(COM\\.[^(:]+\\(\\):)\\s*Invoke of:\\s*[^\\r\\n]+\\s*",
+            "$1\n"); //$NON-NLS-1$
+        detail = detail.replaceFirst("(?m)^Source: [^\\r\\n]+\\s*\\r?\\n?", ""); //$NON-NLS-1$
+        return detail.strip();
+    }
+
+    private static boolean looksLikeUtf8Mojibake(String message)
+    {
+        return message.indexOf('\u00D0') >= 0 || message.indexOf('\u00D1') >= 0;
     }
 }

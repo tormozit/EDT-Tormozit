@@ -13,7 +13,11 @@
     <startup class="tormozit.TextEditorMenuHook"/>
     <startup class="tormozit.QueryTextEditDialogHook"/>
     <startup class="tormozit.FormEditorHook"/>
-    <startup class="tormozit.SmartOutlineHook"/> 
+    <startup class="tormozit.IrKeyBindingHook"/>
+    <startup class="tormozit.PriorityGlobalKeyBindingHook"/>
+    <startup class="tormozit.ComfortKeysPageHook"/>
+    <startup class="tormozit.IrFormatTextKeyDiagHook"/>
+    <startup class="tormozit.SmartOutlineHook"/>
     <startup class="tormozit.NavigatorFilterHook"/>
     <startup class="tormozit.NavigatorShowInExplorerMenuHook"/>
     <startup class="tormozit.InfobasesViewHook"/>
@@ -67,10 +71,40 @@
           sequence="M1+3">
     </key>
     <key
+          commandId="tormozit.OpenConfigurationObject"
+          contextId="org.eclipse.ui.contexts.window"
+          schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+          sequence="M1+2">
+    </key>
+    <key
           commandId="tormozit.PasteWithCompare"
-          contextId="org.eclipse.ui.textEditorScope"
+          contextId="org.eclipse.ui.contexts.window"
           schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
           sequence="M1+M3+V">
+    </key>
+    <key
+          commandId="tormozit.ModuleOutline"
+          contextId="org.eclipse.xtext.ui.XtextEditorScope"
+          schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+          sequence="M1+Ё">
+    </key>
+    <key
+          commandId="tormozit.IrMethodConstructor"
+          contextId="org.eclipse.xtext.ui.XtextEditorScope"
+          schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+          sequence="M1+M2+M">
+    </key>
+    <key
+          commandId="tormozit.IrEmbeddedText"
+          contextId="org.eclipse.xtext.ui.XtextEditorScope"
+          schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+          sequence="M1+M2+E">
+    </key>
+    <key
+          commandId="tormozit.IrFormatText"
+          contextId="org.eclipse.xtext.ui.XtextEditorScope"
+          schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+          sequence="M3+M2+F">
     </key>
   </extension>
 
@@ -93,17 +127,22 @@
         id="tormozit.GoToDefinition"
         name="Перейти к определению"
         categoryId="tormozit.commands.global"
-        description="Перейти к определению (Комфорт)"/>
+        description="Перейти к определению. Приоритет над привязками EDT (в т.ч. редактор форм). Не рекомендуется изменять. Настраивайте только «В окнах». «Редактор формы» — автозеркало, не редактируйте. (Комфорт)"/>
     <command
         id="tormozit.CopyRef"
         name="Копировать ссылку"
         categoryId="tormozit.commands.global"
-        description="Копировать ссылку на текущий объект или строку модуля (Комфорт)"/>
+        description="Копировать ссылку на объект или строку модуля. Приоритет над EDT. Настраивайте только «В окнах». «Редактор формы» — автозеркало, не редактируйте. (Комфорт)"/>
     <command
         id="tormozit.RecentPlaces"
         name="Последние места"
         categoryId="tormozit.commands.global"
         description="Открыть список последних посещённых методов и объектов метаданных (Комфорт)"/>
+    <command
+        id="tormozit.OpenConfigurationObject"
+        name="Открыть объект конфигурации"
+        categoryId="tormozit.commands.global"
+        description="Диалог выбора объекта метаданных. То же, что штатная команда EDT; сочетание настраивается в Клавиши, контекст «В окнах» (Комфорт)"/>
     <command
         id="tormozit.navigator.showInExplorer"
         name="Показать в проводнике"
@@ -113,7 +152,27 @@
         id="tormozit.PasteWithCompare"
         name="Вставить со сравнением"
         categoryId="tormozit.commands.global"
-        description="Сравнить выделение с буфером и вставить отредактированный текст (Комфорт)"/>
+        description="Сравнить выделение с буфером и вставить отредактированный текст. Сочетание настраивается в Клавиши, контекст «В окнах»; срабатывает при фокусе в редактируемом текстовом поле (Комфорт)"/>
+    <command
+        id="tormozit.ModuleOutline"
+        name="Быстрая схема модуля"
+        categoryId="tormozit.commands.global"
+        description="Всплывающая схема модуля. То же, что одноименный пункт контекстного меню и штатный «Быстрый план» / Ctrl+O (Комфорт)"/>
+    <command
+        id="tormozit.IrMethodConstructor"
+        name="Конструктор метода"
+        categoryId="tormozit.commands.global"
+        description="Открыть конструктор метода приложения ИР (Комфорт)"/>
+    <command
+        id="tormozit.IrEmbeddedText"
+        name="Вложенный текст ИР"
+        categoryId="tormozit.commands.global"
+        description="Открыть строковый литерал BSL в редакторе текста ИР. Сочетание настраивается в Клавиши, контекст «Редактор Xtext» (Комфорт)"/>
+    <command
+        id="tormozit.IrFormatText"
+        name="Форматировать текст ИР"
+        categoryId="tormozit.commands.global"
+        description="Форматировать выделенный текст модуля или текст запроса через приложение ИР (Комфорт)"/>
   </extension>
 
   <extension point="org.eclipse.ui.handlers">
@@ -152,6 +211,10 @@
         commandId="tormozit.RecentPlaces">
      </handler>
     <handler
+        class="tormozit.ExecutableExtensionFactory:tormozit.OpenConfigurationObjectHandler"
+        commandId="tormozit.OpenConfigurationObject">
+     </handler>
+    <handler
         class="tormozit.ExecutableExtensionFactory:tormozit.NavigatorShowInExplorerHandler"
         commandId="tormozit.navigator.showInExplorer">
       <activeWhen>
@@ -163,6 +226,43 @@
     <handler
         class="tormozit.ExecutableExtensionFactory:tormozit.PasteWithCompareHandler"
         commandId="tormozit.PasteWithCompare">
+    </handler>
+    <handler
+        class="tormozit.ExecutableExtensionFactory:tormozit.ModuleOutlineHandler"
+        commandId="tormozit.ModuleOutline">
+      <activeWhen>
+        <with variable="activeContexts">
+          <iterate operator="or">
+            <equals value="org.eclipse.xtext.ui.XtextEditorScope"/>
+          </iterate>
+        </with>
+      </activeWhen>
+    </handler>
+    <handler
+        class="tormozit.ExecutableExtensionFactory:tormozit.IrMethodConstructorHandler"
+        commandId="tormozit.IrMethodConstructor">
+      <activeWhen>
+        <with variable="activeContexts">
+          <iterate operator="or">
+            <equals value="org.eclipse.xtext.ui.XtextEditorScope"/>
+          </iterate>
+        </with>
+      </activeWhen>
+    </handler>
+    <handler
+        class="tormozit.ExecutableExtensionFactory:tormozit.EditEmbeddedTextCommandHandler"
+        commandId="tormozit.IrEmbeddedText">
+      <activeWhen>
+        <with variable="activeContexts">
+          <iterate operator="or">
+            <equals value="org.eclipse.xtext.ui.XtextEditorScope"/>
+          </iterate>
+        </with>
+      </activeWhen>
+    </handler>
+    <handler
+        class="tormozit.ExecutableExtensionFactory:tormozit.IrFormatTextCommandHandler"
+        commandId="tormozit.IrFormatText">
     </handler>
   </extension>
 
@@ -178,7 +278,7 @@
             <command
               commandId="tormozit.CopyRef"
               label = "Ссылка"
-              tooltip="Копировать ссылку на текущий объект или строку модуля (Комфорт)"
+              tooltip="Копировать ссылку; это сочетание команды имеет приоритет над локальными привязками EDT (Комфорт)"
               style="push">
             </command>
             <command

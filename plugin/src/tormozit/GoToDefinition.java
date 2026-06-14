@@ -4,6 +4,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -21,6 +22,7 @@ import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.jface.dialogs.MessageDialog;
+import org.eclipse.jface.window.Window;
 import org.eclipse.jface.text.BadLocationException;
 import org.eclipse.jface.text.IDocument;
 import org.eclipse.jface.text.ITextSelection;
@@ -119,15 +121,19 @@ public class GoToDefinition extends AbstractHandler
     // РЕГУЛЯРНЫЕ ВЫРАЖЕНИЯ
     // =======================================================================
 
-    // Формат ссылки описан тут https://fastcode.im/Templates/8426
+    // Формат ссылки — порт regex {@code ирОбщий.ШаблонСсылкиСтрокиМодуляЛкс} + git alternate
+    // из {@code ирОбщий.СтруктураСсылкиСтрокиМодуляЛкс}; см. https://fastcode.im/Templates/8426
     private static final Pattern MODULE_LINE_REF = Pattern.compile(
-        "\\{" +
-        "(?:([А-ЯЁа-яёA-Za-z0-9]+)\\s)?" +
-        "([А-ЯЁа-яёA-Za-z0-9._/\\\\]+)" +
-        "\\((\\d+)(?:,(\\d+))?" +
-        "(?::([А-ЯЁа-яёA-Za-z_][А-ЯЁа-яёA-Za-z0-9_]*)," +
-        "(\\d+))?" +
-        "\\)\\}");
+        "\\{"
+        + "([a-zа-яёA-Za-z0-9_ ]+ )?"
+        + "(([a-zа-яёA-Za-z0-9_]+::.+?::)?(?:[a-zа-яёA-Za-z0-9_]+\\.)*[a-zа-яёA-Za-z0-9_]+)"
+        + "\\((\\d+)(?:,(\\d+))?"
+        + "(?:\\:?([a-zа-яёA-Za-z0-9_<>\\.]*)(?:,\\s*(-?\\d+))?)?"
+        + "(?:!([a-zа-яёA-Za-z0-9_\\.:\\\\]+))?"
+        + "\\)\\}"
+        + "|"
+        + "((?:[a-zа-яёA-Za-z0-9_\\.]+\\/[a-zа-яёA-Za-z0-9_\\.]+)+):(\\d+)",
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     private static final Pattern GIT_FILE_REF = Pattern.compile(
         "(?:src/(?:cf/|ext/[^/]+/)?)?([A-Za-z].+\\.bsl):(\\d+)",
@@ -142,9 +148,11 @@ public class GoToDefinition extends AbstractHandler
     @Override
     public Object execute(ExecutionEvent event) throws ExecutionException
     {
+        Global.log(this.getClass().getName() + ".execute");
         IRSession session = null;
         File newFile = null, oldFile = null;
         String command = "";
+        boolean withFile = false;
         String transportFolder = IRApplication.transportFolder;
         Shell shell  = HandlerUtil.getActiveShell(event);
         IWorkbenchPage page = HandlerUtil.getActiveWorkbenchWindow(event).getActivePage();
@@ -162,12 +170,17 @@ public class GoToDefinition extends AbstractHandler
                 JsonNode commandObject = mapper.readTree(command);
                 command = commandObject.get("Команда").asText(); //$NON-NLS-1$
                 long PID = commandObject.get("ИДПроцесса").asLong(); //$NON-NLS-1$
+                withFile = commandObject.get("ЕстьФайл").asBoolean(); //$NON-NLS-1$
                 session = IRApplication.getSession(PID);
-                project = session.project;
+                if (session != null)
+                    project = session.project;
             }
             catch (IOException e) { Global.logError("GoToDefinition", "read transport command", e); } //$NON-NLS-1$ //$NON-NLS-2$
-            newFile = new File(transportFolder + "\\НовыйТекст.txt"); //$NON-NLS-1$
-            oldFile = new File(transportFolder + "\\СтарыйТекст.txt"); //$NON-NLS-1$
+            if (withFile)
+            {
+                newFile = new File(transportFolder + "\\НовыйТекст.txt"); //$NON-NLS-1$
+                oldFile = new File(transportFolder + "\\СтарыйТекст.txt"); //$NON-NLS-1$
+            }
         }
         else if (event.getCommand().getId().equals("tormozit.JumpFromClipboard"))
         {
@@ -246,7 +259,7 @@ public class GoToDefinition extends AbstractHandler
                 }
             }
         }
-        if (newFile != null && (command.contains("Модуль(") || command.contains("Форма("))) {
+        if (session != null && newFile != null && (command.contains("Модуль(") || command.contains("Форма("))) {
             session.syncCodeEditorToIR(GetRef.getActiveBslEditor(page.getActivePart()));
             final IRSession finalSession = session;
             try {
@@ -942,14 +955,13 @@ public class GoToDefinition extends AbstractHandler
 
     private static boolean pickAndOpen(List<String> names, Shell shell, IWorkbenchPage page, IProject project)
     {
-        MessageDialog dlg = new MessageDialog(shell,
-            "Выберите объект", null, //$NON-NLS-1$
-            "Найдено несколько объектов. Выберите для перехода:", //$NON-NLS-1$
-            MessageDialog.QUESTION, names.toArray(new String[0]), 0);
-        int idx = dlg.open();
-        if (idx < 0 || idx >= names.size()) 
+        MdObjectPickDialog dlg = new MdObjectPickDialog(shell, names);
+        if (dlg.open() != Window.OK)
             return false;
-        return openByFullName(names.get(idx), shell, page, project);
+        String chosen = dlg.getSelectedFullName();
+        if (chosen == null)
+            return false;
+        return openByFullName(chosen, shell, page, project);
     }
 
     private static boolean isModuleSuffixPath(String name)
@@ -970,50 +982,176 @@ public class GoToDefinition extends AbstractHandler
     }
 
     // =======================================================================
-    // ПАРСИНГ ССЫЛОК СТРОК МОДУЛЕЙ
+    // ПАРСИНГ ССЫЛОК СТРОК МОДУЛЕЙ (порт ирОбщий.СтруктураСсылкиСтрокиМодуляЛкс)
     // =======================================================================
 
+    /** Все вхождения {@link #MODULE_LINE_REF} в тексте (стек, буфер). */
     private static List<ModuleLineRef> parseAllModuleLineRefs(String text)
     {
         List<ModuleLineRef> result = new ArrayList<>();
         Matcher m = MODULE_LINE_REF.matcher(text);
         while (m.find())
         {
-            ModuleLineRef r = new ModuleLineRef();
-            r.extension = m.group(1);
-            r.modulePath = m.group(2);
-            r.line = parseInt(m.group(3));
-            r.column = parseInt(m.group(4));
-            r.method = m.group(5);
-            r.offset = parseInt(m.group(6));
-            if (r.modulePath.contains("/") || r.modulePath.contains("\\")) //$NON-NLS-1$ //$NON-NLS-2$
-            {
-                r.file = r.modulePath;
-                r.modulePath = null;
-            }
-            result.add(r);
+            ModuleLineRef r = parseModuleLineRef(m, text);
+            if (r != null)
+                result.add(r);
         }
         return result;
     }
 
+    /**
+     * Разбор одного совпадения — порт {@code ирОбщий.СтруктураСсылкиСтрокиМодуляЛкс}
+     * ({@code НормализоватьИмяМодуля = Истина}); только структура, без валидации.
+     */
+    private static ModuleLineRef parseModuleLineRef(Matcher m, String fullText)
+    {
+        ModuleLineRef r = new ModuleLineRef();
+        r.refText = m.group();
+
+        int textMarkerPos = fullText.indexOf("}: "); //$NON-NLS-1$
+        if (textMarkerPos >= 0)
+            r.lineText = fullText.substring(textMarkerPos + 3);
+
+        String moduleRaw = m.group(2);
+        if (moduleRaw != null)
+            return parseNativeModuleLineRef(r, m, moduleRaw);
+
+        String gitFile = m.group(9);
+        if (gitFile != null)
+        {
+            r.file = gitFile;
+            r.line = parseInt(m.group(10));
+            return r;
+        }
+        return null;
+    }
+
+    /** Нативная ветка {@code ирОбщий.СтруктураСсылкиСтрокиМодуляЛкс} (формат {@code {...}}). */
+    private static ModuleLineRef parseNativeModuleLineRef(ModuleLineRef r, Matcher m, String moduleRaw)
+    {
+        r.extension = trimToNull(m.group(1));
+        r.module = moduleRaw;
+
+        String[] fragments1 = moduleRaw.split("\\.", -1); //$NON-NLS-1$
+        String[] fragments2 = moduleRaw.split("::", -1); //$NON-NLS-1$
+
+        if (fragments2.length > 2)
+        {
+            r.file = fragments2[1];
+            String fileExt = fileExtension(r.file);
+            r.objectType = ".erf".equalsIgnoreCase(fileExt) //$NON-NLS-1$
+                ? "ВнешнийОтчет" : "ВнешняяОбработка"; //$NON-NLS-1$ //$NON-NLS-2$
+            r.internal = r.objectType + "." + fragments2[2]; //$NON-NLS-1$
+            List<String> rebuilt = new ArrayList<>(Arrays.asList(fragments1));
+            if (!rebuilt.isEmpty())
+                rebuilt.set(0, r.file);
+            else
+                rebuilt.add(r.file);
+            rebuilt.add(0, r.objectType);
+            fragments1 = rebuilt.toArray(new String[0]);
+        }
+        else if (fragments1.length > 0)
+        {
+            r.objectType = fragments1[0];
+        }
+
+        if (fragments1.length > 1)
+            r.object = fragments1[1];
+
+        if (fragments1.length > 3 && "Форма".equals(fragments1[2])) //$NON-NLS-1$
+            r.form = fragments1[3];
+        else if (fragments1.length > 1 && "ОбщаяФорма".equals(fragments1[0])) //$NON-NLS-1$
+            r.form = fragments1[1];
+
+        if (r.form != null && !r.form.isEmpty())
+            r.module = moduleRaw + ".Модуль"; //$NON-NLS-1$
+
+        r.moduleWithExtension = r.module;
+        if (r.extension != null)
+            r.moduleWithExtension = r.extension + " " + r.moduleWithExtension; //$NON-NLS-1$
+
+        r.line = parseInt(m.group(4));
+        if (r.line == 0)
+            r.line = 1;
+        r.column = m.group(5) != null ? parseInt(m.group(5)) : 1;
+
+        String methodRaw = m.group(6);
+        r.method = methodRaw;
+        r.offset = m.group(7) != null ? parseInt(m.group(7)) : 0;
+        r.command = m.group(8);
+
+        if (methodRaw != null)
+        {
+            int dot = methodRaw.indexOf('.');
+            if (dot >= 0)
+            {
+                r.method = methodRaw.substring(0, dot);
+                r.methodParam = methodRaw.substring(dot + 1);
+            }
+        }
+
+        String[] moduleParts = r.module.split("\\.", -1); //$NON-NLS-1$
+        if (moduleParts.length > 0)
+            r.moduleType = moduleParts[moduleParts.length - 1];
+
+        r.modulePath = r.module;
+        return r;
+    }
+
+    private static String trimToNull(String s)
+    {
+        if (s == null)
+            return null;
+        s = s.strip();
+        return s.isEmpty() ? null : s;
+    }
+
+    private static String fileExtension(String path)
+    {
+        if (path == null)
+            return ""; //$NON-NLS-1$
+        int slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+        int dot = path.lastIndexOf('.');
+        return dot > slash && dot >= 0 ? path.substring(dot) : ""; //$NON-NLS-1$
+    }
+
     private static final class ModuleLineRef
     {
-        String extension;
-        String modulePath;
+        /** Поля структуры {@code ирОбщий.СтруктураСсылкиСтрокиМодуляЛкс}. */
+        String module;
+        String moduleWithExtension;
+        String internal;
         String file;
+        String objectType;
+        String moduleType;
+        String extension;
+        String object;
+        String form;
         int line;
         int column;
         String method;
+        String methodParam;
         int offset;
+        String lineText;
+        String command;
+        String refText;
+
+        /** Legacy-поле для {@link #openModuleLineRef}. */
+        String modulePath;
 
         String displayLabel()
         {
-            String base = modulePath != null ? modulePath : file;
-            String s = (base != null ? base : "") + " (" + line + "," + column + ")";
+            String base = moduleWithExtension != null ? moduleWithExtension
+                : (modulePath != null ? modulePath : file);
+            String s = (base != null ? base : "") + " (" + line + "," + column + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             if (method != null)
+            {
                 s += " : " + method; //$NON-NLS-1$
-            if (extension != null)
-                s += " [" + extension + "]"; //$NON-NLS-1$ //$NON-NLS-2$
+                if (methodParam != null)
+                    s += "." + methodParam; //$NON-NLS-1$
+            }
+            if (file != null && modulePath == null)
+                s = file + " (" + line + ")"; //$NON-NLS-1$ //$NON-NLS-2$
             return s;
         }
     }

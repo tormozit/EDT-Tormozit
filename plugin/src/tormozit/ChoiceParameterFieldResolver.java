@@ -27,7 +27,7 @@ import com._1c.g5.v8.dt.mcore.TypeItem;
  */
 final class ChoiceParameterFieldResolver
 {
-    private static final String PREFIX_RU = "\u041e\u0442\u0431\u043e\u0440."; //$NON-NLS-1$
+    private static final String PREFIX_RU = "Отбор."; //$NON-NLS-1$
     private static final String PREFIX_EN = "Filter."; //$NON-NLS-1$
 
     private ChoiceParameterFieldResolver() {}
