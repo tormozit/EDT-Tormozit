@@ -32,10 +32,6 @@ final class CollectionWindowGeometryStore
             return;
         Rectangle bounds = load(shell.getDisplay());
         shell.setBounds(bounds);
-        // #region agent log
-        CollectionWindowGeometryDebug.log("G1", "CollectionWindowGeometryStore.applyToShell", "restore", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            bounds.x, bounds.y, bounds.width, bounds.height, hasStored());
-        // #endregion
     }
 
     static void saveFromShell(Shell shell)
@@ -48,10 +44,6 @@ final class CollectionWindowGeometryStore
         Rectangle clamped = clampToMonitor(shell.getDisplay(), bounds,
             shell.getMinimumSize().x, shell.getMinimumSize().y);
         save(clamped);
-        // #region agent log
-        CollectionWindowGeometryDebug.log("G2", "CollectionWindowGeometryStore.saveFromShell", "persist", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-1$
-            clamped.x, clamped.y, clamped.width, clamped.height, true);
-        // #endregion
     }
 
     private static Rectangle load(Display display)

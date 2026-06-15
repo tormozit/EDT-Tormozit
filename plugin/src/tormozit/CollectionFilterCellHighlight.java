@@ -21,7 +21,6 @@ final class CollectionFilterCellHighlight
     private static final int HIGHLIGHT_B = 160;
     /** Win32 LVM: отступ текста ячейки от левого края subitem. */
     private static final int TABLE_CELL_TEXT_MARGIN = 6;
-    private static int debugOriginLogs;
 
     private CollectionFilterCellHighlight() {}
 
@@ -47,17 +46,6 @@ final class CollectionFilterCellHighlight
             if (tableFont != null && !tableFont.isDisposed())
                 gc.setFont(tableFont);
             int textOriginX = cellTextOriginX(table, item, e.index, e.x);
-            // #region agent log
-            if (!ranges.isEmpty() && debugOriginLogs < 5)
-            {
-                debugOriginLogs++;
-                SmartMatcher.HighlightRange first = ranges.get(0);
-                CollectionLoadDebug.log("H5", "CollectionFilterCellHighlight.paintEraseBackground", "origin", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                    "{\"eX\":" + e.x + ",\"originX\":" + textOriginX //$NON-NLS-1$ //$NON-NLS-2$
-                        + ",\"col\":" + e.index + ",\"range\":" + first.offset //$NON-NLS-1$ //$NON-NLS-2$
-                        + ",\"textLen\":" + text.length() + "}"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            // #endregion
             try
             {
                 gc.setBackground(highlight);

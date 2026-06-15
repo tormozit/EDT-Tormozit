@@ -2,6 +2,8 @@ package tormozit;
 
 import org.eclipse.debug.core.DebugException;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.events.ControlAdapter;
+import org.eclipse.swt.events.ControlEvent;
 import org.eclipse.swt.events.MenuAdapter;
 import org.eclipse.swt.events.MenuEvent;
 import org.eclipse.swt.events.SelectionAdapter;
@@ -25,6 +27,10 @@ import org.eclipse.swt.widgets.TableItem;
 import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.ToolBar;
 import org.eclipse.swt.widgets.ToolItem;
+import org.eclipse.ui.ISharedImages;
+import org.eclipse.ui.PlatformUI;
+
+import com._1c.g5.v8.dt.common.ui.controls.search.SearchBox;
 
 import com._1c.g5.v8.dt.debug.core.model.IBslStackFrame;
 import com._1c.g5.v8.dt.debug.core.model.IBslVariable;
@@ -41,10 +47,13 @@ public final class ComfortCollectionWindow implements CollectionLoadScheduler.Pr
     private final BslValuePath path;
     private final int cloneIndex;
     private final String registryKey;
+    private final CollectionCloneSnapshot cloneSnapshot;
 
     private Shell shell;
     private CollectionSplitTable splitTable;
-    private Combo filterField;
+    private SearchBox filterField;
+    private Combo presentationField;
+    private boolean applyingPresentation;
     private Label progressLabel;
     private ComfortCollectionTableModel model;
     private CollectionLoadScheduler scheduler;
@@ -56,7 +65,7 @@ public final class ComfortCollectionWindow implements CollectionLoadScheduler.Pr
 
     private Image inspectImage;
     private ToolItem columnSettingsItem;
-    private Runnable filterDebounce;
+    private ToolItem cloneItem;
     private Runnable viewportDebounce;
     private Listener filterEraseListenerIndex;
     private Listener filterEraseListenerData;
@@ -68,19 +77,34 @@ public final class ComfortCollectionWindow implements CollectionLoadScheduler.Pr
         int cloneIndex,
         String registryKey)
     {
+        this(indexedValue, frame, path, cloneIndex, registryKey, null);
+    }
+
+    ComfortCollectionWindow(
+        IBslIndexedValue indexedValue,
+        IBslStackFrame frame,
+        BslValuePath path,
+        int cloneIndex,
+        String registryKey,
+        CollectionCloneSnapshot cloneSnapshot)
+    {
         this.indexedValue = indexedValue;
         this.frame = frame;
         this.path = path;
         this.cloneIndex = cloneIndex;
         this.registryKey = registryKey;
+        this.cloneSnapshot = cloneSnapshot;
     }
 
     void open()
     {
         Display display = Display.getDefault();
         String typeTitle = resolveTypeTitle();
-        CollectionColumnModel columns = CollectionColumnModel.minimal();
-        model = new ComfortCollectionTableModel(indexedValue, frame, path, columns, typeTitle);
+        if (cloneSnapshot != null)
+            model = cloneSnapshot.toModel(typeTitle);
+        else
+            model = new ComfortCollectionTableModel(
+                indexedValue, frame, path, CollectionColumnModel.minimal(), typeTitle);
 
         shell = new Shell(display, SWT.SHELL_TRIM | SWT.MAX | SWT.RESIZE);
         shell.setText(buildTitle(typeTitle));
@@ -96,11 +120,11 @@ public final class ComfortCollectionWindow implements CollectionLoadScheduler.Pr
         createTable(shell);
         createProgress(shell);
 
-        rowFilter = new CollectionRowFilter(""); //$NON-NLS-1$
+        rowFilter = cloneSnapshot != null ? cloneSnapshot.toRowFilter() : new CollectionRowFilter(""); //$NON-NLS-1$
         findSession = new CollectionFindSession(this);
-        indexInteraction = new CollectionTableInteraction(splitTable.indexTable(), this, 0);
+        indexInteraction = new CollectionTableInteraction(splitTable.indexTable(), this);
         indexInteraction.install();
-        dataInteraction = new CollectionTableInteraction(splitTable.dataTable(), this, 1);
+        dataInteraction = new CollectionTableInteraction(splitTable.dataTable(), this);
         dataInteraction.install();
         scheduler = new CollectionLoadScheduler(model, display, this, this::onContextColumnsReady);
         scheduler.bindTable(splitTable.dataTable());
@@ -110,16 +134,175 @@ public final class ComfortCollectionWindow implements CollectionLoadScheduler.Pr
         hookFilterHighlight();
         hookShellEvents();
 
-        updateTableItemCount(1);
+        if (cloneSnapshot != null && cloneSnapshot.schemaResolved())
+            prepareCloneWindowBeforeOpen();
+        else
+            updateTableItemCount(1);
 
         shell.pack();
         CollectionWindowGeometryStore.applyToShell(shell);
         shell.open();
         shell.addDisposeListener(e -> disposeWindow());
-        scheduler.scheduleInitialLoad();
+        if (cloneSnapshot != null && cloneSnapshot.schemaResolved())
+            startCloneLoadAfterOpen();
+        else
+            scheduler.scheduleInitialLoad();
         shellPin = new CollectionShellPin(shell);
         shell.setData("tormozit.collectionShellPin", shellPin); //$NON-NLS-1$
         shellPin.install();
+    }
+
+    IBslIndexedValue indexedValueForClone()
+    {
+        return indexedValue;
+    }
+
+    IBslStackFrame stackFrameForClone()
+    {
+        return frame;
+    }
+
+    BslValuePath valuePathForClone()
+    {
+        return path;
+    }
+
+    ComfortCollectionTableModel tableModelForClone()
+    {
+        return model;
+    }
+
+    CollectionRowFilter rowFilterForClone()
+    {
+        return rowFilter;
+    }
+
+    String filterTextForClone()
+    {
+        if (filterField == null || filterField.isDisposed())
+            return ""; //$NON-NLS-1$
+        String text = filterField.getText();
+        return text != null ? text : ""; //$NON-NLS-1$
+    }
+
+    int topIndexForClone()
+    {
+        return splitTable != null ? splitTable.getTopIndex() : 0;
+    }
+
+    CollectionTableInteraction activeInteractionForClone()
+    {
+        Table data = dataTable();
+        if (dataInteraction != null && data != null && !data.isDisposed() && data.isFocusControl())
+            return dataInteraction;
+        Table index = indexTable();
+        if (indexInteraction != null && index != null && !index.isDisposed() && index.isFocusControl())
+            return indexInteraction;
+        if (dataInteraction != null && dataInteraction.selectedItem() != null)
+            return dataInteraction;
+        if (indexInteraction != null && indexInteraction.selectedItem() != null)
+            return indexInteraction;
+        return dataInteraction != null ? dataInteraction : indexInteraction;
+    }
+
+    String currentPresentationHeaderForClone()
+    {
+        return currentPresentationHeader();
+    }
+
+    private void prepareCloneWindowBeforeOpen()
+    {
+        applyClonePresentationState();
+        syncSplitTableColumns();
+        updateColumnSettingsButton();
+        int total = model.totalSize > 0 ? model.totalSize : 1;
+        updateTableItemCount(total);
+        if (filterField != null && !filterField.isDisposed())
+            filterField.setText(cloneSnapshot.filterText());
+        refreshPresentationCombo();
+        selectPresentationInCombo(cloneSnapshot.presentationHeader());
+        if (model.totalSize > 0)
+            onProgress(model.loadedRowCount, model.totalSize, "rows"); //$NON-NLS-1$
+        updateCloneButtonState();
+    }
+
+    /** Восстановить «Представление» в фиксированной панели (слот 1 после «Индекс»). */
+    private void applyClonePresentationState()
+    {
+        if (cloneSnapshot == null || model == null)
+            return;
+        String header = cloneSnapshot.presentationHeader();
+        if (header == null || header.isBlank())
+            return;
+        int modelIdx = model.columns.findPresentationColumnByHeader(header);
+        if (modelIdx < 0)
+            return;
+        int[] oldVisible = model.columns.copyVisibleToModel();
+        if (model.columns.visibleIndexOfModelColumn(modelIdx) < 0)
+        {
+            String pathKey = model.pathKey();
+            boolean[] vis = CollectionColumnVisibilityStore.visibilityFor(
+                pathKey, model.columns.modelColumnCount(), model.columns);
+            int[] order = columnOrderForDialog(model.columns.modelColumnCount());
+            if (modelIdx < vis.length)
+                vis[modelIdx] = true;
+            model.columns.applyVisibility(vis, order);
+        }
+        model.columns.applyPresentationHeader(header);
+        model.remapCellCacheForVisibleLayout(oldVisible);
+    }
+
+    private void startCloneLoadAfterOpen()
+    {
+        syncSplitTableColumns();
+        applyCloneUiState();
+        int top = cloneSnapshot.topIndex();
+        int last = top + visibleRowCountEstimate();
+        int itemCount = splitTable != null ? splitTable.getItemCount() : 0;
+        if (itemCount > 0)
+            last = Math.min(last, itemCount - 1);
+        int logicalFirst = displayIndexToLogical(top);
+        int logicalLast = displayIndexToLogical(last);
+        if (logicalFirst < 0)
+            logicalFirst = 0;
+        if (logicalLast < logicalFirst)
+            logicalLast = logicalFirst;
+        scheduler.scheduleFromClone(logicalFirst, logicalLast);
+    }
+
+    private void applyCloneUiState()
+    {
+        if (cloneSnapshot == null || splitTable == null)
+            return;
+        splitTable.clearAll();
+        splitTable.setTopIndex(cloneSnapshot.topIndex());
+        if (cloneSnapshot.selectedDisplayIndex() >= 0)
+            selectDisplayRow(cloneSnapshot.selectedDisplayIndex(), cloneSnapshot.selectedVisibleColumn());
+    }
+
+    private void selectPresentationInCombo(String header)
+    {
+        if (presentationField == null || presentationField.isDisposed() || header == null || header.isBlank())
+            return;
+        String resolved = model != null ? model.columns.resolveHeaderInSchema(header) : null;
+        if (resolved == null)
+            resolved = header;
+        for (int i = 0; i < presentationField.getItemCount(); i++)
+        {
+            if (resolved.equalsIgnoreCase(presentationField.getItem(i)))
+            {
+                applyingPresentation = true;
+                try
+                {
+                    presentationField.select(i);
+                }
+                finally
+                {
+                    applyingPresentation = false;
+                }
+                return;
+            }
+        }
     }
 
     Shell collectionShell()
@@ -200,6 +383,8 @@ public final class ComfortCollectionWindow implements CollectionLoadScheduler.Pr
 
     void disposeWindow()
     {
+        if (splitTable != null)
+            splitTable.persistFixedPaneWidth();
         if (shell != null && !shell.isDisposed())
             CollectionWindowGeometryStore.saveFromShell(shell);
         if (scheduler != null)
@@ -237,9 +422,21 @@ public final class ComfortCollectionWindow implements CollectionLoadScheduler.Pr
         return displayIndex;
     }
 
-    void selectDisplayRow(int displayIndex, int modelColumn)
+    @Override
+    public int firstVisibleColumnIndex(Table table)
     {
-        if (splitTable == null)
+        if (model == null || splitTable == null)
+            return 0;
+        if (table == splitTable.indexTable())
+            return 0;
+        if (table == splitTable.dataTable())
+            return model.columns.fixedColumnCount();
+        return 0;
+    }
+
+    void selectDisplayRow(int displayIndex, int visibleColumn)
+    {
+        if (splitTable == null || model == null)
             return;
         Table data = dataTable();
         Table index = indexTable();
@@ -250,10 +447,11 @@ public final class ComfortCollectionWindow implements CollectionLoadScheduler.Pr
         splitTable.syncSelectionToIndex(displayIndex);
         TableItem indexItem = index.getItem(displayIndex);
         TableItem dataItem = data.getItem(displayIndex);
-        if (modelColumn <= 0 && indexInteraction != null && indexItem != null)
-            indexInteraction.selectCell(indexItem, 0);
+        int fixed = model.columns.fixedColumnCount();
+        if (visibleColumn < fixed && indexInteraction != null && indexItem != null)
+            indexInteraction.selectCell(indexItem, visibleColumn);
         else if (dataInteraction != null && dataItem != null)
-            dataInteraction.selectCell(dataItem, Math.max(0, modelColumn - 1));
+            dataInteraction.selectCell(dataItem, Math.max(0, visibleColumn - fixed));
     }
 
     @Override
@@ -291,6 +489,7 @@ public final class ComfortCollectionWindow implements CollectionLoadScheduler.Pr
             }
             else
                 progressLabel.setText(loaded + " строк"); //$NON-NLS-1$
+            updateCloneButtonState();
             return;
         }
         int percent = total > 0 ? (int) ((long) loaded * 100L / total) : 0;
@@ -319,6 +518,7 @@ public final class ComfortCollectionWindow implements CollectionLoadScheduler.Pr
             wideUnion
                 ? CollectionColumnVisibilityStore.orderWithPreferred(model.columns)
                 : CollectionColumnVisibilityStore.orderFor(pathKey, count));
+        applyStoredPresentation(pathKey);
         model.clearCellCache();
         if (splitTable != null)
         {
@@ -346,10 +546,27 @@ public final class ComfortCollectionWindow implements CollectionLoadScheduler.Pr
         if (scheduler != null)
         {
             scheduler.resetLoadJobForSchemaChange();
-            scheduler.captureColumnViewport();
+            Table data = dataTable();
+            if (data != null && !data.isDisposed())
+            {
+                data.getDisplay().asyncExec(() -> {
+                    if (shell == null || shell.isDisposed() || scheduler == null)
+                        return;
+                    scheduler.captureColumnViewport();
+                    scheduleViewportLoad();
+                });
+            }
+            else
+            {
+                scheduler.captureColumnViewport();
+                scheduleViewportLoad();
+            }
         }
-        scheduleViewportLoad();
+        else
+            scheduleViewportLoad();
         updateColumnSettingsButton();
+        refreshPresentationCombo();
+        updateCloneButtonState();
         ComfortCollectionDebug.step("columns", //$NON-NLS-1$
             "count=" + model.columns.columnCount() //$NON-NLS-1$
                 + (wideUnion ? " wideUnion" : "") //$NON-NLS-1$ //$NON-NLS-2$
@@ -397,16 +614,21 @@ public final class ComfortCollectionWindow implements CollectionLoadScheduler.Pr
         bar.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
         ToolItem clone = new ToolItem(bar, SWT.PUSH);
+        cloneItem = clone;
         clone.setText("Клонировать"); //$NON-NLS-1$
-        clone.setToolTipText("Открыть копию окна коллекции"); //$NON-NLS-1$
+        Image cloneImage = PlatformUI.getWorkbench().getSharedImages().getImage(ISharedImages.IMG_TOOL_COPY);
+        if (cloneImage != null)
+            clone.setImage(cloneImage);
+        clone.setEnabled(false);
         clone.addSelectionListener(new SelectionAdapter()
         {
             @Override
             public void widgetSelected(SelectionEvent e)
             {
-                ComfortCollectionOpener.open(indexedValue, frame, path, ComfortCollectionOpener.OpenMode.CLONE);
+                ComfortCollectionOpener.openClone(ComfortCollectionWindow.this);
             }
         });
+        updateCloneButtonState();
 
         ToolItem inspect = new ToolItem(bar, SWT.PUSH);
         inspect.setText(CollectionRowContextSupport.inspectMenuLabel());
@@ -451,7 +673,7 @@ public final class ComfortCollectionWindow implements CollectionLoadScheduler.Pr
     private void createFilterRow(Composite parent)
     {
         Composite row = new Composite(parent, SWT.NONE);
-        GridLayout layout = new GridLayout(2, false);
+        GridLayout layout = new GridLayout(4, false);
         layout.marginHeight = 0;
         layout.marginWidth = 0;
         layout.marginTop = 3;
@@ -461,33 +683,32 @@ public final class ComfortCollectionWindow implements CollectionLoadScheduler.Pr
         row.setLayout(layout);
         row.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
-        Label label = new Label(row, SWT.NONE);
-        label.setText("Фильтр:"); //$NON-NLS-1$
+        filterField = CollectionFilterHistory.createSearchBox(row, this::applyFilterNow);
+        CollectionFilterHistory.addFieldTrailingSpacer(row);
 
-        Composite field = new Composite(row, SWT.NONE);
-        GridLayout fieldLayout = new GridLayout(2, false);
-        fieldLayout.marginHeight = 0;
-        fieldLayout.marginWidth = 0;
-        fieldLayout.horizontalSpacing = 2;
-        field.setLayout(fieldLayout);
-        GridData fieldGd = new GridData(SWT.BEGINNING, SWT.CENTER, false, false);
-        fieldGd.widthHint = CollectionFilterHistory.FILTER_FIELD_MAX_WIDTH;
-        field.setLayoutData(fieldGd);
+        Label presentationLabel = new Label(row, SWT.NONE);
+        presentationLabel.setText("Представление:"); //$NON-NLS-1$
 
-        filterField = CollectionFilterHistory.createCombo(field, this::scheduleFilterApplyDebounced);
-        filterField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        CollectionFilterHistory.createClearButton(field, this::clearFilter);
+        presentationField = new Combo(row, SWT.DROP_DOWN | SWT.READ_ONLY);
+        GridData presentationGd = new GridData(SWT.BEGINNING, SWT.CENTER, false, false);
+        presentationGd.widthHint = 160;
+        presentationGd.minimumWidth = 100;
+        presentationField.setLayoutData(presentationGd);
+        presentationField.setToolTipText("Колонка в фиксированной части таблицы справа от «Индекс»"); //$NON-NLS-1$
+        presentationField.addSelectionListener(new SelectionAdapter()
+        {
+            @Override
+            public void widgetSelected(SelectionEvent e)
+            {
+                onPresentationSelected();
+            }
+        });
     }
 
     private void clearFilter()
     {
         if (filterField == null || filterField.isDisposed())
             return;
-        if (filterDebounce != null)
-        {
-            filterField.getDisplay().timerExec(-1, filterDebounce);
-            filterDebounce = null;
-        }
         filterField.setText(""); //$NON-NLS-1$
         cancelFilterScan();
     }
@@ -500,8 +721,31 @@ public final class ComfortCollectionWindow implements CollectionLoadScheduler.Pr
         if (hidden <= 0)
             columnSettingsItem.setText("⚙"); //$NON-NLS-1$
         else
-            columnSettingsItem.setText("обрезано " + hidden + " колонок"); //$NON-NLS-1$ //$NON-NLS-2$
+            columnSettingsItem.setText("⚙ обрезано " + hidden + " колонок"); //$NON-NLS-1$ //$NON-NLS-2$
         columnSettingsItem.setToolTipText("Настройка колонок"); //$NON-NLS-1$
+    }
+
+    private void updateCloneButtonState()
+    {
+        if (cloneItem == null || cloneItem.isDisposed())
+            return;
+        boolean ready = isCloneReady();
+        cloneItem.setEnabled(ready);
+        int autoLimit = CollectionLoadScheduler.AUTO_LOAD_ROW_LIMIT;
+        if (ready)
+            cloneItem.setToolTipText("Открыть копию окна коллекции" + Global.pluginSignForTooltip()); //$NON-NLS-1$
+        else
+            cloneItem.setToolTipText(
+                "Дождитесь завершения автозагрузки (до " + autoLimit + " строк)" + Global.pluginSignForTooltip()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private boolean isCloneReady()
+    {
+        if (model == null || model.columns.modelColumnCount() <= 1)
+            return false;
+        if (scheduler == null)
+            return false;
+        return scheduler.isAutoPrefetchComplete();
     }
 
     private void createTable(Composite parent)
@@ -577,6 +821,14 @@ public final class ComfortCollectionWindow implements CollectionLoadScheduler.Pr
                         scheduleViewportLoadDebounced();
                     }
                 });
+            data.addControlListener(new ControlAdapter()
+            {
+                @Override
+                public void controlResized(ControlEvent e)
+                {
+                    scheduleViewportLoadDebounced();
+                }
+            });
         }
     }
 
@@ -612,7 +864,7 @@ public final class ComfortCollectionWindow implements CollectionLoadScheduler.Pr
                     activeFilterMatcher(),
                     filterSkipItem(item),
                     this,
-                    1);
+                    firstVisibleColumnIndex(data));
             };
             data.addListener(SWT.EraseItem, filterEraseListenerData);
         }
@@ -648,8 +900,13 @@ public final class ComfortCollectionWindow implements CollectionLoadScheduler.Pr
             return;
 
         CollectionTableItemKeys.bindRow(item, displayIndex, logical);
-        String text = model.getCellDisplayText(logical, 0);
-        item.setText(0, text != null ? text : ""); //$NON-NLS-1$
+        Table index = indexTable();
+        int fixedCols = index != null ? index.getColumnCount() : 1;
+        for (int col = 0; col < fixedCols; col++)
+        {
+            String text = model.getCellDisplayText(logical, col);
+            item.setText(col, text != null ? text : ""); //$NON-NLS-1$
+        }
         requestRowLoadIfNeeded(logical);
     }
 
@@ -667,7 +924,8 @@ public final class ComfortCollectionWindow implements CollectionLoadScheduler.Pr
         int dataCols = data != null ? data.getColumnCount() : 0;
         for (int dataCol = 0; dataCol < dataCols; dataCol++)
         {
-            String text = model.getCellDisplayText(logical, dataCol + 1);
+            int visibleCol = model.columns.visibleIndexForDataColumn(dataCol);
+            String text = model.getCellDisplayText(logical, visibleCol);
             item.setText(dataCol, text != null ? text : ""); //$NON-NLS-1$
         }
         requestRowLoadIfNeeded(logical);
@@ -675,15 +933,10 @@ public final class ComfortCollectionWindow implements CollectionLoadScheduler.Pr
 
     private void requestRowLoadIfNeeded(int logical)
     {
-        if (scheduler == null)
+        if (scheduler == null || model == null)
             return;
-        scheduler.captureColumnViewport();
-        Table data = dataTable();
-        if (data == null || data.isDisposed())
-            return;
-        int colFrom = 0;
-        int colTo = CollectionViewportTracker.lastVisibleColumn(data) + 1;
-        if (model.needsRowLoad(logical, colFrom, colTo))
+        int maxCol = Math.max(0, model.columns.columnCount() - 1);
+        if (model.needsRowLoad(logical, 0, maxCol))
             scheduleViewportLoadDebounced();
     }
 
@@ -842,20 +1095,6 @@ public final class ComfortCollectionWindow implements CollectionLoadScheduler.Pr
         return col != null ? col.header : ""; //$NON-NLS-1$
     }
 
-    private void scheduleFilterApplyDebounced()
-    {
-        if (filterField == null || filterField.isDisposed())
-            return;
-        if (filterDebounce != null)
-            filterField.getDisplay().timerExec(-1, filterDebounce);
-        filterDebounce = () -> {
-            filterDebounce = null;
-            if (filterField != null && !filterField.isDisposed())
-                applyFilterNow();
-        };
-        filterField.getDisplay().timerExec(150, filterDebounce);
-    }
-
     private void cancelFilterScan()
     {
         int anchorLogical = -1;
@@ -999,6 +1238,7 @@ public final class ComfortCollectionWindow implements CollectionLoadScheduler.Pr
         }
         CollectionColumnVisibilityDialog dialog =
             new CollectionColumnVisibilityDialog(shell, model.columns, vis, order);
+        dialog.setColumnActivateListener(this::activateColumnFromDialog);
         if (enableAndPreselectModelIndices != null && enableAndPreselectModelIndices.length > 0)
             dialog.preselectModelIndices(enableAndPreselectModelIndices);
         else if (focusModelIndex >= 0)
@@ -1017,6 +1257,78 @@ public final class ComfortCollectionWindow implements CollectionLoadScheduler.Pr
         return col != null ? col.modelIndex : -1;
     }
 
+    private void activateColumnFromDialog(int modelIndex, boolean[] visibility, int[] order)
+    {
+        if (model == null || modelIndex < 0)
+            return;
+        if (model.columns.visibleIndexOfModelColumn(modelIndex) < 0)
+            applyColumnDialogResult(visibility, order);
+        scheduleActivateColumnByModelIndex(modelIndex);
+    }
+
+    private void scheduleActivateColumnByModelIndex(int modelIndex)
+    {
+        if (shell == null || shell.isDisposed())
+            return;
+        shell.getDisplay().asyncExec(() -> {
+            if (!isDisposed())
+                activateColumnByModelIndex(modelIndex);
+        });
+    }
+
+    private void activateColumnByModelIndex(int modelIndex)
+    {
+        if (model == null || splitTable == null || modelIndex < 0)
+            return;
+        int visibleCol = model.columns.visibleIndexOfModelColumn(modelIndex);
+        if (visibleCol < 0)
+            return;
+        scrollToVisibleColumn(visibleCol);
+        int displayIndex = selectedDisplayIndex();
+        if (displayIndex < 0)
+            displayIndex = Math.max(0, splitTable.getTopIndex());
+        selectDisplayRow(displayIndex, visibleCol);
+        scrollToVisibleColumn(visibleCol);
+        focusTableForVisibleColumn(visibleCol);
+    }
+
+    private int selectedDisplayIndex()
+    {
+        CollectionTableInteraction interaction = activeInteraction();
+        if (interaction == null)
+            return -1;
+        TableItem item = interaction.selectedItem();
+        if (item == null || item.isDisposed())
+            return -1;
+        Table table = item.getParent();
+        if (table == null || table.isDisposed())
+            return -1;
+        return CollectionTableItemKeys.displayIndex(item, table);
+    }
+
+    private void scrollToVisibleColumn(int visibleCol)
+    {
+        if (splitTable == null || model == null)
+            return;
+        int fixed = model.columns.fixedColumnCount();
+        if (visibleCol < fixed)
+            return;
+        Table data = dataTable();
+        if (data == null || data.isDisposed())
+            return;
+        CollectionViewportTracker.scrollColumnIntoView(data, visibleCol - fixed);
+    }
+
+    private void focusTableForVisibleColumn(int visibleCol)
+    {
+        if (splitTable == null || model == null)
+            return;
+        int fixed = model.columns.fixedColumnCount();
+        Table table = visibleCol < fixed ? indexTable() : dataTable();
+        if (table != null && !table.isDisposed())
+            table.setFocus();
+    }
+
     private int[] columnOrderForDialog(int modelCount)
     {
         if (modelCount > CollectionColumnVisibilityStore.WIDE_SCHEMA_THRESHOLD)
@@ -1026,8 +1338,18 @@ public final class ComfortCollectionWindow implements CollectionLoadScheduler.Pr
 
     private void applyColumnDialogResult(boolean[] visibility, int[] order)
     {
+        String presentation = currentPresentationHeader();
+        if (visibility.length > 0)
+            visibility[0] = true;
+        if (presentation != null)
+        {
+            int modelIdx = model.columns.findPresentationColumnByHeader(presentation);
+            if (modelIdx > 0 && modelIdx < visibility.length)
+                visibility[modelIdx] = true;
+        }
         model.columns.applyVisibility(visibility, order);
-        CollectionColumnVisibilityStore.save(model.pathKey(), visibility, order);
+        model.columns.applyPresentationHeader(presentation);
+        CollectionColumnVisibilityStore.save(model.pathKey(), visibility, order, presentation);
         model.clearCellCache();
         syncSplitTableColumns();
         if (splitTable != null)
@@ -1036,6 +1358,147 @@ public final class ComfortCollectionWindow implements CollectionLoadScheduler.Pr
             scheduler.captureColumnViewport();
         scheduleViewportLoad();
         updateColumnSettingsButton();
+        refreshPresentationCombo();
+    }
+
+    private void applyStoredPresentation(String pathKey)
+    {
+        if (model == null)
+            return;
+        String presentation = CollectionColumnVisibilityStore.presentationFor(pathKey, model.columns);
+        if (presentation == null || model.columns.findPresentationColumnByHeader(presentation) < 0)
+        {
+            model.columns.clearPresentation();
+            return;
+        }
+        int modelCount = model.columns.modelColumnCount();
+        boolean[] vis = CollectionColumnVisibilityStore.visibilityFor(pathKey, modelCount, model.columns);
+        int[] order = modelCount > CollectionColumnVisibilityStore.WIDE_SCHEMA_THRESHOLD
+            ? CollectionColumnVisibilityStore.orderWithPreferred(model.columns)
+            : CollectionColumnVisibilityStore.orderFor(pathKey, modelCount);
+        int modelIdx = model.columns.findPresentationColumnByHeader(presentation);
+        if (modelIdx > 0 && modelIdx < vis.length && !vis[modelIdx])
+        {
+            vis[modelIdx] = true;
+            model.columns.applyVisibility(vis, order);
+        }
+        model.columns.applyPresentationHeader(presentation);
+    }
+
+    private void onPresentationSelected()
+    {
+        if (applyingPresentation || presentationField == null || presentationField.isDisposed() || model == null)
+            return;
+        int idx = presentationField.getSelectionIndex();
+        if (idx < 0)
+            return;
+        applyPresentationChange(presentationField.getItem(idx));
+    }
+
+    private void applyPresentationChange(String header)
+    {
+        if (model == null || header == null || header.isBlank())
+            return;
+        String pathKey = model.pathKey();
+        int modelIdx = model.columns.findPresentationColumnByHeader(header);
+        int[] oldVisible = model.columns.copyVisibleToModel();
+        boolean needsVisibilityUpdate = modelIdx > 0 && model.columns.visibleIndexOfModelColumn(modelIdx) < 0;
+
+        if (needsVisibilityUpdate)
+        {
+            boolean[] vis = CollectionColumnVisibilityStore.visibilityFor(
+                pathKey, model.columns.modelColumnCount(), model.columns);
+            int[] order = columnOrderForDialog(model.columns.modelColumnCount());
+            if (modelIdx < vis.length)
+                vis[modelIdx] = true;
+            model.columns.applyVisibility(vis, order);
+            model.columns.applyPresentationHeader(header);
+            CollectionColumnVisibilityStore.save(pathKey, vis, order, header);
+        }
+        else
+        {
+            model.columns.applyPresentationHeader(header);
+            CollectionColumnVisibilityStore.savePresentation(pathKey, header);
+        }
+
+        model.remapCellCacheForVisibleLayout(oldVisible);
+        syncSplitTableColumns();
+        refreshVisibleTableRows();
+        if (needsVisibilityUpdate)
+            scheduleViewportLoadDebounced();
+    }
+
+    private void refreshVisibleTableRows()
+    {
+        if (splitTable == null)
+            return;
+        int count = splitTable.getItemCount();
+        if (count <= 0)
+            return;
+        int top = splitTable.getTopIndex();
+        int visibleRows = 25;
+        Table data = dataTable();
+        if (data != null && !data.isDisposed())
+        {
+            int itemHeight = data.getItemHeight();
+            int clientHeight = data.getClientArea().height;
+            if (itemHeight > 0 && clientHeight > 0)
+                visibleRows = Math.max(1, clientHeight / itemHeight + 2);
+        }
+        int bottom = Math.min(count - 1, top + visibleRows);
+        if (bottom >= top)
+            splitTable.clear(top, bottom);
+    }
+
+    private void refreshPresentationCombo()
+    {
+        if (presentationField == null || presentationField.isDisposed() || model == null)
+            return;
+        applyingPresentation = true;
+        try
+        {
+            String selected = CollectionColumnVisibilityStore.presentationFor(model.pathKey(), model.columns);
+            java.util.List<String> headers = model.columns.presentationColumnHeaders();
+            presentationField.removeAll();
+            for (String header : headers)
+                presentationField.add(header);
+            int sel = indexOfHeaderIgnoreCase(headers, selected);
+            if (sel >= 0)
+                presentationField.select(sel);
+            else
+                presentationField.select(-1);
+            presentationField.setEnabled(!headers.isEmpty());
+        }
+        finally
+        {
+            applyingPresentation = false;
+        }
+    }
+
+    private String currentPresentationHeader()
+    {
+        if (presentationField != null && !presentationField.isDisposed())
+        {
+            int sel = presentationField.getSelectionIndex();
+            if (sel >= 0)
+                return presentationField.getItem(sel);
+        }
+        if (model != null)
+            return CollectionColumnVisibilityStore.presentationFor(model.pathKey(), model.columns);
+        return null;
+    }
+
+    private static int indexOfHeaderIgnoreCase(java.util.List<String> headers, String target)
+    {
+        if (headers == null || target == null)
+            return -1;
+        for (int i = 0; i < headers.size(); i++)
+        {
+            String header = headers.get(i);
+            if (header != null && header.equalsIgnoreCase(target))
+                return i;
+        }
+        return -1;
     }
 
     private static int columnAt(int x, int y, TableItem item)

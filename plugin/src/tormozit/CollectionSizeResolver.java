@@ -56,12 +56,8 @@ final class CollectionSizeResolver
             return;
         if (colTo < colFrom)
             return;
-        int span = colTo - colFrom;
-        // #region agent log
-        CollectionLoadDebug.log("H2", "CollectionSizeResolver.scheduleBatch", "schedule", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            "{\"colFrom\":" + colFrom + ",\"colTo\":" + colTo + ",\"span\":" + span //$NON-NLS-1$ //$NON-NLS-2$
-                + ",\"rows\":" + rowFrom + "+" + rowCount + ",\"retry\":" + retryAttempt + "}"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        // #endregion
+        if (colTo < colFrom)
+            return;
         Job.create("Комфорт: размер ячеек коллекции", monitor -> { //$NON-NLS-1$
             if (cancelled.get() || monitor.isCanceled())
                 return org.eclipse.core.runtime.Status.OK_STATUS;
@@ -78,6 +74,8 @@ final class CollectionSizeResolver
                     int chunkTo = Math.min(colTo, chunkFrom + COL_CHUNK - 1);
                     for (int col = chunkFrom; col <= chunkTo; col++)
                     {
+                        if (isIndexColumn(model, col))
+                            continue;
                         String outcome = resolveCellSize(model, row, col);
                         switch (outcome)
                         {
@@ -89,13 +87,6 @@ final class CollectionSizeResolver
                     }
                 }
             }
-            // #region agent log
-            CollectionLoadDebug.log("H2,H3", "CollectionSizeResolver.scheduleBatch", "done", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                "{\"resolved\":" + resolved + ",\"skipped\":" + skipped //$NON-NLS-1$ //$NON-NLS-2$
-                    + ",\"pending\":" + pending + ",\"na\":" + na //$NON-NLS-1$ //$NON-NLS-2$
-                    + ",\"colFrom\":" + colFrom + ",\"colTo\":" + colTo //$NON-NLS-1$ //$NON-NLS-2$
-                    + ",\"retry\":" + retryAttempt + "}"); //$NON-NLS-1$ //$NON-NLS-2$
-            // #endregion
             if (pending > 0 && retryAttempt < MAX_PENDING_RETRIES && !cancelled.get() && !monitor.isCanceled())
             {
                 Job retry = Job.create("Комфорт: размер ячеек коллекции (повтор)", m -> { //$NON-NLS-1$
@@ -108,6 +99,12 @@ final class CollectionSizeResolver
                 display.asyncExec(onRowsReady);
             return org.eclipse.core.runtime.Status.OK_STATUS;
         }).schedule();
+    }
+
+    private static boolean isIndexColumn(ComfortCollectionTableModel model, int col)
+    {
+        CollectionColumnModel.Column column = model.columns.columnAt(col);
+        return column != null && column.kind == CollectionColumnModel.Kind.INDEX;
     }
 
     /** @return {@code size} | {@code na} | {@code pending} | {@code skip} | {@code error} */

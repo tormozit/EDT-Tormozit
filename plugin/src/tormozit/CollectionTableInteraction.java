@@ -25,7 +25,6 @@ final class CollectionTableInteraction
 {
     private final Table table;
     private final CollectionTableHost host;
-    private final int firstVisibleColumn;
 
     private TableItem selectedItem;
     private int activeColumn = -1;
@@ -40,14 +39,8 @@ final class CollectionTableInteraction
 
     CollectionTableInteraction(Table table, CollectionTableHost host)
     {
-        this(table, host, 0);
-    }
-
-    CollectionTableInteraction(Table table, CollectionTableHost host, int firstVisibleColumn)
-    {
         this.table = table;
         this.host = host;
-        this.firstVisibleColumn = Math.max(0, firstVisibleColumn);
     }
 
     void install()
@@ -116,7 +109,7 @@ final class CollectionTableInteraction
     /** Индекс видимой колонки модели (с учётом split-table). */
     int modelVisibleColumn()
     {
-        return firstVisibleColumn + Math.max(0, activeColumn);
+        return host.firstVisibleColumnIndex(table) + Math.max(0, activeColumn);
     }
 
     TableItem selectedItem()
@@ -143,7 +136,7 @@ final class CollectionTableInteraction
         int logical = host.displayIndexToLogical(displayIndex);
         if (logical < 0)
             return;
-        String text = host.getCellDisplayText(logical, firstVisibleColumn + activeColumn);
+        String text = host.getCellDisplayText(logical, host.firstVisibleColumnIndex(table) + activeColumn);
         if (text == null)
             text = ""; //$NON-NLS-1$
         Clipboard clipboard = new Clipboard(table.getDisplay());

@@ -30,5 +30,10 @@ interface CollectionTableHost
 
     SmartMatcher activeFilterMatcher();
 
+    /** Смещение видимой колонки модели для таблицы split-раскладки. */
+    default int firstVisibleColumnIndex(Table table)
+    {
+        return 0;
+    }
 }
 

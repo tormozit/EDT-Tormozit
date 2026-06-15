@@ -6,26 +6,26 @@ import java.util.List;
 import org.eclipse.core.runtime.preferences.InstanceScope;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.layout.GridData;
-import org.eclipse.swt.events.SelectionAdapter;
-import org.eclipse.swt.events.SelectionEvent;
-import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
-import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.ui.preferences.ScopedPreferenceStore;
 import org.osgi.framework.FrameworkUtil;
 
+import com._1c.g5.v8.dt.common.ui.controls.search.ISearchHistory;
+import com._1c.g5.v8.dt.common.ui.controls.search.SearchBox;
+
 /**
- * Недавние значения smart-фильтра окна «Коллекция» (выпадающий список, как SearchBox навигатора).
+ * Недавние значения smart-фильтра окна «Коллекция» — штатный {@link SearchBox}, как в окне «Значения» EDT.
  */
 final class CollectionFilterHistory
 {
     private static final int MAX_ITEMS = 20;
     private static final String PREF_COUNT = "comfort.collection.filter.history.count"; //$NON-NLS-1$
     private static final String PREF_ITEM_PREFIX = "comfort.collection.filter.history."; //$NON-NLS-1$
-    private static final int REMEMBER_DELAY_MS = 120;
     /** Максимальная ширина поля smart-фильтра в окне «Коллекция». */
     static final int FILTER_FIELD_MAX_WIDTH = 400;
+    /** Отступ справа от поля фильтра до следующего элемента строки. */
+    static final int FILTER_FIELD_RIGHT_MARGIN = 10;
 
     private static ScopedPreferenceStore prefs;
 
@@ -39,55 +39,26 @@ final class CollectionFilterHistory
         return gd;
     }
 
-    static Combo createCombo(Composite parent, Runnable onModify)
+    static SearchBox createSearchBox(Composite parent, Runnable onSearch)
     {
-        Combo combo = new Combo(parent, SWT.BORDER | SWT.DROP_DOWN);
-        combo.setToolTipText("Smart-фильтр (пробел = AND)"); //$NON-NLS-1$
-        refreshItems(combo, null);
-        if (onModify != null)
-        {
-            combo.addModifyListener(e -> onModify.run());
-            combo.addSelectionListener(new SelectionAdapter()
-            {
-                @Override
-                public void widgetSelected(SelectionEvent e)
-                {
-                    onModify.run();
-                }
-            });
-        }
-        combo.addListener(SWT.FocusOut, e -> scheduleRememberOnFocusLost(combo));
-        return combo;
+        SearchBox box = new SearchBox(parent);
+        box.setLayoutData(filterFieldLayoutData());
+        box.setToolTipText("Smart-фильтр (пробел = AND)"); //$NON-NLS-1$
+        box.setMessage("Поиск..."); //$NON-NLS-1$
+        box.setMinimumSearchTextLength(0);
+        box.setSearchDelay(150);
+        box.setHistory(new PrefsSearchHistory());
+        if (onSearch != null)
+            box.setSearchListener((text, monitor) -> onSearch.run());
+        return box;
     }
 
-    /** Компактная «✕» — без {@link org.eclipse.swt.widgets.ToolBar}, чтобы не раздувать строку фильтра. */
-    static Label createClearButton(Composite parent, Runnable onClear)
+    static void addFieldTrailingSpacer(Composite parent)
     {
-        Label clear = new Label(parent, SWT.NONE);
-        clear.setText("✕"); //$NON-NLS-1$
-        clear.setToolTipText("Очистить фильтр"); //$NON-NLS-1$
-        clear.setLayoutData(new GridData(SWT.BEGINNING, SWT.CENTER, false, false));
-        clear.setCursor(parent.getDisplay().getSystemCursor(SWT.CURSOR_HAND));
-        clear.addListener(SWT.MouseDown, e -> {
-            if (onClear != null)
-                onClear.run();
-        });
-        return clear;
-    }
-
-    private static void scheduleRememberOnFocusLost(Combo combo)
-    {
-        if (combo == null || combo.isDisposed())
-            return;
-        combo.getDisplay().timerExec(REMEMBER_DELAY_MS, () -> {
-            if (combo.isDisposed())
-                return;
-            Control focus = combo.getDisplay().getFocusControl();
-            if (focus == combo)
-                return;
-            remember(combo.getText());
-            refreshItems(combo, combo.getText());
-        });
+        Label spacer = new Label(parent, SWT.NONE);
+        GridData gd = new GridData(SWT.BEGINNING, SWT.CENTER, false, false);
+        gd.widthHint = FILTER_FIELD_RIGHT_MARGIN;
+        spacer.setLayoutData(gd);
     }
 
     static void remember(String pattern)
@@ -106,16 +77,6 @@ final class CollectionFilterHistory
         save(items);
     }
 
-    private static void refreshItems(Combo combo, String keepText)
-    {
-        if (combo == null || combo.isDisposed())
-            return;
-        String current = keepText != null ? keepText : combo.getText();
-        combo.setItems(loadAsArray());
-        if (current != null)
-            combo.setText(current);
-    }
-
     private static List<String> load()
     {
         ScopedPreferenceStore store = prefs();
@@ -132,12 +93,6 @@ final class CollectionFilterHistory
                 items.add(value.trim());
         }
         return items;
-    }
-
-    private static String[] loadAsArray()
-    {
-        List<String> items = load();
-        return items.toArray(new String[0]);
     }
 
     private static void save(List<String> items)
@@ -175,5 +130,35 @@ final class CollectionFilterHistory
             return null;
         }
         return prefs;
+    }
+
+    private static final class PrefsSearchHistory implements ISearchHistory
+    {
+        @Override
+        public void savePattern(String pattern)
+        {
+            remember(pattern);
+        }
+
+        @Override
+        public void replacePattern(String pattern)
+        {
+            remember(pattern);
+        }
+
+        @Override
+        public String getActivePattern()
+        {
+            return ""; //$NON-NLS-1$
+        }
+
+        @Override
+        public List<String> getRecentPatterns(int max)
+        {
+            List<String> items = load();
+            if (max <= 0 || items.size() <= max)
+                return items;
+            return new ArrayList<>(items.subList(0, max));
+        }
     }
 }

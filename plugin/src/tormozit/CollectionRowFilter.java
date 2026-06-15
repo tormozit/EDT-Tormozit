@@ -21,6 +21,26 @@ final class CollectionRowFilter
         matcher = new SmartMatcher(pattern);
     }
 
+    static CollectionRowFilter copyFrom(CollectionRowFilter source, String filterText)
+    {
+        String pattern = filterText != null ? filterText : ""; //$NON-NLS-1$
+        if (source == null || !source.isActive())
+            return new CollectionRowFilter(""); //$NON-NLS-1$
+        CollectionRowFilter copy = new CollectionRowFilter(pattern);
+        copy.importFinishedState(source.matches(), source.progressTotal());
+        return copy;
+    }
+
+    private void importFinishedState(BitSet sourceMatches, int total)
+    {
+        cancelled = false;
+        scanning = false;
+        progressTotal = total;
+        progressLoaded = total;
+        matches.set(sourceMatches != null ? (BitSet) sourceMatches.clone() : new BitSet(Math.max(total, 1)));
+        rebuildDisplayIndexMap();
+    }
+
     SmartMatcher matcher()
     {
         return matcher;

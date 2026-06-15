@@ -1,5 +1,6 @@
 package tormozit;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -139,6 +140,44 @@ final class ComfortCollectionTableModel
         loadedRowCount = Math.max(loadedRowCount, from + vars.length);
     }
 
+    void importCachesFrom(ComfortCollectionTableModel source)
+    {
+        if (source == null || source == this)
+            return;
+        totalSize = source.totalSize;
+        loadedRowCount = source.loadedRowCount;
+        rowVariables.putAll(source.rowVariables);
+        rowChildrenCache.putAll(source.rowChildrenCache);
+        synchronized (source.cellCache)
+        {
+            synchronized (cellCache)
+            {
+                cellCache.clear();
+                for (Map.Entry<CellKey, CellData> entry : source.cellCache.entrySet())
+                {
+                    CellKey key = entry.getKey();
+                    cellCache.put(new CellKey(key.row, key.col), cloneCellData(entry.getValue()));
+                }
+            }
+        }
+    }
+
+    private static CellData cloneCellData(CellData source)
+    {
+        CellData copy = new CellData();
+        if (source == null)
+            return copy;
+        synchronized (source)
+        {
+            copy.baseText = source.baseText;
+            copy.displayText = source.displayText;
+            copy.sizeState = source.sizeState;
+            copy.nestedSize = source.nestedSize;
+            copy.contentLoaded = source.contentLoaded;
+        }
+        return copy;
+    }
+
     void clearCellCache()
     {
         synchronized (cellCache)
@@ -146,6 +185,46 @@ final class ComfortCollectionTableModel
             cellCache.clear();
         }
         rowChildrenCache.clear();
+    }
+
+    /** Переложить кэш ячеек при смене порядка visible-колонок (смена «Представления»). */
+    void remapCellCacheForVisibleLayout(int[] oldVisibleToModel)
+    {
+        if (oldVisibleToModel == null || oldVisibleToModel.length == 0)
+            return;
+        int[] newVisible = columns.copyVisibleToModel();
+        if (java.util.Arrays.equals(oldVisibleToModel, newVisible))
+            return;
+
+        Map<CellKey, CellData> remapped = new LinkedHashMap<>();
+        synchronized (cellCache)
+        {
+            for (Map.Entry<CellKey, CellData> entry : new ArrayList<>(cellCache.entrySet()))
+            {
+                CellKey oldKey = entry.getKey();
+                int oldVisibleCol = oldKey.col;
+                if (oldVisibleCol < 0 || oldVisibleCol >= oldVisibleToModel.length)
+                    continue;
+                int modelIdx = oldVisibleToModel[oldVisibleCol];
+                int newVisibleCol = visibleIndexInLayout(modelIdx, newVisible);
+                if (newVisibleCol >= 0)
+                    remapped.put(new CellKey(oldKey.row, newVisibleCol), entry.getValue());
+            }
+            cellCache.clear();
+            cellCache.putAll(remapped);
+        }
+    }
+
+    private static int visibleIndexInLayout(int modelIdx, int[] visibleToModel)
+    {
+        if (visibleToModel == null || modelIdx < 0)
+            return -1;
+        for (int i = 0; i < visibleToModel.length; i++)
+        {
+            if (visibleToModel[i] == modelIdx)
+                return i;
+        }
+        return -1;
     }
 
     /** Строка или ячейки viewport ещё не заполнены (после смены колонок rowVar может уже быть). */
@@ -377,8 +456,10 @@ final class ComfortCollectionTableModel
         if (propertyName == null || propertyName.isBlank())
             return ""; //$NON-NLS-1$
         IBslVariable[] props = rowPropertySource(logicalRow, rowVar);
-        if (props == null || props.length == 0)
+        if (props == null)
             return null;
+        if (props.length == 0)
+            return ""; //$NON-NLS-1$
         IBslVariable child = findPropertyVariable(props, propertyName);
         if (child == null)
             return ""; //$NON-NLS-1$
@@ -402,6 +483,9 @@ final class ComfortCollectionTableModel
                 return typeName.trim();
             return "Коллекция"; //$NON-NLS-1$
         }
+        String cached = childValue.getValueString();
+        if (cached != null && !cached.isEmpty())
+            return cached;
         if (!childValue.isEvaluated())
             childValue.evaluate();
         if (childValue.isPending())

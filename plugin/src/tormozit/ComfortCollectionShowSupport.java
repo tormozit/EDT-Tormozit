@@ -3,30 +3,86 @@ package tormozit;
 import org.eclipse.debug.core.model.IExpression;
 import org.eclipse.debug.core.model.IValue;
 import org.eclipse.debug.core.model.IWatchExpression;
+import org.eclipse.debug.ui.AbstractDebugView;
+import org.eclipse.jface.viewers.ISelection;
+import org.eclipse.jface.viewers.IStructuredSelection;
+import org.eclipse.ui.IWorkbenchPart;
 
 import com._1c.g5.v8.dt.debug.core.model.IBslStackFrame;
 import com._1c.g5.v8.dt.debug.core.model.IBslVariable;
 import com._1c.g5.v8.dt.debug.core.model.values.BslValuePath;
 import com._1c.g5.v8.dt.debug.core.model.values.IBslIndexedValue;
+import com._1c.g5.v8.dt.debug.core.model.values.IBslValue;
 
 /**
  * Определение indexed-коллекций и открытие окна «Коллекция».
  */
 public final class ComfortCollectionShowSupport
 {
+    static final String VALUES_VIEW_ID =
+        "com._1c.g5.v8.dt.debug.ui.values.ValuesView"; //$NON-NLS-1$
+
     private ComfortCollectionShowSupport() {}
 
     public static boolean isIndexedCollection(Object element)
     {
-        IBslIndexedValue indexed = resolveIndexedValue(element);
-        boolean result = indexed != null;
-        if (ComfortCollectionDebug.isEnabled() && element != null)
+        return canOpenFrom(element);
+    }
+
+    public static boolean canOpenFrom(Object element)
+    {
+        return resolveIndexedValue(element) != null;
+    }
+
+    public static boolean canOpenFromValuesView(AbstractDebugView view)
+    {
+        return resolveIndexedValueFromView(view) != null;
+    }
+
+    public static boolean canOpenFromHandler(IWorkbenchPart part, ISelection selection)
+    {
+        if (part instanceof AbstractDebugView view && isValuesView(part))
+            return canOpenFromValuesView(view);
+        if (selection instanceof IStructuredSelection structured && !structured.isEmpty())
+            return canOpenFrom(structured.getFirstElement());
+        return false;
+    }
+
+    public static boolean tryOpenFromHandler(IWorkbenchPart part, ISelection selection)
+    {
+        if (!DebugSessionHelper.isDebugSuspended(null))
+            return false;
+        if (part instanceof AbstractDebugView view && isValuesView(part))
         {
-            ComfortCollectionDebug.step(
-                "enable", //$NON-NLS-1$
-                element.getClass().getSimpleName() + " indexed=" + result); //$NON-NLS-1$
+            if (openFromValuesView(view))
+                return true;
         }
-        return result;
+        if (selection instanceof IStructuredSelection structured && !structured.isEmpty())
+        {
+            Object element = structured.getFirstElement();
+            if (canOpenFrom(element))
+            {
+                openFromElement(element);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static boolean openFromValuesView(AbstractDebugView view)
+    {
+        IBslIndexedValue indexed = resolveIndexedValueFromView(view);
+        if (indexed == null)
+            return false;
+        IBslStackFrame frame = indexed.getStackFrame();
+        if (frame == null)
+            frame = DebugSessionHelper.findSuspendedStackFrame(null);
+        BslValuePath path = indexed.getPath();
+        if (path == null && indexed instanceof IBslValue bslValue)
+            path = bslValue.getPath();
+        ComfortCollectionOpener.open(indexed, frame, path, ComfortCollectionOpener.OpenMode.NORMAL);
+        ComfortCollectionDebug.step("open", pathKey(path)); //$NON-NLS-1$
+        return true;
     }
 
     public static void openFromElement(Object element)
@@ -85,6 +141,30 @@ public final class ComfortCollectionShowSupport
         if (element instanceof IValue value)
             return resolveIndexedValueFromValue(value);
         return null;
+    }
+
+    private static IBslIndexedValue resolveIndexedValueFromView(AbstractDebugView view)
+    {
+        if (view == null)
+            return null;
+        try
+        {
+            Object delegate = Global.getField(view, "delegate"); //$NON-NLS-1$
+            Object inputValue = Global.getField(delegate, "value"); //$NON-NLS-1$
+            if (inputValue instanceof IBslIndexedValue indexed)
+                return indexed;
+        }
+        catch (Exception e)
+        {
+            ComfortCollectionDebug.problem("openFromValuesView: " + e.getMessage()); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    private static boolean isValuesView(IWorkbenchPart part)
+    {
+        return part != null && part.getSite() != null
+            && VALUES_VIEW_ID.equals(part.getSite().getId());
     }
 
     private static IBslIndexedValue resolveIndexedValueFromValue(IValue value)

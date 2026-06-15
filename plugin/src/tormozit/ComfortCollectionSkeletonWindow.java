@@ -7,7 +7,6 @@ import org.eclipse.swt.events.SelectionAdapter;
 import org.eclipse.swt.events.SelectionEvent;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
-import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Event;
@@ -18,6 +17,8 @@ import org.eclipse.swt.widgets.Table;
 import org.eclipse.swt.widgets.TableItem;
 import org.eclipse.swt.widgets.ToolBar;
 import org.eclipse.swt.widgets.ToolItem;
+
+import com._1c.g5.v8.dt.common.ui.controls.search.SearchBox;
 
 /**
  * Окно-скелет «Коллекция» для теста UI: виртуальная таблица без dbgs.
@@ -30,14 +31,13 @@ public final class ComfortCollectionSkeletonWindow implements CollectionTableHos
 
     private Shell shell;
     private Table table;
-    private Combo filterField;
+    private SearchBox filterField;
     private Label progressLabel;
     private CollectionColumnModel columns;
     private CollectionShellPin shellPin;
     private CollectionTableInteraction interaction;
     private SmartMatcher filterMatcher;
     private CollectionDisplayIndexMap displayIndexMap = CollectionDisplayIndexMap.identity(ROW_COUNT);
-    private Runnable filterDebounce;
     private Runnable viewportDebounce;
     private int visibleRowCount = ROW_COUNT;
 
@@ -106,7 +106,7 @@ public final class ComfortCollectionSkeletonWindow implements CollectionTableHos
     private void createFilterRow(Composite parent)
     {
         Composite row = new Composite(parent, SWT.NONE);
-        GridLayout layout = new GridLayout(3, false);
+        GridLayout layout = new GridLayout(1, false);
         layout.marginHeight = 0;
         layout.marginWidth = 0;
         layout.marginTop = 3;
@@ -115,23 +115,13 @@ public final class ComfortCollectionSkeletonWindow implements CollectionTableHos
         row.setLayout(layout);
         row.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
-        Label label = new Label(row, SWT.NONE);
-        label.setText("Фильтр:"); //$NON-NLS-1$
-
-        filterField = CollectionFilterHistory.createCombo(row, this::scheduleFilterApplyDebounced);
-        filterField.setLayoutData(CollectionFilterHistory.filterFieldLayoutData());
-        CollectionFilterHistory.createClearButton(row, this::clearFilter);
+        filterField = CollectionFilterHistory.createSearchBox(row, this::applyFilterNow);
     }
 
     private void clearFilter()
     {
         if (filterField == null || filterField.isDisposed())
             return;
-        if (filterDebounce != null)
-        {
-            filterField.getDisplay().timerExec(-1, filterDebounce);
-            filterDebounce = null;
-        }
         filterField.setText(""); //$NON-NLS-1$
         applyFilterNow();
     }
@@ -234,19 +224,6 @@ public final class ComfortCollectionSkeletonWindow implements CollectionTableHos
             String text = cellText(logical, col);
             item.setText(col, text);
         }
-    }
-
-    private void scheduleFilterApplyDebounced()
-    {
-        if (filterField == null || filterField.isDisposed())
-            return;
-        if (filterDebounce != null)
-            filterField.getDisplay().timerExec(-1, filterDebounce);
-        filterDebounce = () -> {
-            filterDebounce = null;
-            applyFilterNow();
-        };
-        filterField.getDisplay().timerExec(150, filterDebounce);
     }
 
     private void applyFilterNow()

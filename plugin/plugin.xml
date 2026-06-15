@@ -114,6 +114,12 @@
           schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
           sequence="M1+M2+M3+K">
     </key>
+    <key
+          commandId="tormozit.showCollection"
+          contextId="com._1c.g5.v8.dt.debug.ui.debugging"
+          schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+          sequence="F2">
+    </key>
   </extension>
 
   <extension point="org.eclipse.ui.commands">
@@ -190,12 +196,12 @@
         id="tormozit.showCollection"
         name="Показать коллекцию"
         categoryId="tormozit.commands.global"
-        description="Открыть коллекцию в отдельном окне (Комфорт)"/>
+        description="Открыть коллекцию в отдельном окне. По умолчанию F2 в контексте отладки 1С; сочетание настраивается в Клавиши → Комфорт (Комфорт)"/>
     <command
         id="tormozit.showCollectionFromExpression"
         name="Показать коллекцию"
         categoryId="tormozit.commands.global"
-        description="Открыть коллекцию выражения в отдельном окне (Комфорт)"/>
+        description="Открыть коллекцию выражения в отдельном окне. По умолчанию F2 в контексте отладки 1С; сочетание настраивается в Клавиши → Комфорт (Комфорт)"/>
   </extension>
 
   <extension point="org.eclipse.ui.handlers">
@@ -290,6 +296,14 @@
     <handler
         class="tormozit.ExecutableExtensionFactory:tormozit.ComfortCollectionSkeletonHandler"
         commandId="tormozit.CollectionSkeleton">
+    </handler>
+    <handler
+        class="tormozit.ExecutableExtensionFactory:tormozit.ComfortCollectionShowHandler"
+        commandId="tormozit.showCollection">
+    </handler>
+    <handler
+        class="tormozit.ExecutableExtensionFactory:tormozit.ComfortCollectionShowHandler"
+        commandId="tormozit.showCollectionFromExpression">
     </handler>
   </extension>
 

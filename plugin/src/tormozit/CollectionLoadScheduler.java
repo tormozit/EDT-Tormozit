@@ -38,9 +38,14 @@ final class CollectionLoadScheduler
     private final java.util.concurrent.atomic.AtomicBoolean disposed = new java.util.concurrent.atomic.AtomicBoolean();
     private final java.util.concurrent.atomic.AtomicInteger viewportFirst = new java.util.concurrent.atomic.AtomicInteger(-1);
     private final java.util.concurrent.atomic.AtomicInteger viewportLast = new java.util.concurrent.atomic.AtomicInteger(-1);
-    /** Диапазон видимых колонок — только с UI thread, Job читает эти значения. */
+    /** Диапазон колонок для pass 1 (текст) — все видимые в схеме. */
     private final java.util.concurrent.atomic.AtomicInteger viewportColFrom = new java.util.concurrent.atomic.AtomicInteger(0);
     private final java.util.concurrent.atomic.AtomicInteger viewportColTo = new java.util.concurrent.atomic.AtomicInteger(-1);
+    /** Pass 2: `[N]` только для ячеек, видимых на экране — снимок с UI thread. */
+    private final java.util.concurrent.atomic.AtomicInteger sizeRowFrom = new java.util.concurrent.atomic.AtomicInteger(-1);
+    private final java.util.concurrent.atomic.AtomicInteger sizeRowTo = new java.util.concurrent.atomic.AtomicInteger(-1);
+    private final java.util.concurrent.atomic.AtomicInteger sizeColFrom = new java.util.concurrent.atomic.AtomicInteger(1);
+    private final java.util.concurrent.atomic.AtomicInteger sizeColTo = new java.util.concurrent.atomic.AtomicInteger(-1);
     private final java.util.concurrent.atomic.AtomicBoolean loadPending = new java.util.concurrent.atomic.AtomicBoolean(false);
     /** Снимок видимости shell — только с UI thread, Job читает эти значения. */
     private final java.util.concurrent.atomic.AtomicBoolean shellVisible = new java.util.concurrent.atomic.AtomicBoolean(true);
@@ -120,35 +125,91 @@ final class CollectionLoadScheduler
         viewportFirst.set(0);
         viewportLast.set(BATCH_SIZE + OVERSCAN);
         captureColumnViewport();
+        captureSizeViewport(0, BATCH_SIZE + OVERSCAN, tableForViewport);
         scheduleContextJob();
         scheduleSizeJob();
         scheduleLoadJob("initial"); //$NON-NLS-1$
+    }
+
+    /** Клон окна: схема и размер уже в модели — догрузка только пробелов viewport. */
+    void scheduleFromClone(int logicalFirst, int logicalLast)
+    {
+        updateShellActiveSnapshot();
+        int first = Math.max(0, logicalFirst - OVERSCAN);
+        int last = logicalLast + OVERSCAN;
+        viewportFirst.set(first);
+        viewportLast.set(last);
+        captureColumnViewport();
+        captureSizeViewport(first, last, tableForViewport);
+        if (model.totalSize < 0)
+            scheduleSizeJob();
+        else
+            fireProgress(model.loadedRowCount, model.totalSize, "rows"); //$NON-NLS-1$
+        scheduleLoadJob("clone"); //$NON-NLS-1$
+        scheduleSizePass();
     }
 
     void requestViewport(int first, int last)
     {
         if (disposed.get() || !isShellActiveForLoad())
             return;
-        viewportFirst.set(Math.max(0, first - OVERSCAN));
-        viewportLast.set(last + OVERSCAN);
+        int logicalFirst = Math.max(0, first - OVERSCAN);
+        int logicalLast = last + OVERSCAN;
+        viewportFirst.set(logicalFirst);
+        viewportLast.set(logicalLast);
         captureColumnViewport();
+        captureSizeViewport(logicalFirst, logicalLast, tableForViewport);
         scheduleLoadJob("viewport"); //$NON-NLS-1$
+        scheduleSizePass();
     }
 
-    /** Снимок горизонтального viewport — только с UI thread. */
+    /** Pass 1: все колонки схемы — свойства строки приходят пачкой из getVariables. */
     void captureColumnViewport()
     {
-        Table table = tableForViewport;
         int maxCol = Math.max(0, model.columns.columnCount() - 1);
-        if (table == null || table.isDisposed())
-        {
-            viewportColFrom.set(0);
-            viewportColTo.set(maxCol);
-            return;
-        }
-        int dataLast = CollectionViewportTracker.lastVisibleColumn(table);
         viewportColFrom.set(0);
-        viewportColTo.set(Math.max(0, dataLast + 1));
+        viewportColTo.set(maxCol);
+        ComfortCollectionDebug.step("load", "cols=0.." + maxCol); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** Pass 2: logical rows на экране + горизонтально видимые model-колонки data-таблицы. */
+    void captureSizeViewport(int logicalFirst, int logicalLast, Table dataTable)
+    {
+        int total = model.totalSize;
+        if (total > 0 && logicalLast >= total)
+            logicalLast = total - 1;
+        if (logicalFirst < 0)
+            logicalFirst = 0;
+        if (logicalLast < logicalFirst)
+            logicalLast = logicalFirst;
+        sizeRowFrom.set(logicalFirst);
+        sizeRowTo.set(logicalLast);
+
+        int maxCol = Math.max(0, model.columns.columnCount() - 1);
+        int[] cols = CollectionViewportTracker.visibleModelColumnRange(
+            dataTable, model.columns.columnCount(), model.columns.fixedColumnCount());
+        sizeColFrom.set(Math.min(maxCol, Math.max(1, cols[0])));
+        sizeColTo.set(Math.min(maxCol, cols[1]));
+    }
+
+    /** Pass 2: getSize для вложенных коллекций — только size viewport. */
+    void scheduleSizePass()
+    {
+        if (disposed.get() || !isShellActiveForLoad())
+            return;
+        int rowFrom = sizeRowFrom.get();
+        int rowTo = sizeRowTo.get();
+        int colFrom = sizeColFrom.get();
+        int colTo = sizeColTo.get();
+        if (rowFrom < 0 || rowTo < rowFrom || colTo < colFrom)
+            return;
+        int rowCount = rowTo - rowFrom + 1;
+        final int readyFrom = rowFrom;
+        final int readyCount = rowCount;
+        ComfortCollectionDebug.step("load", //$NON-NLS-1$
+            "size rows=" + rowFrom + ".." + rowTo + " cols=" + colFrom + ".." + colTo); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        CollectionSizeResolver.scheduleBatch(model, rowFrom, rowCount, colFrom, colTo, display,
+            () -> fireRowsReady(readyFrom, readyCount));
     }
 
     void scheduleFilterScan(CollectionRowFilter filter, Runnable onDone)
@@ -385,26 +446,11 @@ final class CollectionLoadScheduler
                 ComfortCollectionDebug.step("load", //$NON-NLS-1$
                     "batch deferred rows=" + from + "+" + count //$NON-NLS-1$ //$NON-NLS-2$
                         + " cols=" + colFrom + ".." + colTo); //$NON-NLS-1$ //$NON-NLS-2$
-                // #region agent log
-                CollectionLoadDebug.log("H1,H4", "CollectionLoadScheduler.runLoadBatch", "zeroCells", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                    "{\"from\":" + from + ",\"count\":" + count //$NON-NLS-1$ //$NON-NLS-2$
-                        + ",\"colFrom\":" + colFrom + ",\"colTo\":" + colTo //$NON-NLS-1$ //$NON-NLS-2$
-                        + ",\"more\":" + more + ",\"total\":" + total //$NON-NLS-1$ //$NON-NLS-2$
-                        + ",\"browseBound\":" + browseBound + "}"); //$NON-NLS-1$ //$NON-NLS-2$
-                // #endregion
             }
             fireBrowseProgress(colFrom, colTo, browseBound, total);
-            final int fFrom = from;
-            final int fCount = count;
-            CollectionSizeResolver.scheduleBatch(model, fFrom, fCount, colFrom, colTo, display,
-                () -> fireRowsReady(fFrom, fCount));
             fireRowsReady(from, count);
-            // #region agent log
-            if (cellsWritten > 0)
-                CollectionLoadDebug.log("H1", "CollectionLoadScheduler.runLoadBatch", "batch", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                    "{\"from\":" + from + ",\"count\":" + count //$NON-NLS-1$ //$NON-NLS-2$
-                        + ",\"cellsWritten\":" + cellsWritten + ",\"more\":" + more + "}"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            // #endregion
+            if (cellsWritten > 0 && batchIntersectsSizeViewport(from, count))
+                scheduleSizePass();
             return new LoadBatchResult(more, cellsWritten);
         }
         catch (DebugException e)
@@ -414,11 +460,37 @@ final class CollectionLoadScheduler
         }
     }
 
+    private boolean batchIntersectsSizeViewport(int batchFrom, int batchCount)
+    {
+        int sizeFrom = sizeRowFrom.get();
+        int sizeTo = sizeRowTo.get();
+        if (sizeFrom < 0 || sizeTo < sizeFrom || batchCount <= 0)
+            return false;
+        int batchTo = batchFrom + batchCount - 1;
+        return batchFrom <= sizeTo && batchTo >= sizeFrom;
+    }
+
     private static int browseUpperBound(int total)
     {
         if (total <= 0)
             return AUTO_LOAD_ROW_LIMIT;
         return Math.min(total, AUTO_LOAD_ROW_LIMIT);
+    }
+
+    /** Автоподгрузка 0..min(total, {@link #AUTO_LOAD_ROW_LIMIT}) — все ячейки схемы заполнены. */
+    boolean isAutoPrefetchComplete()
+    {
+        if (disposed.get() || model.columns.columnCount() <= 0)
+            return false;
+        int total = model.totalSize;
+        if (total == 0)
+            return true;
+        int browseBound = browseUpperBound(total);
+        if (browseBound <= 0)
+            return false;
+        int colTo = Math.max(0, model.columns.columnCount() - 1);
+        int loaded = model.countRowsFullyLoaded(0, browseBound - 1, 0, colTo);
+        return loaded >= browseBound;
     }
 
     private int resolveNextWorkRow(int colFrom, int colTo, int total, int browseBound)

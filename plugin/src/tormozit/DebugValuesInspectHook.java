@@ -254,7 +254,10 @@ public final class DebugValuesInspectHook implements IStartup
     private static MenuItem createShowCollectionMenuItem(Menu menu, AbstractDebugView view)
     {
         MenuItem item = new MenuItem(menu, SWT.PUSH, 0);
-        item.setText(COLLECTION_ITEM_TEXT);
+        item.setText(ComfortSubmenuHelper.menuItemTextWithKeyBinding(
+            COLLECTION_ITEM_TEXT,
+            ComfortCollectionShowHandler.COMMAND_ID,
+            ComfortCollectionShowHandler.BINDING_CONTEXT_ID));
         item.setToolTipText(COLLECTION_TOOLTIP);
         item.addSelectionListener(new SelectionAdapter()
         {
@@ -269,30 +272,7 @@ public final class DebugValuesInspectHook implements IStartup
 
     private static void runShowCollection(AbstractDebugView view)
     {
-        if (view == null)
-            return;
-        try
-        {
-            Object delegate = Global.getField(view, "delegate"); //$NON-NLS-1$
-            Object inputValue = Global.getField(delegate, "value"); //$NON-NLS-1$
-            if (inputValue instanceof com._1c.g5.v8.dt.debug.core.model.values.IBslIndexedValue indexed)
-            {
-                com._1c.g5.v8.dt.debug.core.model.values.IBslValue bslValue =
-                    (com._1c.g5.v8.dt.debug.core.model.values.IBslValue) inputValue;
-                IBslStackFrame frame = indexed.getStackFrame();
-                if (frame == null)
-                    frame = DebugSessionHelper.findSuspendedStackFrame(null);
-                ComfortCollectionOpener.open(
-                    indexed,
-                    frame,
-                    bslValue.getPath(),
-                    ComfortCollectionOpener.OpenMode.NORMAL);
-            }
-        }
-        catch (Exception e)
-        {
-            DebugValuesDebug.step("showCollection", e.getMessage()); //$NON-NLS-1$
-        }
+        ComfortCollectionShowSupport.openFromValuesView(view);
     }
 
     private static void selectRowAt(Table table, Point loc)

@@ -26,6 +26,17 @@ final class CollectionColumnVisibilityStore
 
     private static final Map<String, boolean[]> VISIBILITY = new HashMap<>();
     private static final Map<String, int[]> ORDER = new HashMap<>();
+    private static final Map<String, String> PRESENTATION = new HashMap<>();
+
+    /** Приоритет колонки «Представление» по умолчанию (рус / англ). */
+    private static final String[][] DEFAULT_PRESENTATION_PRIORITY = {
+        { "Имя", "Name" }, //$NON-NLS-1$ //$NON-NLS-2$
+        { "Поле", "Field" }, //$NON-NLS-1$ //$NON-NLS-2$
+        { "ПутьКДанным", "PathToData", "DataPath" }, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        { "Заголовок", "Title", "Caption" }, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        { "Ключ", "Key" }, //$NON-NLS-1$ //$NON-NLS-2$
+        { "Значение", "Value" }, //$NON-NLS-1$ //$NON-NLS-2$
+    };
 
     private CollectionColumnVisibilityStore() {}
 
@@ -141,12 +152,48 @@ final class CollectionColumnVisibilityStore
 
     static void save(String pathKey, boolean[] visibility, int[] order)
     {
+        save(pathKey, visibility, order, null);
+    }
+
+    static void save(String pathKey, boolean[] visibility, int[] order, String presentationHeader)
+    {
         if (pathKey == null || pathKey.isBlank())
             return;
         if (visibility != null)
             VISIBILITY.put(pathKey, visibility.clone());
         if (order != null)
             ORDER.put(pathKey, order.clone());
+        if (presentationHeader != null && !presentationHeader.isBlank())
+            PRESENTATION.put(pathKey, presentationHeader);
+    }
+
+    static void savePresentation(String pathKey, String presentationHeader)
+    {
+        save(pathKey, null, null, presentationHeader);
+    }
+
+    static String presentationFor(String pathKey, CollectionColumnModel columns)
+    {
+        String stored = PRESENTATION.get(pathKey);
+        if (stored != null && columns.findPresentationColumnByHeader(stored) >= 0)
+            return stored;
+        return defaultPresentationHeader(columns);
+    }
+
+    static String defaultPresentationHeader(CollectionColumnModel columns)
+    {
+        if (columns == null)
+            return null;
+        for (String[] group : DEFAULT_PRESENTATION_PRIORITY)
+        {
+            for (String candidate : group)
+            {
+                String resolved = columns.resolveHeaderInSchema(candidate);
+                if (resolved != null)
+                    return resolved;
+            }
+        }
+        return null;
     }
 
     private static boolean[] defaultVisibility(CollectionColumnModel columns)

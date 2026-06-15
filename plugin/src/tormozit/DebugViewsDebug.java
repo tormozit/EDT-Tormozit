@@ -8,11 +8,7 @@ import org.eclipse.ui.IViewPart;
 /**
  * Диагностика панелей отладчика «Переменные» / «Выражения» и команды «Отладить объект ИР».
  *
- * <p>Включение:
- * <ul>
- *   <li>Параметры → Комфорт → «Общее логирование»</li>
- *   <li>или JVM: {@code -Dtormozit.debugViews.debug=true}</li>
- * </ul>
+ * <p>Включение: Параметры → Комфорт → «Общее логирование».
  */
 public final class DebugViewsDebug
 {
@@ -22,9 +18,6 @@ public final class DebugViewsDebug
 
     public static boolean isEnabled()
     {
-        String prop = System.getProperty("tormozit.debugViews.debug"); //$NON-NLS-1$
-        if (prop != null)
-            return !"false".equalsIgnoreCase(prop); //$NON-NLS-1$
         return Global.isLogEnabled();
     }
 

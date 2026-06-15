@@ -11,6 +11,8 @@ import org.eclipse.ui.IWorkbenchPart;
  */
 public final class ComfortCollectionShowActionDelegate implements IObjectActionDelegate
 {
+    private static final String MENU_LABEL = "Показать коллекцию"; //$NON-NLS-1$
+
     private static final String TOOLTIP =
         "Открыть коллекцию в отдельном окне" + Global.pluginSignForTooltip(); //$NON-NLS-1$
 
@@ -20,7 +22,10 @@ public final class ComfortCollectionShowActionDelegate implements IObjectActionD
     public void setActivePart(IAction action, IWorkbenchPart targetPart)
     {
         if (action != null)
+        {
             action.setToolTipText(TOOLTIP);
+            applyMenuLabel(action);
+        }
     }
 
     @Override
@@ -31,7 +36,18 @@ public final class ComfortCollectionShowActionDelegate implements IObjectActionD
         if (selection instanceof IStructuredSelection structured && structured.size() == 1)
             enabled = ComfortCollectionShowSupport.isIndexedCollection(structured.getFirstElement());
         if (action != null)
+        {
             action.setEnabled(enabled);
+            applyMenuLabel(action);
+        }
+    }
+
+    private static void applyMenuLabel(IAction action)
+    {
+        action.setText(ComfortSubmenuHelper.menuItemTextWithKeyBinding(
+            MENU_LABEL,
+            ComfortCollectionShowHandler.COMMAND_ID,
+            ComfortCollectionShowHandler.BINDING_CONTEXT_ID));
     }
 
     @Override

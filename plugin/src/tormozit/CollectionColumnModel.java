@@ -2,7 +2,9 @@ package tormozit;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import org.eclipse.swt.widgets.TableColumn;
 
@@ -43,11 +45,20 @@ final class CollectionColumnModel
     private List<Column> columns;
     private int[] visibleToModel;
     private int hiddenColumnCount;
+    private int presentationModelIndex = -1;
 
     private CollectionColumnModel(List<Column> columns, int[] visibleToModel)
     {
         this.columns = columns;
         this.visibleToModel = visibleToModel;
+    }
+
+    CollectionColumnModel copy()
+    {
+        CollectionColumnModel copy = new CollectionColumnModel(new ArrayList<>(columns), visibleToModel.clone());
+        copy.hiddenColumnCount = hiddenColumnCount;
+        copy.presentationModelIndex = presentationModelIndex;
+        return copy;
     }
 
     static CollectionColumnModel minimal()
@@ -158,6 +169,123 @@ final class CollectionColumnModel
         return visibleToModel.length;
     }
 
+    /** Число колонок в фиксированной панели: «Индекс» + опционально «Представление». */
+    int fixedColumnCount()
+    {
+        if (presentationModelIndex <= 0)
+            return 1;
+        for (int modelIdx : visibleToModel)
+        {
+            if (modelIdx == presentationModelIndex)
+                return 2;
+        }
+        return 1;
+    }
+
+    int dataColumnCount()
+    {
+        return Math.max(0, columnCount() - fixedColumnCount());
+    }
+
+    int presentationModelIndex()
+    {
+        return presentationModelIndex;
+    }
+
+    String presentationHeader()
+    {
+        if (presentationModelIndex <= 0)
+            return null;
+        Column col = columnByModelIndex(presentationModelIndex);
+        return col != null ? col.header : null;
+    }
+
+    int findPropertyColumnByHeader(String header)
+    {
+        if (header == null || header.isBlank())
+            return -1;
+        for (Column col : columns)
+        {
+            if (col.kind != Kind.PROPERTY || col.header == null)
+                continue;
+            if (col.header.equalsIgnoreCase(header))
+                return col.modelIndex;
+        }
+        return -1;
+    }
+
+    int findPresentationColumnByHeader(String header)
+    {
+        if (header == null || header.isBlank())
+            return -1;
+        int property = findPropertyColumnByHeader(header);
+        if (property >= 0)
+            return property;
+        for (Column col : columns)
+        {
+            if (col.kind == Kind.INDEX || col.header == null)
+                continue;
+            if (col.header.equalsIgnoreCase(header))
+                return col.modelIndex;
+        }
+        return -1;
+    }
+
+    String resolveHeaderInSchema(String header)
+    {
+        int idx = findPresentationColumnByHeader(header);
+        if (idx < 0)
+            return null;
+        Column col = columnByModelIndex(idx);
+        return col != null ? col.header : null;
+    }
+
+    java.util.List<String> presentationColumnHeaders()
+    {
+        java.util.List<String> headers = new java.util.ArrayList<>();
+        for (Column col : columns)
+        {
+            if (col.kind == Kind.INDEX || col.header == null || col.header.isBlank())
+                continue;
+            headers.add(col.header);
+        }
+        headers.sort(String::compareToIgnoreCase);
+        return headers;
+    }
+
+    void applyPresentationHeader(String header)
+    {
+        presentationModelIndex = findPresentationColumnByHeader(header);
+        pinFixedColumns();
+    }
+
+    int[] copyVisibleToModel()
+    {
+        return visibleToModel != null ? visibleToModel.clone() : new int[0];
+    }
+
+    int visibleIndexOfModelColumn(int modelIdx)
+    {
+        if (visibleToModel == null || modelIdx < 0)
+            return -1;
+        for (int i = 0; i < visibleToModel.length; i++)
+        {
+            if (visibleToModel[i] == modelIdx)
+                return i;
+        }
+        return -1;
+    }
+
+    void clearPresentation()
+    {
+        presentationModelIndex = -1;
+    }
+
+    int visibleIndexForDataColumn(int dataCol)
+    {
+        return fixedColumnCount() + Math.max(0, dataCol);
+    }
+
     int modelColumnCount()
     {
         return columns.size();
@@ -199,6 +327,7 @@ final class CollectionColumnModel
         for (int i = 0; i < columns.size(); i++)
             visibleToModel[i] = i;
         hiddenColumnCount = 0;
+        presentationModelIndex = -1;
     }
 
     void applyVisibility(boolean[] visibleFlags, int[] order)
@@ -224,6 +353,76 @@ final class CollectionColumnModel
         visibleToModel = new int[mapped.size()];
         for (int i = 0; i < mapped.size(); i++)
             visibleToModel[i] = mapped.get(i);
+        pinFixedColumns();
+    }
+
+    /** Слот 0 — «Индекс», слот 1 — «Представление»; остальные — порядок пользователя. */
+    private void pinFixedColumns()
+    {
+        if (visibleToModel == null || visibleToModel.length == 0)
+            return;
+
+        int indexModel = indexModelIndex();
+        Set<Integer> pinned = new HashSet<>();
+        List<Integer> result = new ArrayList<>();
+
+        boolean indexVisible = false;
+        for (int modelIdx : visibleToModel)
+        {
+            if (modelIdx == indexModel)
+            {
+                indexVisible = true;
+                break;
+            }
+        }
+        if (indexVisible)
+        {
+            result.add(indexModel);
+            pinned.add(indexModel);
+        }
+
+        if (presentationModelIndex > 0)
+        {
+            for (int modelIdx : visibleToModel)
+            {
+                if (modelIdx == presentationModelIndex)
+                {
+                    result.add(presentationModelIndex);
+                    pinned.add(presentationModelIndex);
+                    break;
+                }
+            }
+        }
+
+        for (int modelIdx : visibleToModel)
+        {
+            if (!pinned.contains(modelIdx))
+                result.add(modelIdx);
+        }
+
+        if (result.isEmpty())
+            result.add(indexModel);
+
+        visibleToModel = new int[result.size()];
+        for (int i = 0; i < result.size(); i++)
+            visibleToModel[i] = result.get(i);
+    }
+
+    private int indexModelIndex()
+    {
+        for (Column col : columns)
+        {
+            if (col.kind == Kind.INDEX)
+                return col.modelIndex;
+        }
+        return 0;
+    }
+
+    private Column columnByModelIndex(int modelIndex)
+    {
+        if (modelIndex < 0 || modelIndex >= columns.size())
+            return null;
+        return columns.get(modelIndex);
     }
 
     void syncTableHeaders(org.eclipse.swt.widgets.Table table)
@@ -242,28 +441,35 @@ final class CollectionColumnModel
 
     private void syncIndexTableHeader(org.eclipse.swt.widgets.Table table)
     {
-        Column indexCol = findVisibleColumn(Kind.INDEX);
+        int fixedCols = fixedColumnCount();
         org.eclipse.swt.widgets.TableColumn[] existing = table.getColumns();
-        if (existing.length == 0)
+        for (int i = existing.length; i < fixedCols; i++)
             new org.eclipse.swt.widgets.TableColumn(table, org.eclipse.swt.SWT.NONE);
-        org.eclipse.swt.widgets.TableColumn tc = table.getColumn(0);
-        tc.setText(indexCol != null ? indexCol.header : INDEX_HEADER);
-        tc.setWidth(CollectionIndexColumnWidthStore.load());
-        tc.setResizable(true);
-        tc.setMoveable(false);
-        for (int i = 1; i < existing.length; i++)
+        for (int i = 0; i < fixedCols; i++)
+        {
+            Column col = columnAt(i);
+            org.eclipse.swt.widgets.TableColumn tc = table.getColumn(i);
+            tc.setText(col != null ? col.header : ""); //$NON-NLS-1$
+            tc.setWidth(i == 0
+                ? CollectionIndexColumnWidthStore.load()
+                : CollectionPresentationColumnWidthStore.load());
+            tc.setResizable(true);
+            tc.setMoveable(false);
+        }
+        for (int i = fixedCols; i < existing.length; i++)
             existing[i].dispose();
     }
 
     private void syncDataTableHeaders(org.eclipse.swt.widgets.Table table)
     {
-        int dataCols = Math.max(0, columnCount() - 1);
+        int dataCols = dataColumnCount();
+        int fixed = fixedColumnCount();
         org.eclipse.swt.widgets.TableColumn[] existing = table.getColumns();
         for (int i = existing.length; i < dataCols; i++)
             new org.eclipse.swt.widgets.TableColumn(table, org.eclipse.swt.SWT.NONE);
         for (int dataCol = 0; dataCol < dataCols; dataCol++)
         {
-            Column col = columnAt(dataCol + 1);
+            Column col = columnAt(fixed + dataCol);
             org.eclipse.swt.widgets.TableColumn tc = table.getColumn(dataCol);
             tc.setText(col != null ? col.header : ""); //$NON-NLS-1$
             tc.setWidth(defaultWidth(col));
@@ -272,17 +478,6 @@ final class CollectionColumnModel
         }
         for (int i = dataCols; i < existing.length; i++)
             existing[i].dispose();
-    }
-
-    private Column findVisibleColumn(Kind kind)
-    {
-        for (int i = 0; i < columnCount(); i++)
-        {
-            Column col = columnAt(i);
-            if (col != null && col.kind == kind)
-                return col;
-        }
-        return null;
     }
 
     private static int defaultWidth(Column col)

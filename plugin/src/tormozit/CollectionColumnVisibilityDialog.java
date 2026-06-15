@@ -5,6 +5,7 @@ import org.eclipse.jface.dialogs.InputDialog;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
+import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
@@ -20,6 +21,12 @@ import org.eclipse.swt.widgets.TableItem;
  */
 final class CollectionColumnVisibilityDialog extends Dialog
 {
+    @FunctionalInterface
+    interface ColumnActivateListener
+    {
+        void onColumnActivate(int modelIndex, boolean[] visibility, int[] order);
+    }
+
     private final CollectionColumnModel columns;
     private final boolean[] visibility;
     private int[] order;
@@ -30,6 +37,7 @@ final class CollectionColumnVisibilityDialog extends Dialog
     private String findText = ""; //$NON-NLS-1$
     private int lastFindListIndex = -1;
     private int findGeneration;
+    private ColumnActivateListener columnActivateListener;
 
     CollectionColumnVisibilityDialog(
         Shell parent,
@@ -66,6 +74,11 @@ final class CollectionColumnVisibilityDialog extends Dialog
         focusModelIndex = modelIndex;
     }
 
+    void setColumnActivateListener(ColumnActivateListener listener)
+    {
+        columnActivateListener = listener;
+    }
+
     @Override
     protected void configureShell(Shell shell)
     {
@@ -81,7 +94,7 @@ final class CollectionColumnVisibilityDialog extends Dialog
 
         Label hint = new Label(area, SWT.WRAP);
         hint.setText(
-            "Отметьте видимые колонки. «По алфавиту» — сортировка списка; «Вверх» / «Вниз» — порядок выделенной строки; Ctrl+F — поиск."); //$NON-NLS-1$
+            "Отметьте видимые колонки. Двойной щелчок по строке — активировать колонку в таблице. «По алфавиту» — сортировка списка; «Вверх» / «Вниз» — порядок выделенной строки; Ctrl+F — поиск."); //$NON-NLS-1$
         hint.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
 
         Composite actionBar = new Composite(area, SWT.NONE);
@@ -101,13 +114,7 @@ final class CollectionColumnVisibilityDialog extends Dialog
         Button sortAlpha = new Button(actionBar, SWT.PUSH);
         sortAlpha.setText("По алфавиту"); //$NON-NLS-1$
         sortAlpha.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        sortAlpha.addListener(SWT.Selection, e -> {
-            // #region agent log
-            CollectionLoadDebug.log("H-sort", "CollectionColumnVisibilityDialog.sortAlpha", //$NON-NLS-1$ //$NON-NLS-2$
-                "sort clicked", "{\"items\":" + columnTable.getItemCount() + "}"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            // #endregion
-            sortOrderAlphabetically();
-        });
+        sortAlpha.addListener(SWT.Selection, e -> sortOrderAlphabetically());
 
         Button up = new Button(actionBar, SWT.PUSH);
         up.setText("Вверх"); //$NON-NLS-1$
@@ -118,11 +125,6 @@ final class CollectionColumnVisibilityDialog extends Dialog
         down.setText("Вниз"); //$NON-NLS-1$
         down.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         down.addListener(SWT.Selection, e -> moveSelected(1));
-
-        // #region agent log
-        CollectionLoadDebug.log("H-sort", "CollectionColumnVisibilityDialog.createDialogArea", //$NON-NLS-1$ //$NON-NLS-2$
-            "action bar with sort button", "{\"sortButton\":true}"); //$NON-NLS-1$ //$NON-NLS-2$
-        // #endregion
 
         columnTable = new Table(area, SWT.CHECK | SWT.BORDER | SWT.V_SCROLL | SWT.FULL_SELECTION | SWT.MULTI);
         GridData listGd = new GridData(SWT.FILL, SWT.FILL, true, true, 2, 1);
@@ -135,8 +137,27 @@ final class CollectionColumnVisibilityDialog extends Dialog
         applyPreselection();
         applyFocusSelection();
         installFindKeys();
+        installColumnActivateOnDoubleClick();
 
         return area;
+    }
+
+    private void installColumnActivateOnDoubleClick()
+    {
+        columnTable.addListener(SWT.MouseDoubleClick, e -> {
+            if (columnTable == null || columnTable.isDisposed() || columnActivateListener == null)
+                return;
+            TableItem item = columnTable.getItem(new Point(e.x, e.y));
+            if (item == null)
+                return;
+            Object data = item.getData();
+            if (!(data instanceof Integer modelIdx))
+                return;
+            if (!item.getChecked())
+                item.setChecked(true);
+            applyChecksToVisibility();
+            columnActivateListener.onColumnActivate(modelIdx.intValue(), visibility.clone(), order.clone());
+        });
     }
 
     private void installFindKeys()
@@ -340,6 +361,8 @@ final class CollectionColumnVisibilityDialog extends Dialog
 
     private void refreshTableItems()
     {
+        if (columnTable != null && !columnTable.isDisposed() && columnTable.getItemCount() > 0)
+            applyChecksToVisibility();
         columnTable.removeAll();
         for (int modelIdx : order)
         {

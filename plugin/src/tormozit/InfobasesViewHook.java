@@ -34,7 +34,7 @@ import org.eclipse.ui.navigator.CommonViewer;
  * {@link InfobaseByNameFilter}), отключает нативный фильтр и подставляет {@link SmartOutlineFilter}
  * с {@link CellLabelHighlightWrapper} (штатный {@code ColumnLabelProvider}) для подсветки.
  *
- * <p>Логирование: {@code -Dtormozit.infobasesView.debug=false} — отключить.
+ * <p>Логирование: Параметры → Комфорт → «Общее логирование».
  */
 public final class InfobasesViewHook implements IStartup
 {

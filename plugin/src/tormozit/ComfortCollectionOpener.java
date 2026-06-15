@@ -24,6 +24,26 @@ public final class ComfortCollectionOpener
         BslValuePath path,
         OpenMode mode)
     {
+        return open(indexedValue, frame, path, mode, null);
+    }
+
+    public static ComfortCollectionWindow openClone(ComfortCollectionWindow source)
+    {
+        if (source == null || source.isDisposed())
+            return null;
+        CollectionCloneSnapshot snapshot = CollectionCloneSnapshot.capture(source);
+        if (snapshot == null)
+            return null;
+        return open(snapshot.indexedValue(), snapshot.frame(), snapshot.path(), OpenMode.CLONE, snapshot);
+    }
+
+    static ComfortCollectionWindow open(
+        IBslIndexedValue indexedValue,
+        IBslStackFrame frame,
+        BslValuePath path,
+        OpenMode mode,
+        CollectionCloneSnapshot cloneSnapshot)
+    {
         if (indexedValue == null)
             return null;
 
@@ -60,7 +80,12 @@ public final class ComfortCollectionOpener
 
         display.syncExec(() -> {
             ComfortCollectionWindow window = new ComfortCollectionWindow(
-                indexedValue, frame, path, mode == OpenMode.CLONE ? finalCloneIndex : 0, finalRegistryKey);
+                indexedValue,
+                frame,
+                path,
+                mode == OpenMode.CLONE ? finalCloneIndex : 0,
+                finalRegistryKey,
+                cloneSnapshot);
             window.open();
             CollectionWindowRegistry.register(finalRegistryKey, window);
             created[0] = window;
